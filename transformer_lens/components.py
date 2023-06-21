@@ -873,6 +873,10 @@ class TransformerBlock(nn.Module):
         self.hook_k_normalized_input = HookPoint()  # [batch, pos, d_model]
         self.hook_v_normalized_input = HookPoint()  # [batch, pos, d_model]
 
+        self.hook_q_normalized_input = HookPoint()  # [batch, pos, d_model]
+        self.hook_k_normalized_input = HookPoint()  # [batch, pos, d_model]
+        self.hook_v_normalized_input = HookPoint()  # [batch, pos, d_model]
+
         self.hook_attn_out = HookPoint()  # [batch, pos, d_model]
         self.hook_mlp_out = HookPoint()  # [batch, pos, d_model]
 
@@ -931,6 +935,10 @@ class TransformerBlock(nn.Module):
             query_input = attn_in
             key_input = attn_in
             value_input = attn_in
+
+        query_input = self.ln1(query_input) + (0.0 if shortformer_pos_embed is None else shortformer_pos_embed)
+        key_input = self.ln1(key_input) + (0.0 if shortformer_pos_embed is None else shortformer_pos_embed)
+        value_input = self.ln1(value_input)
 
         query_input = self.ln1(query_input) + (0.0 if shortformer_pos_embed is None else shortformer_pos_embed)
         key_input = self.ln1(key_input) + (0.0 if shortformer_pos_embed is None else shortformer_pos_embed)
