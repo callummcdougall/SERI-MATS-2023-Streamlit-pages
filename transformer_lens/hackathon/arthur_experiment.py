@@ -485,7 +485,7 @@ for layer, head in tqdm(list(itertools.product(range(12), range(12)))):
             bags_of_words=bags_of_words[idx:idx+1],
             num_samples=None,
             mean_version=False,
-            # W_E_query_side=W_U,
+            # W_E_query_side=W_U, # never mind these are just here by default
             # W_E_key_side=W_EE,
         )
 
