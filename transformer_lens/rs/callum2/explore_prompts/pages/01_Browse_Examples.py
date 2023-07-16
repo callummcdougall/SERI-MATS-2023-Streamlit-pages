@@ -2,6 +2,7 @@
 import sys, os
 import streamlit as st
 
+st.write("Test")
 st.write(os.listdir(os.getcwd()))
 
 root_dir = os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts"
