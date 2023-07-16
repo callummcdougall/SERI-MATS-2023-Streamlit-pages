@@ -1,16 +1,15 @@
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
-import streamlit as st
-from pathlib import Path
 
-st.write("Test")
-st.write(os.getcwd())
-st.write(Path.cwd().resolve())
-
-root_dir = os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts"
-os.chdir(root_dir)
+try:
+    root_dir = os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts"
+    os.chdir(root_dir)
+except:
+    root_dir = "/app/transformerlens/transformer_lens/rs/callum2/explore_prompts"
+    os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
 
+import streamlit as st
 st.set_page_config(layout="wide")
 from streamlit.components.v1 import html
 from pathlib import Path
