@@ -88,7 +88,7 @@ torch.cuda.empty_cache()
 
 original_end_state = cache[END_STATE_HOOK]
 
-batched_tokens_loss = get_loss_from_end_state(
+batched_tokens_loss = get_metric_from_end_state(
     model=model,
     end_state=original_end_state,
     targets=targets,
@@ -125,7 +125,7 @@ mean_head_output = einops.reduce(head_output, "b s d -> d", reduction="mean")
 #%%
 
 mean_ablated_end_states = cache[get_act_name("resid_post", model.cfg.n_layers-1)] - head_output + einops.repeat(mean_head_output, "d -> b s d", b=BATCH_SIZE, s=MAX_SEQ_LEN)
-mean_ablated_loss = get_loss_from_end_state(
+mean_ablated_loss = get_metric_from_end_state(
     model=model,
     end_state=mean_ablated_end_states,
     targets=targets,
@@ -249,25 +249,30 @@ average_unembed = einops.einsum(
 
 #%%
 
+ABS_MODE = True
+
 def to_string(toks):
     s = model.to_string(toks)
     s = s.replace("\n", "\\n")
     return s
 
-if DO_LOGIT_LENS:
-    for batch_idx in range(len(top_unembeds_per_position)):
-        the_logits = -top_unembeds_per_position[batch_idx][1:top5p_seq_indices[batch_idx]+2]
-        max_logits = the_logits[:, 1:-1].max().item()
-        my_obj = cv.logits.token_log_probs( # I am using this in a very cursed way: 
-            top5p_tokens[batch_idx][:top5p_seq_indices[batch_idx]+1],
-            the_logits - max_logits,
-            to_string = to_string
-        )
+for batch_idx in range(len(top_unembeds_per_position)):
+    the_logits = -top_unembeds_per_position[batch_idx][1:top5p_seq_indices[batch_idx]+2]
+    if ABS_MODE: 
+        the_logits = torch.abs(the_logits)
+    max_logits = the_logits[:, 1:-1].max().item()
+    my_obj = cv.logits.token_log_probs( # I am using this in a very cursed way: 
+        top5p_tokens[batch_idx][:top5p_seq_indices[batch_idx]+1],
+        the_logits - max_logits,
+        to_string = to_string
+    )
 
-        print("True completion:"+model.to_string(top5p_tokens[batch_idx][top5p_seq_indices[batch_idx]+1]))
-        print("Top negs:")
-        print(model.to_str_tokens(torch.topk(-total_unembed[batch_idx]+average_unembed, dim=-1, k=10).indices))
-        display(my_obj)
+    print("True completion:"+model.to_string(top5p_tokens[batch_idx][top5p_seq_indices[batch_idx]+1]))
+    print("Top negs:")
+    print(model.to_str_tokens(torch.topk(-total_unembed[batch_idx]+average_unembed, dim=-1, k=10).indices))
+    print("Top negs:", torch.topk(-total_unembed[batch_idx]+average_unembed, dim=-1, k=10).values)
+    print("Top poss:", torch.topk(total_unembed[batch_idx]-average_unembed, dim=-1, k=10).values)
+    display(my_obj)
 
 #%%
 
@@ -317,7 +322,7 @@ ov_projected_head_out = projected_vectors.sum(dim=1)
 #%%
 
 ov_projected_model_out = top5p_end_states - top5p_head_outputs + ov_projected_head_out
-new_loss = get_loss_from_end_state(
+new_loss = get_metric_from_end_state(
     model=model,
     end_state=ov_projected_model_out.unsqueeze(1),
     targets=top5p_targets.unsqueeze(1),

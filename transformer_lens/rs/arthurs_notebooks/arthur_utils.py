@@ -1,22 +1,29 @@
 from transformer_lens.cautils.utils import *
 import torch
 
-def get_loss_from_end_state(
+def get_metric_from_end_state(
     model,
     end_state,
-    targets,
-    logits=None,
-    return_logits=False,
+    targets = None,
+    logits = None,
+    return_logits = False,
+    mode: Literal["loss", "kl"] = "loss",
+    log_probs_reference: Optional[torch.Tensor] = None,
+    device = None,
 ):
     # end state has shape batch, seq_len, hidden_size
     # targets has shape batch, seq_len
 
+    assert (mode == "loss") != (log_probs_reference is not None), "Must specify kl_reference if mode is kl"
+    assert (mode == "loss") == (targets is not None), "Must specify targets if mode is loss"
+
     if logits is None:
-        assert list(end_state.shape) == list(targets.shape) + [
-            model.cfg.d_model
-        ], f"end_state.shape: {end_state.shape}, targets.shape: {targets.shape}"
+        if mode == "loss":
+            assert list(end_state.shape) == list(targets.shape) + [
+                model.cfg.d_model
+            ], f"end_state.shape: {end_state.shape}, targets.shape: {targets.shape}"
         assert len(end_state.shape) == 3, "We stricter now"
-        post_layer_norm = model.ln_final(end_state)
+        post_layer_norm = model.ln_final(end_state.to(device))
         logits = model.unembed(post_layer_norm)
     else:
         assert end_state is None
@@ -24,12 +31,33 @@ def get_loss_from_end_state(
 
     log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
 
+    if mode == "kl":
+        assert log_probs_reference.shape == log_probs.shape
+        # for batch_idx in range(log_probs.shape):
+
+        total_kl = t.zeros((log_probs_reference.shape[0], log_probs_reference.shape[1]))
+        for batch_idx in tqdm(range(log_probs_reference.shape[0])):
+            gc.collect()
+            torch.cuda.empty_cache()
+            cur_kl = torch.nn.functional.kl_div(
+                log_probs[batch_idx].to(device),
+                log_probs_reference[batch_idx].to(device),
+                log_target=True,
+                reduction="none",
+            ).sum(dim=-1).cpu()
+            assert len(list(cur_kl.shape)) == 1, cur_kl.shape
+            total_kl[batch_idx] = cur_kl
+        
+        assert len(total_kl.shape) == 2
+        return total_kl
+
     if len(targets.shape) == 2:
         loss = -log_probs[
             torch.arange(targets.shape[0]).unsqueeze(1),
             torch.arange(targets.shape[1]).unsqueeze(0),
             targets,
         ]
+
     elif len(targets.shape) == 1:
         assert loss.shape[0]==1, loss.shape
         loss = -log_probs[

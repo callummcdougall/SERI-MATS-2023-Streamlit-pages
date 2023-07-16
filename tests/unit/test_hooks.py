@@ -126,40 +126,43 @@ def test_remove_hook():
     model.remove_all_hook_fns(including_permanent=True)
 
 
-def test_conditional_hooks():
+def test_conditional_hooks(): # TODO merge the two tests... cba now
     """Test that it's only possible to add certain hooks when certain conditions are met"""
 
     def identity_hook(z, hook):
         return z
 
-    model.reset_hooks()
-    model.set_use_attn_result(False)
+    for hook_name, set_use_hook_function in [
+        ("blocks.0.attn.hook_result", model.set_use_attn_result),
+        ("blocks.0.hook_q_input", model.set_use_split_qkv_input),
+        ("blocks.0.hook_mlp_in", model.set_use_hook_mlp_in),
+        ("blocks.0.hook_attn_in", model.set_use_attn_in),
+    ]:
+        model.reset_hooks()
+        set_use_hook_function(False)
+        with pytest.raises(AssertionError):
+            model.add_hook(hook_name, identity_hook)
+        set_use_hook_function(True)
+        model.add_hook(hook_name, identity_hook)
+        set_use_hook_function(False)
+
     with pytest.raises(AssertionError):
-        model.add_hook("blocks.0.attn.hook_result", identity_hook)
+        model.set_use_split_qkv_normalized_input(True) # needs to come after adding split_qkv hook QKV
 
-    model.reset_hooks()
-    model.set_use_split_qkv_input(False)
-    with pytest.raises(AssertionError):
-        model.add_hook("blocks.0.hook_q_input", identity_hook)
-
-    model.reset_hooks()
-    model.set_use_split_qkv_normalized_input(False)
-    with pytest.raises(AssertionError):
-        model.add_hook("blocks.0.hook_q_normalized_input", identity_hook)
-
-    # now when we set these conditions to true, should be no errors!
-
-    model.reset_hooks()
-    model.set_use_attn_result(True)
-    model.add_hook("blocks.0.attn.hook_result", identity_hook)
-
+    # check that things are the right shape in the split_q case
     model.reset_hooks()
     model.set_use_split_qkv_input(True)
     model.add_hook("blocks.0.hook_q_input", identity_hook)
 
     model.reset_hooks()
-    model.set_use_split_qkv_normalized_input(True) # needs to come after 
+    with pytest.raises(AssertionError):
+        model.add_hook("blocks.0.hook_q_normalized_input", identity_hook)
+    model.set_use_split_qkv_normalized_input(True) # needs to come after adding split_qkv hook QKV
     model.add_hook("blocks.0.hook_q_normalized_input", identity_hook)
+
+    model.reset_hooks()
+    model.set_use_attn_in(True)
+    model.add_hook("blocks.0.hook_attn_in", identity_hook)
 
     # check that things are the right shape
 
