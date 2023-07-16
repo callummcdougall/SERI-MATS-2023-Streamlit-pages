@@ -1,6 +1,9 @@
-numpy
-plotly
-pandas
+transformer_lens
+einops
 torch
-pathlib
-pickle
+jaxtyping
+typing
+tqdm
+ipython
+plotly
+git+https://github.com/callummcdougall/CircuitsVis.git#subdirectory=python
