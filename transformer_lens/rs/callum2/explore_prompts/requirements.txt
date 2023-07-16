@@ -1,10 +1,7 @@
-git+https://github.com/callummcdougall/CircuitsVis.git#subdirectory=python
 transformer_lens
 einops
 torch
 jaxtyping
 typing
-pickle
 tqdm
-pathlib
-collections
+git+https://github.com/callummcdougall/CircuitsVis.git#subdirectory=python
