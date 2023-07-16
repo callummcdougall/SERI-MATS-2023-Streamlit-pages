@@ -5,4 +5,5 @@ jaxtyping
 typing
 tqdm
 ipython
+plotly
 git+https://github.com/callummcdougall/CircuitsVis.git#subdirectory=python
