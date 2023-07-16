@@ -1,5 +1,5 @@
 from transformer_lens.cautils.utils import *
-from transformer_lens.rs.callum.keys_fixed import project, get_effective_embedding_2
+from transformer_lens.rs.callum.research_sprint.keys_fixed import project, get_effective_embedding_2
 
 
 def print_best_outputs(

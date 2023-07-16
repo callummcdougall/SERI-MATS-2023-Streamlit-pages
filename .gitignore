@@ -5,6 +5,7 @@ transformer_lens/scratch.py
 .vscode/
 .idea/
 wandb*
+models*
 transformer_lens\.egg*
 MANIFEST.in
 settings.ini

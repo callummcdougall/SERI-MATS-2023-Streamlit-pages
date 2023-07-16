@@ -18,12 +18,14 @@ UPDATE_LAYOUT_SET = {
     "xaxis_range", "yaxis_range", "hovermode", "xaxis_title", "yaxis_title", "colorbar", "colorscale", "coloraxis", "title_x", "bargap", "bargroupgap", "xaxis_tickformat",
     "yaxis_tickformat", "title_y", "legend_title_text", "xaxis_showgrid", "xaxis_gridwidth", "xaxis_gridcolor", "yaxis_showgrid", "yaxis_gridwidth", "yaxis_gridcolor",
     "showlegend", "xaxis_tickmode", "yaxis_tickmode", "xaxis_tickangle", "yaxis_tickangle", "margin", "xaxis_visible", "yaxis_visible", "bargap", "bargroupgap", "font",
-    "modebar_add", "legend_traceorder"
+    "modebar_add", "legend_traceorder", "autosize"
 }
 # Gives options to draw on plots, and remove plotly logo
 CONFIG = {'displaylogo': False}
 CONFIG_STATIC = {'displaylogo': False, 'staticPlot': True}
 MODEBAR_ADD = ['drawline', 'drawopenpath', 'drawclosedpath', 'drawcircle', 'drawrect', 'eraseshape']
+
+    
 
 
 def imshow(tensor, renderer=None, **kwargs):
@@ -35,6 +37,7 @@ def imshow(tensor, renderer=None, **kwargs):
     kwargs_pre = {k: v for k, v in kwargs.items() if k not in UPDATE_LAYOUT_SET}
     draw = kwargs_pre.pop("draw", True)
     static = kwargs_pre.pop("static", False)
+    border = kwargs_pre.pop("border", False)
     return_fig = kwargs_pre.pop("return_fig", False)
     facet_labels = kwargs_pre.pop("facet_labels", None)
     facet_label_size = kwargs_pre.pop("facet_label_size", None)
@@ -54,6 +57,9 @@ def imshow(tensor, renderer=None, **kwargs):
             fig.layout.annotations[i]['text'] = label
             if facet_label_size:
                 fig.layout.annotations[i]["font"] = {"size": facet_label_size}
+    if border:
+        fig.update_xaxes(showline=True, linewidth=1, linecolor='black', mirror=True)
+        fig.update_yaxes(showline=True, linewidth=1, linecolor='black', mirror=True)
     if animation_labels:
         fig.layout.sliders[0]["currentvalue"]["prefix"] = ""
         for i, label in enumerate(animation_labels):
@@ -68,6 +74,8 @@ def imshow(tensor, renderer=None, **kwargs):
           while f"xaxis{i}" in fig["layout"]:
             kwargs_post[f"xaxis{i}_{setting}"] = kwargs_post[f"xaxis_{setting}"]
             i += 1
+    if "autosize" not in kwargs_post:
+        kwargs_post["autosize"] = False
     fig.update_layout(**kwargs_post)
     if draw: 
         fig.update_layout(modebar_add=MODEBAR_ADD)
@@ -116,6 +124,10 @@ def hist(tensor, renderer=None, **kwargs):
         kwargs_post["bargap"] = 0.0
     if "margin" in kwargs_post and isinstance(kwargs_post["margin"], int):
         kwargs_post["margin"] = dict.fromkeys(list("tblr"), kwargs_post["margin"])
+    if "hovermode" not in kwargs_post:
+        kwargs_post["hovermode"] = "x unified"
+    if "autosize" not in kwargs_post:
+        kwargs_post["autosize"] = False
     fig = px.histogram(x=arr, **kwargs_pre).update_layout(**kwargs_post)
     if add_mean_line:
         if arr.ndim == 1:
@@ -125,7 +137,7 @@ def hist(tensor, renderer=None, **kwargs):
                 fig.add_vline(x=arr[i].mean(), line_width=3, line_dash="dash", line_color="black", annotation_text=f"Mean = {arr.mean():.3f}", annotation_position="top")
     if names is not None:
         for i in range(len(fig.data)):
-            fig.data[i]["name"] = names[i // 2]
+            fig.data[i]["name"] = names[i // 2 if "marginal" in kwargs_pre else i]
     if draw: 
         fig.update_layout(modebar_add=MODEBAR_ADD)
     else:
@@ -156,6 +168,8 @@ def line(y: Union[t.Tensor, List[t.Tensor]], renderer=None, **kwargs):
         kwargs_post["hovermode"] = "x unified"
     if "modebar_add" not in kwargs_post:
         kwargs_post["modebar_add"] = ['drawline', 'drawopenpath', 'drawclosedpath', 'drawcircle', 'drawrect', 'eraseshape']
+    if "autosize" not in kwargs_post:
+        kwargs_post["autosize"] = False
     if "use_secondary_yaxis" in kwargs_pre and kwargs_pre["use_secondary_yaxis"]:
         del kwargs_pre["use_secondary_yaxis"]
         if "labels" in kwargs_pre:
@@ -204,6 +218,8 @@ def scatter(x, y, renderer=None, **kwargs):
         kwargs_post["modebar_add"] = ['drawline', 'drawopenpath', 'drawclosedpath', 'drawcircle', 'drawrect', 'eraseshape']
     if "margin" in kwargs_post and isinstance(kwargs_post["margin"], int):
         kwargs_post["margin"] = dict.fromkeys(list("tblr"), kwargs_post["margin"])
+    if "autosize" not in kwargs_post:
+        kwargs_post["autosize"] = False
     fig = px.scatter(y=y, x=x, **kwargs_pre).update_layout(**kwargs_post)
     if add_line is not None:
         xrange = fig.layout.xaxis.range or [x.min(), x.max()]
