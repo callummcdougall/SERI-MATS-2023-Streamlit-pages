@@ -3,8 +3,12 @@
 
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
-root_dir = os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts"
-os.chdir(root_dir)
+try:
+    root_dir = os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts"
+    os.chdir(root_dir)
+except:
+    root_dir = "/app/transformerlens/transformer_lens/rs/callum2/explore_prompts"
+    os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
 
 from typing import Tuple
@@ -19,7 +23,7 @@ Head = Tuple[int, int]
 
 NEGATIVE_HEADS = [(10, 7), (11, 10)]
 
-ST_HTML_PATH = Path("/home/ubuntu/Transformerlens/transformer_lens/rs/callum2/explore_prompts/media")
+ST_HTML_PATH = Path.cwd() / "media"
 
 def parse_str(s: str):
     doubles = "“”"
