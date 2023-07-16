@@ -1,6 +1,7 @@
 # %% [markdown] [4]:
 
 from transformer_lens.cautils.notebook import *
+
 model = HookedTransformer.from_pretrained(
     "gpt2-small",
     center_unembed=True,

@@ -5,12 +5,12 @@ Hopefully this still makes the attention plot decomposition...
 """
 
 from transformer_lens.cautils.notebook import *
-from transformer_lens.rs.callum.keys_fixed import (
+from transformer_lens.rs.callum.research_sprint.keys_fixed import (
     project,
     get_effective_embedding_2,
 )
 
-from transformer_lens.rs.callum.orthogonal_query_investigation import (
+from transformer_lens.rs.callum.research_sprint.orthogonal_query_investigation import (
     decompose_attn_scores_full,
     create_fucking_massive_plot_1,
     create_fucking_massive_plot_2,

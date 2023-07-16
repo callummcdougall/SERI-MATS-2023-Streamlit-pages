@@ -2,6 +2,7 @@
 Main set of utils to import at the start of all scripts and notebooks
 """
 
+import sys
 import warnings
 
 import torch as t
@@ -10,6 +11,7 @@ warnings.warn("Setting grad enabled false...")
 t.set_grad_enabled(False)
 
 import numpy as np
+import wandb
 import pickle
 import sys
 import time
@@ -121,3 +123,8 @@ NEG_HEADS = { # intended usage: `layer_idx, head_idx = NEG_HEADS[model.cfg.model
 def normalize(tens):
     assert len(list(tens.shape)) == 1
     return tens / tens.norm()
+
+path_files = ["/home/ubuntu/Transformerlens/transformer_lens/rs/callum2"]
+for path_file in path_files:
+    if path_file not in sys.path:
+        sys.path.append(path_file)
