@@ -7,7 +7,7 @@ try:
     root_dir = os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts"
     os.chdir(root_dir)
 except:
-    root_dir = "/app/explore_prompts"
+    root_dir = "/app/seri-mats-2023-streamlit-pages/explore_prompts"
     os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
 
