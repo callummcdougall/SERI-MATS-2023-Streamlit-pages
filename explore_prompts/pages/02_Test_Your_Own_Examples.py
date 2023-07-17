@@ -1,5 +1,6 @@
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
+
 try:
     root_dir = os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts"
     os.chdir(root_dir)
