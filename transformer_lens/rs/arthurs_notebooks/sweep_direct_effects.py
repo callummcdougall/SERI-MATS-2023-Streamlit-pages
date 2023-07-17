@@ -5,7 +5,7 @@ from transformer_lens.rs.arthurs_notebooks.arthur_utils import *
 from transformer_lens.loading_from_pretrained import MODEL_ALIASES as MA
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--model-name", type=str, default="gpt2")
+parser.add_argument("--model-name", type=str, default=None)
 if ipython is not None:
     args = parser.parse_args(args=[])
 else:
@@ -13,12 +13,12 @@ else:
 
 # %%
 
-for MODEL_NAME in ["gpt2-medium"] + [
+for MODEL_NAME in ["Pythia-410M"] + [
     model_name for model_name in MA.keys() if "gpt2" in model_name and ("small" in model_name or "medium" in model_name)
 ]:
     if args.model_name != None:
         MODEL_NAME = args.model_name
-
+    print(MODEL_NAME)
     model = HookedTransformer.from_pretrained(MODEL_NAME)
 
     # %%
@@ -126,21 +126,23 @@ if ipython is not None:
         cur_json = json.load(f)
 
     for model_name, data in cur_json.items():
+        if "alias" in model_name:# or "battlestar" in model_name:
+            continue
         fig.add_trace(
             go.Scatter(
                 x=[int(x.split()[0][1:-1]) for x in data.keys()],
                 y=[x for x in data.values()],
                 text=[str(x) for x in data.keys()],    
                 mode = "markers",        
-                name=model_name,
+                name=model_name if "gpt2-small" not in model_name else "stanford_gpt2_small",
                 marker=dict(
-                    size=12 if "gpt2" == model_name or "gpt2-medium" == model_name else 6,
+                    size=12 if "gpt2-small" in model_name or "gpt2" == model_name or "gpt2-medium" == model_name else 6,
                 ),
             )
         )
 
     fig.update_layout(
-        title="Total effect of mean ablating attention heads",
+        title="Total effect of mean ablating attention heads. Fatter dots are models trained with dropout",
         xaxis_title="Layer of head",
         yaxis_title="Percentage loss increase",
     )
