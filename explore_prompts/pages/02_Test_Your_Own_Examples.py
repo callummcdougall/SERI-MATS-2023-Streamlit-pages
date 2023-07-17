@@ -34,7 +34,7 @@ ATTENTION_TYPES = ["info-weighted", "standard"]
 ATTN_VIS_TYPES = ["large", "small"]
 
 if "model" not in st.session_state:
-    with st.spinner("Loading model (this only needs to happen once) ..."):
+    with st.spinner("Loading model (this only needs to happen once, it usually takes 5-15 seconds) ..."):
         model = HookedTransformer.from_pretrained(
             "gpt2-small",
             center_unembed=True,

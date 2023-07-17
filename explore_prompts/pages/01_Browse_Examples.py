@@ -82,6 +82,8 @@ This visualisation shows the loss difference from ablating head 10.7 (for variou
 
 The sign is (loss with ablation) - (original loss), so blue (positive) means the loss increases when you ablate, i.e. the head is useful. Red means the head is harmful.
 
+### todo - increase the contrast on this plot, the colors are frustratingly muted. Maybe have a checkbox option to toggle between "2.5 = max color" and "max value = max color".
+
 <details>
 <summary>Analysis</summary>
 
