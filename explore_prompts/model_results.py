@@ -67,11 +67,28 @@ class ModelResults:
     loss: LogitResults = LogitResults()
 
     def clear(self):
-        # Empties all intermediate results which we don't need
+        """Empties all imtermediate results we don't need."""
         self.result = HeadResults()
         self.result_mean = HeadResults()
         self.resid_pre = HeadResults()
         self.v = HeadResults()
+
+    # def filter(self):
+    #     """Returns a dictionary of results we actually need for the Streamlit vis."""
+    #     MODEL_RESULTS_DICT = {}
+
+    #     # LOSS, for visualisation (1/4)
+
+    #     MODEL_RESULTS_DICT["LOSS"] = (t.stack([
+    #         t.stack(list(self.loss.mean_direct.data.values())),
+    #         t.stack(list(self.loss.zero_direct.data.values())),
+    #         t.stack(list(self.loss.mean_patched.data.values())),
+    #         t.stack(list(self.loss.zero_patched.data.values())),
+    #     ]) - self.loss_orig).half()
+
+        
+
+
 
     def save(self, filename: str):
         # Saves self as pickle file

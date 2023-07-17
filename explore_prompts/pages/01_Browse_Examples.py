@@ -14,19 +14,17 @@ st.set_page_config(layout="wide")
 from streamlit.components.v1 import html
 from pathlib import Path
 import pickle
+import gzip
 
 from streamlit_styling import styling
 from generate_html import CSS
-from explore_prompts_utils import parse_str, parse_str_tok_for_printing, ST_HTML_PATH
+from explore_prompts_utils import ST_HTML_PATH
 
 styling()
-# html(CSS)
-# st.markdown(CSS, unsafe_allow_html=True)
-# from explore_prompts.explore_prompts_backend ModelResults
 
-MEDIA_PATH = Path("/home/ubuntu/Transformerlens/transformer_lens/rs/callum/explore_prompts/media")
+with gzip.open(ST_HTML_PATH / "GZIP_HTML_PLOTS.pkl", "rb") as f:
+    HTML_PLOTS = pickle.load(f)
 
-HTML_PLOTS = pickle.load(open(ST_HTML_PATH / "HTML_PLOTS.pkl", "rb"))
 BATCH_SIZE = len(HTML_PLOTS["LOGITS_ORIG"])
 
 NEG_HEADS = ["10.7", "11.10"]
@@ -45,7 +43,7 @@ HTML_LOGITS_ORIG = HTML_PLOTS["LOGITS_ORIG"][(batch_idx,)]
 HTML_LOGITS_ABLATED = HTML_PLOTS["LOGITS_ABLATED"][(batch_idx, head_name, ablation_type)]
 # HTML_DLA = HTML_PLOTS["DLA"][(batch_idx, head_name, "NEG/POS")]
 # HTML_ATTN = HTML_PLOTS["ATTN"][(batch_idx, head_name, vis_name, attn_type)]
-# HTML_UNEMBEDDINGS = HTML_PLOTS["UNEMBEDDINGS"][(batch_idx, head_name, remove_self)]
+# HTML_UNEMBEDDINGS = HTML_PLOTS["UNEMBEDDINGS"][(batch_idx, head_name)]
 
 st.markdown(
 r"""# Browse Examples
@@ -233,7 +231,7 @@ Further analysis shows that the lack of copy-suppression is a consequence of the
 </details>
 """
 )
-    remove_self = st.checkbox("Remove self-attention from possible source tokens", value=False)
+    # remove_self = st.checkbox("Remove self-attention from possible source tokens", value=False)
 
-    HTML_UNEMBEDDINGS = HTML_PLOTS["UNEMBEDDINGS"][(batch_idx, head_name, remove_self)]
+    HTML_UNEMBEDDINGS = HTML_PLOTS["UNEMBEDDINGS"][(batch_idx, head_name)]
     html(CSS + HTML_UNEMBEDDINGS, height=1500)

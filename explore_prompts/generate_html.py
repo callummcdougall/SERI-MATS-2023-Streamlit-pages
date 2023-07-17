@@ -6,6 +6,7 @@ root_dir = os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts"
 os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
 
+import gzip
 from typing import Tuple, List, Any, Optional, Dict
 import torch as t
 from torch import Tensor
@@ -100,6 +101,15 @@ $(document).ready(function(){
 });
 </script>
 """
+
+import re
+
+def attn_filter(html):
+    html = str(html)
+    def round_match(match):
+        return "{:.4f}".format(float(match.group()))
+    return re.sub(r'\b0\.\d+\b', round_match, html)
+
 
 
 
@@ -285,7 +295,6 @@ def generate_html_for_logit_plot(
             table_body += f"<tr><td>#{idx}</td><td>{word!r}</td><td>{value:.2f}</td><td>{value.exp():.2%}</td></tr>"
 
         lp_orig = logprobs_on_correct_token_baseline[seq_pos]
-        p_orig = lp_orig.exp()
         lp = logprobs_on_correct_token[seq_pos]
         p = lp.exp()
         empty_row = '<tr class="empty-row"><td></td><td></td><td></td><td></td></tr>'
@@ -348,7 +357,6 @@ def generate_html_for_DLA_plot(
         for idx, (word, value) in enumerate(zip(top10_str_toks, top10_values)):
             pos_table_body += f"<tr><td>#{idx}</td><td>{word!r}</td><td>{value:.2f}</td></tr>"
 
-        empty_row = '<tr class="empty-row"><td></td><td></td><td></td><td></td></tr>'
         hover_text_list_neg.append("".join([
             f"<span background-color:'#ddd'>{current_word!r}</span> ➔ <span background-color:'#ddd'>{next_word!r}</span><br><br>",
             "<table>",
@@ -397,9 +405,6 @@ def generate_4_html_plots(
         "UNEMBEDDINGS": {}
     }
 
-    def to_string(toks):
-        return model.to_string(toks).replace("\n", "\\n")
-
     BATCH_SIZE = data_toks.shape[0]
 
     if model_results is None:
@@ -416,6 +421,9 @@ def generate_4_html_plots(
         t.stack(list(MODEL_RESULTS.loss.zero_patched.data.values())),
     ]) - MODEL_RESULTS.loss_orig
 
+    # import time
+    # t1 = 0
+
     for batch_idx in tqdm(range(BATCH_SIZE)):
         for head_idx, (layer, head) in enumerate(negative_heads):
             head_name = f"{layer}.{head}"
@@ -425,12 +433,16 @@ def generate_4_html_plots(
             loss_diffs_padded = t.concat([loss_diffs[:, head_idx], t.zeros((4, BATCH_SIZE, 1))], dim=-1)
 
             # For each different type of ablation, get the loss diffs
+            # t0 = time.time()
             for loss_diff, ablation_type in zip(loss_diffs_padded, ["mean, direct", "zero, direct", "mean, patched", "zero, patched"]):
                 html = generate_html_for_loss_plot(
                     data_str_toks_parsed[batch_idx],
                     loss_diff = loss_diff[batch_idx],
                 )
                 HTML_PLOTS["LOSS"][(batch_idx, head_name, ablation_type)] = str(html)
+            # t1 += (time.time() - t0)
+
+    # print(t1)
 
     # ! (2, 3, 4) Calculate the logits & direct logit attributions
 
@@ -513,6 +525,7 @@ def generate_4_html_plots(
                     )
                     for x in [attn, weighted_attn]
                 ]
+                html_standard, html_weighted = list(map(attn_filter, [html_standard, html_weighted]))
                 HTML_PLOTS["ATTN"][(batch_idx, head_name, vis_name, "standard")] = str(html_standard)
                 HTML_PLOTS["ATTN"][(batch_idx, head_name, vis_name, "info-weighted")] = str(html_weighted)
 
@@ -532,12 +545,13 @@ def generate_4_html_plots(
         # Add these to dictionary, all at once
         HTML_PLOTS["UNEMBEDDINGS"] = {
             **HTML_PLOTS["UNEMBEDDINGS"],
-            **{(batch_idx, head_name, True): html for batch_idx, html in html_dict.items()},
-            **{(batch_idx, head_name, False): html for batch_idx, html in html_rm_self_dict.items()},
+            # **{(batch_idx, head_name, True): html for batch_idx, html in html_rm_self_dict.items()},
+            **{(batch_idx, head_name): html for batch_idx, html in html_dict.items()},
         }
 
     # Optionally, save the files (we do this if we're generating it from OWT, for the Streamlit page)
     if save_files:
-        pickle.dump(HTML_PLOTS, open(ST_HTML_PATH / "HTML_PLOTS.pkl", "wb"))
+        with gzip.open(ST_HTML_PATH / "GZIP_HTML_PLOTS.pkl", "wb") as f:
+            pickle.dump(HTML_PLOTS, f)
 
     return HTML_PLOTS

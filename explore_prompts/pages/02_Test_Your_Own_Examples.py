@@ -11,13 +11,12 @@ if root_dir not in sys.path: sys.path.append(root_dir)
 import streamlit as st
 st.set_page_config(layout="wide")
 from streamlit.components.v1 import html
-from pathlib import Path
 from transformer_lens import HookedTransformer
 from collections import defaultdict
 
 from streamlit_styling import styling
 from generate_html import CSS
-from explore_prompts_utils import parse_str, parse_str_tok_for_printing, ST_HTML_PATH
+from explore_prompts_utils import parse_str_tok_for_printing
 from generate_html import generate_4_html_plots
 
 styling()
@@ -27,8 +26,6 @@ styling()
 
 if "prompt_list" not in st.session_state:
     st.session_state["prompt_list"] = []
-
-MEDIA_PATH = Path("/home/ubuntu/Transformerlens/transformer_lens/rs/callum/explore_prompts/media")
 
 NEG_HEADS = ["10.7", "11.10"]
 ABLATION_TYPES = ["mean, direct", "zero, direct", "mean, patched", "zero, patched"]
@@ -103,11 +100,9 @@ if BATCH_SIZE > 0:
 st.markdown(
 r"""# Browse Examples
 
-### What is this page for?
-
 This page allows you to input your own prompts, and see how negative heads (10.7 and 11.10) behave on the different tokens in those prompts. It should help build your intuition about how much of the negative heads' behaviour is copy-suppression, and when this is good/bad.
 
-See the "Browse Examples" section for more information.
+When you enter a prompt in the left-hand sidebar and hit "Generate", that prompt will appear as part of a list below the generate button. You can then navigate between these prompts (in other words you can have multiple prompts active at once, and jump between them).
 
 ### A few good example prompts
 
@@ -233,7 +228,7 @@ Our theory for copy-suppression is that each destination token `D` will attend b
 > *Note - this visualisation might be redesigned, because I'm not sure this is the most elegant way to display this information. There's a few hacky things here, e.g. having to subtract the mean unembedding component over source tokens `S` for each destination token `D`, and the fact that `D` will often contain a nontrivial component of its own unembedding because of tied embeddings.*
 """
 )
-        remove_self = st.checkbox("Remove self-attention from possible source tokens", value=False)
+        # remove_self = st.checkbox("Remove self-attention from possible source tokens", value=False)
 
-        HTML_UNEMBEDDINGS = HTML_PLOTS["UNEMBEDDINGS"][(batch_idx, head_name, remove_self)]
+        HTML_UNEMBEDDINGS = HTML_PLOTS["UNEMBEDDINGS"][(batch_idx, head_name)]
         html(CSS + HTML_UNEMBEDDINGS, height=1500)
