@@ -68,11 +68,11 @@ def get_metric_from_end_state(
         return loss, logits
     return loss
 
-def get_filtered_webtext(model, batch_size=30, seed: int = 1729, device="cuda", max_seq_len=1024):
+def get_filtered_webtext(model, batch_size=30, seed: int = 1729, device="cuda", max_seq_len=1024, dataset="stas/openwebtext-10k"):
     """
     Returns webtext that is all equal to length max token length. Ah.
     """
-    dataset = get_webtext(seed=seed)
+    dataset = get_webtext(seed=seed, dataset=dataset)
     filtered_tokens = []
     targets = []  # targets for prediction
 
