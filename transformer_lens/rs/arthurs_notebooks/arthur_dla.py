@@ -67,4 +67,6 @@ for subtract_mean in [True, False]:
 
     print("Proportion of positive logit attributions:", ((torch.nn.functional.relu(top_attribution_values) > 0).int().sum() / top_attribution_values.numel()).item())
 
+    # TODO these results seem a bit odd for the positive head...
+
 # %%
