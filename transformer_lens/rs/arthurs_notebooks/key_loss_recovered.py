@@ -56,6 +56,7 @@ names_filter1 = (
     or name == get_act_name("resid_pre", 1)
     or name == f"blocks.{NEGATIVE_LAYER_IDX}.hook_resid_pre"
     or name == f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_result"
+    or name == f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_attn_scores"
     or name == attention_pattern_hook_name
     or "mlp_out" in name 
     or "hook_result" in name
@@ -222,17 +223,13 @@ attention_score_key_component = dot_with_query(
 
 #%%
 
-# def dot_with_query(
-#     unnormalized_keys: Float[torch.Tensor, "batch d_model"],
-#     unnormalized_queries: Float[torch.Tensor, "batch d_model"],
-#     model,
-#     layer_idx,
-#     head_idx,
-#     add_key_bias: bool = True, 
-#     add_query_bias: bool = True,
-#     normalize_keys: bool = True,
-#     normalize_queries: bool = True,
-#     use_tqdm: bool = True,
-# ):
+total_attention_score = attention_score_components.sum(dim=0) + attention_score_key_component
+
+#%%
+
+torch.testing.assert_allclose(
+    total_attention_score.cuda(),
+    cache[f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_attn_scores"][top5p_batch_indices, NEGATIVE_HEAD_IDX, top5p_seq_indices],
+)
 
 #%%

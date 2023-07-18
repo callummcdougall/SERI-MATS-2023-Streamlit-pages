@@ -131,29 +131,17 @@ def dot_with_query(
     W_K = model.W_K[layer_idx, head_idx]
 
     if normalize_queries:
-        queries = torch.stack(
-            [query / (query.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
-            for query in unnormalized_queries],
-            dim=0,
-        )
+        queries = unnormalized_queries / (unnormalized_queries.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
     else:
         queries = unnormalized_queries
     
     if normalize_keys:
-        keys = torch.stack(
-            [key / (key.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
-            for key in unnormalized_keys],
-            dim=0,
-        )
+        keys = unnormalized_keys / (unnormalized_keys.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
     else:
         keys = unnormalized_keys
 
-
     results = torch.zeros(queries.shape[:-1])
-
-    iterator = list(itertools.product( # galaxy brain way of making an iterator over the first n-1 dimensions
-        *[list(range(dim_length)) for dim_length in list(queries.shape[:-1])],
-    ))
+    iterator = list(range(queries.shape[0]))
     iterator = tqdm(iterator) if use_tqdm else iterator
     for index_tuple in iterator: # TODO easy to batch, mate...
         q_vector, k_vector = queries[index_tuple], keys[index_tuple]
@@ -166,32 +154,32 @@ def dot_with_query(
             "... d_model, ... d_model d_head -> ... d_head",
         ) 
         if add_query_bias:
-            query_side_vector += model.b_Q[layer_idx, head_idx]
+            query_side_vectors += model.b_Q[layer_idx, head_idx]
         
         # TODO to do this addition maximally safe, assert some shapes and/or einops.repeat the bias
-        key_side_vector = einops.einsum(
+        key_side_vectors = einops.einsum(
             k_vector,
             W_K,
             "... d_model, ... d_model d_head -> ... d_head",
         )
         if add_key_bias:
-            key_side_vector += model.b_K[layer_idx, head_idx]
+            key_side_vectors += model.b_K[layer_idx, head_idx]
 
-        assert list(query_side_vector.shape) == list(key_side_vector.shape), (
-            query_side_vector.shape,
-            key_side_vector.shape,
+        assert list(query_side_vectors.shape) == list(key_side_vectors.shape), (
+            query_side_vectors.shape,
+            key_side_vectors.shape,
         )
-        assert query_side_vector.shape[-1] == key_side_vector.shape[-1] == model.cfg.d_head, (
-            query_side_vector.shape,
-            key_side_vector.shape,
+        assert query_side_vectors.shape[-1] == key_side_vectors.shape[-1] == model.cfg.d_head, (
+            query_side_vectors.shape,
+            key_side_vectors.shape,
             model.cfg.d_head,
         )
 
         attention_scores = einops.einsum(
-            query_side_vector,
-            key_side_vector,
-            "... d_head, ... d_head ->",
+            query_side_vectors,
+            key_side_vectors,
+            "... d_head, ... d_head -> ...",
         ) / np.sqrt(model.cfg.d_head)
-        results[index_tuple] = attention_scores.item()
+        results[index_tuple] = attention_scores
 
     return results
