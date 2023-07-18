@@ -120,6 +120,8 @@ def dot_with_query(
     use_tqdm: bool = True,
 ) -> Float[torch.Tensor, "..."]:
 
+    warnings.warn("Please test this refactored version on the notebooks where you already used it")
+
     assert list(unnormalized_keys.shape) == list(unnormalized_queries.shape), (
         unnormalized_keys.shape,
         unnormalized_queries.shape,
@@ -146,15 +148,22 @@ def dot_with_query(
     else:
         keys = unnormalized_keys
 
-    q_and_k_vectors = list(zip(queries, keys))
 
-    results = []
-    iterator = tqdm(q_and_k_vectors) if use_tqdm else q_and_k_vectors
-    for q_vector, k_vector in iterator: # TODO easy to batch, mate...
-        query_side_vector = einops.einsum(
+    results = torch.zeros(queries.shape[:-1])
+
+    iterator = list(itertools.product( # galaxy brain way of making an iterator over the first n-1 dimensions
+        *[list(range(dim_length)) for dim_length in list(queries.shape[:-1])],
+    ))
+    iterator = tqdm(iterator) if use_tqdm else iterator
+    for index_tuple in iterator: # TODO easy to batch, mate...
+        q_vector, k_vector = queries[index_tuple], keys[index_tuple]
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        query_side_vectors = einops.einsum(
             q_vector,
             W_Q,
-            "d_model, d_model d_head -> d_head",
+            "... d_model, ... d_model d_head -> ... d_head",
         ) 
         if add_query_bias:
             query_side_vector += model.b_Q[layer_idx, head_idx]
@@ -163,23 +172,26 @@ def dot_with_query(
         key_side_vector = einops.einsum(
             k_vector,
             W_K,
-            "... d_model, ... d_model d_head -> d_head",
+            "... d_model, ... d_model d_head -> ... d_head",
         )
         if add_key_bias:
             key_side_vector += model.b_K[layer_idx, head_idx]
 
-        assert list(query_side_vector.shape) == [
+        assert list(query_side_vector.shape) == list(key_side_vector.shape), (
+            query_side_vector.shape,
+            key_side_vector.shape,
+        )
+        assert query_side_vector.shape[-1] == key_side_vector.shape[-1] == model.cfg.d_head, (
+            query_side_vector.shape,
+            key_side_vector.shape,
             model.cfg.d_head,
-        ], query_side_vector.shape
-        assert list(key_side_vector.shape) == [
-            model.cfg.d_head,
-        ], key_side_vector.shape
+        )
 
         attention_scores = einops.einsum(
             query_side_vector,
             key_side_vector,
             "... d_head, ... d_head ->",
         ) / np.sqrt(model.cfg.d_head)
-        results.append(attention_scores.item())
+        results[index_tuple] = attention_scores.item()
 
-    return torch.tensor(results)
+    return results

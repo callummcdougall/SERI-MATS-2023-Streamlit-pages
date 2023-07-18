@@ -178,11 +178,10 @@ for hook_name in (
 
 pre_negative_residual_state = cache[get_act_name("resid_pre", LAYER_IDX)]
 negative_head_layer_norm_scale = (pre_negative_residual_state.norm(dim=(1, 2), keepdim=True) * np.sqrt(model.cfg.d_model))
-
-top5p_key_in = {k: v[top5p_batch_indices] for k, v in all_residual_stream.items()}
+top5p_negative_head_layer_norm_scale = negative_head_layer_norm_scale[top5p_batch_indices]
+top5p_key_in = {k: v[top5p_batch_indices] / top5p_negative_head_layer_norm_scale for k, v in all_residual_stream.items()}
 
 top5p_query_in = pre_negative_residual_state[top5p_batch_indices]
-
 
 #%%
 
@@ -194,7 +193,7 @@ attention_score_components = {}
 #         head_idx = int(attention_score_component_name.split("_")[-1])
 
 attention_score_components = dot_with_query(
-    unnormalized_keys=torch.stack(top5p_key_in.values(), dim=0),
+    unnormalized_keys=torch.stack(list(top5p_key_in.values()), dim=0),
     unnormalized_queries=einops.repeat(top5p_query_in, "b s d -> c b s d", c=len(top5p_key_in)).clone(),
     model=model,
     layer_idx=NEGATIVE_LAYER_IDX,
@@ -203,9 +202,25 @@ attention_score_components = dot_with_query(
     add_query_bias=True,
     normalize_keys=False,
     normalize_queries=True,
-    use_tqdm=False,
+    use_tqdm=True,
 )
 
+#%%
+
+attention_score_key_component = dot_with_query(
+    unnormalized_keys=einops.repeat(torch.zeros((model.cfg.d_model,)).cuda(), "d -> b s d", b=top5p_query_in.shape[0], s=top5p_query_in.shape[1]).clone(),
+    unnormalized_queries=top5p_query_in,
+    model=model,
+    layer_idx=NEGATIVE_LAYER_IDX,   
+    head_idx=NEGATIVE_HEAD_IDX,
+    add_key_bias=True, # look!!!
+    add_query_bias=True,
+    normalize_keys=False,   
+    normalize_queries=True,
+    use_tqdm=True,
+)
+
+#%%
 
 # def dot_with_query(
 #     unnormalized_keys: Float[torch.Tensor, "batch d_model"],
