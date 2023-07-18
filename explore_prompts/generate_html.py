@@ -516,7 +516,6 @@ def generate_4_html_plots(
                     vis_type(
                         attention = x.unsqueeze(0), # (heads=2, seqQ, seqK)
                         tokens = data_str_toks_parsed[batch_idx], # list of length seqQ
-                        attention_head_names = [head_name]
                     )
                     for x in [attn, weighted_attn]
                 ]
