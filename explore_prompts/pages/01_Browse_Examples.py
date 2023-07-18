@@ -1,12 +1,14 @@
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
 
-try:
-    root_dir = os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts"
-    os.chdir(root_dir)
-except:
-    root_dir = "/app/seri-mats-2023-streamlit-pages/explore_prompts"
-    os.chdir(root_dir)
+for root_dir in [
+    os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts", # For Arthur's branch
+    "/app/seri-mats-2023-streamlit-pages/explore_prompts", # For Streamlit page (public)
+    os.getcwd().split("seri_mats_23_streamlit_pages")[0] + "seri_mats_23_streamlit_pages/explore_prompts", # For Arthur's branch
+]:
+    if os.path.exists(root_dir):
+        break
+os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
 
 import streamlit as st
@@ -19,6 +21,9 @@ import gzip
 from streamlit_styling import styling
 from generate_html import CSS
 from explore_prompts_utils import ST_HTML_PATH
+
+import torch as t
+t.set_grad_enabled(False)
 
 styling()
 
@@ -38,7 +43,7 @@ head_name = st.sidebar.radio("Pick a head", NEG_HEADS + ["both"])
 assert head_name != "both", "Both not implemented yet. Please choose either 10.7 or 11.10"
 ablation_type = st.sidebar.radio("Pick a type of ablation", ABLATION_TYPES)
 
-HTML_LOSS = HTML_PLOTS["LOSS"][(batch_idx, head_name, ablation_type)]
+# HTML_LOSS = HTML_PLOTS["LOSS"][(batch_idx, head_name, ablation_type)]
 HTML_LOGITS_ORIG = HTML_PLOTS["LOGITS_ORIG"][(batch_idx,)]
 HTML_LOGITS_ABLATED = HTML_PLOTS["LOGITS_ABLATED"][(batch_idx, head_name, ablation_type)]
 # HTML_DLA = HTML_PLOTS["DLA"][(batch_idx, head_name, "NEG/POS")]
@@ -82,8 +87,6 @@ This visualisation shows the loss difference from ablating head 10.7 (for variou
 
 The sign is (loss with ablation) - (original loss), so blue (positive) means the loss increases when you ablate, i.e. the head is useful. Red means the head is harmful.
 
-### todo - increase the contrast on this plot, the colors are frustratingly muted. Maybe have a checkbox option to toggle between "2.5 = max color" and "max value = max color".
-
 <details>
 <summary>Analysis</summary>
 
@@ -95,8 +98,13 @@ We'll use as an example the string `"...whether Bourdain Market will open at the
 
 </details>
 
-""", unsafe_allow_html=True)
+<br>
 
+""", unsafe_allow_html=True)
+    
+    max_loss_color_is_free = st.checkbox("By default, the extreme colors are ± 2.5 cross-entropy loss. Check this box to extremise the colors (so the most important token in this sequence has the most intense color).")
+
+    HTML_LOSS = HTML_PLOTS["LOSS"][(batch_idx, head_name, ablation_type, max_loss_color_is_free)]
     html(CSS.replace("min-width: 275px", "min-width: 100px") + HTML_LOSS, height=200)
 
 with tabs[1]:
@@ -136,7 +144,7 @@ To complete this picture, we still want to look at the attention patterns, and v
         }[x])
 
         HTML_DLA = HTML_PLOTS["DLA"][(batch_idx, head_name, radio_negpos_logits)]
-        html(CSS + HTML_DLA, height=400)
+        html(CSS + HTML_DLA, height=500)
 
     with inner_tabs[1]:
         st.markdown(
@@ -231,8 +239,7 @@ Further analysis shows that the lack of copy-suppression is a consequence of the
 * This has something to do with the "perpendicular direction" in IOI
 * Bigrams shouldn't be suppressed, so neg heads are instructed to attend to BOS instead (i.e. they're "turned off" generically)
 </details>
-"""
-)
+""", unsafe_allow_html=True)
     # remove_self = st.checkbox("Remove self-attention from possible source tokens", value=False)
 
     HTML_UNEMBEDDINGS = HTML_PLOTS["UNEMBEDDINGS"][(batch_idx, head_name)]

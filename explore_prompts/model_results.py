@@ -2,12 +2,14 @@
 
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
-try:
-    root_dir = os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts"
-    os.chdir(root_dir)
-except:
-    root_dir = "/app/seri-mats-2023-streamlit-pages/explore_prompts"
-    os.chdir(root_dir)
+for root_dir in [
+    os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts", # For Arthur's branch
+    "/app/seri-mats-2023-streamlit-pages/explore_prompts", # For Streamlit page (public)
+    os.getcwd().split("seri_mats_23_streamlit_pages")[0] + "seri_mats_23_streamlit_pages/explore_prompts", # For Arthur's branch
+]:
+    if os.path.exists(root_dir):
+        break
+os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
 
 from typing import Dict, Any, Tuple, List, Optional

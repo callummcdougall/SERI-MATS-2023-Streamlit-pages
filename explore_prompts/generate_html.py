@@ -2,12 +2,14 @@
 
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
-try:
-    root_dir = os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts"
-    os.chdir(root_dir)
-except:
-    root_dir = "/app/seri-mats-2023-streamlit-pages/explore_prompts"
-    os.chdir(root_dir)
+for root_dir in [
+    os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts", # For Arthur's branch
+    "/app/seri-mats-2023-streamlit-pages/explore_prompts", # For Streamlit page (public)
+    os.getcwd().split("seri_mats_23_streamlit_pages")[0] + "seri_mats_23_streamlit_pages/explore_prompts", # For Arthur's branch
+]:
+    if os.path.exists(root_dir):
+        break
+os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
 
 import gzip
@@ -117,15 +119,15 @@ def attn_filter(html):
 
 
 
-def _get_color(importance):
+def _get_color(importances):
     """
     Returns a color based on the importance of a word.
 
     Also returns color for the text (has to be white if sufficiently extreme).    
     """
-    bg_color = sample_colorscale("RdBu", importance, low=0.0, high=1.0, colortype='rgb')[0]
-    text_color = "white" if abs(importance - 0.5) > 0.3 else "black"
-    return bg_color, text_color
+    bg_colors = sample_colorscale("RdBu", importances, low=0.0, high=1.0, colortype='rgb')
+    text_colors = list(map(lambda i: "white" if abs(i - 0.5) > 0.3 else "black", importances))
+    return bg_colors, text_colors
 
 
 
@@ -133,9 +135,6 @@ def format_word_importances(
     words: List[str],
     importances: List[float],
     hover_text_list: List[str],
-    word_gaps: bool = True,
-    show: bool = False,
-    save: bool = False,
 ) -> str:
     """Adds a background color to each word based on its importance (float from -1 to 1)
 
@@ -151,22 +150,15 @@ def format_word_importances(
     assert len(words) == len(importances), "Words and importances but be of same length"
 
     tags = ["<td>"]
-    for word, importance, hover_text in zip(words, importances, hover_text_list):
+    bg_colors, text_colors = _get_color(importances)
+    for word, bg_color, text_color, hover_text in zip(words, bg_colors, text_colors, hover_text_list):
         word = word.replace(" ", "&nbsp;")
-        bg_color, text_color = _get_color(importance)
-        unwrapped_tag = f'<mark style="background-color:{bg_color};opacity:1.0;line-height:{"1.75em" if word_gaps else "1.48em"}"><font color="{text_color}">{word}</font></mark>'
+        unwrapped_tag = f'<mark style="background-color:{bg_color};opacity:1.0;line-height:1.75em"><font color="{text_color}">{word}</font></mark>'
         unwrapped_tag = f'<span class="tooltip">{unwrapped_tag}<span class="tooltiptext">{hover_text}</span></span>'
         tags.append(unwrapped_tag)
     tags.append("</td>")
-    html = ("&nbsp;" if word_gaps else "").join(tags)
-
-    if show:
-        display(HTML(CSS + "<br>" * 10 + html))
-    elif save:
-        with open("file.html", "w") as f:
-            f.write("<br>" * 10 + CSS + html)
-    else:
-        return html
+    html = "&nbsp;".join(tags)
+    return html
 
 
 
@@ -179,14 +171,15 @@ def generate_html_for_loss_plot(
     the loss has increased or decreased by when you ablate).
     '''
     # Chosen 2.5 as an appropriate "extreme loss" baseline
-    max_color = 2.5
+    max_colors = [2.5, loss_diff.abs().max().item() + 1e-6]
 
-    importances = t.clip(0.5 + loss_diff / (2 * max_color), 0.0, 1.0).tolist()
+    importances = [t.clip(0.5 + loss_diff / (2 * max_color), 0.0, 1.0).tolist() for max_color in max_colors]
 
     hover_text_list = [f"<b>'{s}'</b><br>{d:.4f}" for (s, d) in zip(str_toks[:-1], loss_diff)] + [""]
 
-    html = format_word_importances(str_toks, importances, hover_text_list)
-    return html
+    html_25 = format_word_importances(str_toks, importances[0], hover_text_list)
+    html_max = format_word_importances(str_toks, importances[1], hover_text_list)
+    return html_25, html_max
 
 
 
@@ -260,6 +253,7 @@ def generate_html_for_logit_plot(
     str_toks = model.to_str_tokens(toks)
     logprobs_on_correct_token = logprobs[range(len(str_toks)-1), toks[1:]]
     logprobs_on_correct_token_baseline = non_ablated_logprobs[range(len(str_toks)-1), toks[1:]]
+    probs_on_correct_token_baseline = logprobs_on_correct_token_baseline.exp()
     colors = logprobs_on_correct_token - logprobs_on_correct_token_baseline
     if colors.abs().max() < 1e-4:
         # In this case, we must have the original logprobs, so we set colors based on just these
@@ -285,22 +279,25 @@ def generate_html_for_logit_plot(
 
     hover_text_list = []
 
+    all_correct_indices = (logprobs_on_correct_token.unsqueeze(1) < logprobs[range(len(str_toks)-1)]).sum(dim=1)
+
     for seq_pos in range(len(str_toks) - 1):
 
         current_word = str_toks[seq_pos]
         next_word = str_toks[seq_pos + 1]
 
-        correct_idx = (logprobs_on_correct_token[seq_pos] < logprobs[seq_pos]).sum()
+        correct_idx = all_correct_indices[seq_pos]
         str_toks_top10 = str_toks_top10_all[seq_pos]
         logprobs_top10 = t.tensor(logprobs_top10_all[seq_pos])
+        probs_top10 = logprobs_top10.exp()
 
         table_body = ""
-        for idx, (word, value) in enumerate(zip(str_toks_top10, logprobs_top10)):
-            table_body += f"<tr><td>#{idx}</td><td>{word!r}</td><td>{value:.2f}</td><td>{value.exp():.2%}</td></tr>"
+        for idx, (word, logprob, prob) in enumerate(zip(str_toks_top10, logprobs_top10, probs_top10)):
+            table_body += f"<tr><td>#{idx}</td><td>{word!r}</td><td>{logprob:.2f}</td><td>{prob:.2%}</td></tr>"
 
         lp_orig = logprobs_on_correct_token_baseline[seq_pos]
         lp = logprobs_on_correct_token[seq_pos]
-        p = lp.exp()
+        p = probs_on_correct_token_baseline[seq_pos]
         empty_row = '<tr class="empty-row"><td></td><td></td><td></td><td></td></tr>'
         new_hover_text = "".join([
             "<table>",
@@ -425,9 +422,6 @@ def generate_4_html_plots(
         t.stack(list(MODEL_RESULTS.loss.zero_patched.data.values())),
     ]) - MODEL_RESULTS.loss_orig
 
-    # import time
-    # t1 = 0
-
     for batch_idx in tqdm(range(BATCH_SIZE)):
         for head_idx, (layer, head) in enumerate(negative_heads):
             head_name = f"{layer}.{head}"
@@ -437,16 +431,13 @@ def generate_4_html_plots(
             loss_diffs_padded = t.concat([loss_diffs[:, head_idx], t.zeros((4, BATCH_SIZE, 1))], dim=-1)
 
             # For each different type of ablation, get the loss diffs
-            # t0 = time.time()
             for loss_diff, ablation_type in zip(loss_diffs_padded, ["mean, direct", "zero, direct", "mean, patched", "zero, patched"]):
-                html = generate_html_for_loss_plot(
+                html_25, html_max = generate_html_for_loss_plot(
                     data_str_toks_parsed[batch_idx],
                     loss_diff = loss_diff[batch_idx],
                 )
-                HTML_PLOTS["LOSS"][(batch_idx, head_name, ablation_type)] = str(html)
-            # t1 += (time.time() - t0)
-
-    # print(t1)
+                HTML_PLOTS["LOSS"][(batch_idx, head_name, ablation_type, True)] = str(html_max)
+                HTML_PLOTS["LOSS"][(batch_idx, head_name, ablation_type, False)] = str(html_25)
 
     # ! (2, 3, 4) Calculate the logits & direct logit attributions
 

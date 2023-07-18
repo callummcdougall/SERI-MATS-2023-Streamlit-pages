@@ -1,12 +1,13 @@
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
-
-try:
-    root_dir = os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts"
-    os.chdir(root_dir)
-except:
-    root_dir = "/app/seri-mats-2023-streamlit-pages/explore_prompts"
-    os.chdir(root_dir)
+for root_dir in [
+    os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts", # For Arthur's branch
+    "/app/seri-mats-2023-streamlit-pages/explore_prompts", # For Streamlit page (public)
+    os.getcwd().split("seri_mats_23_streamlit_pages")[0] + "seri_mats_23_streamlit_pages/explore_prompts", # For Arthur's branch
+]:
+    if os.path.exists(root_dir):
+        break
+os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
 
 import streamlit as st
@@ -14,11 +15,15 @@ st.set_page_config(layout="wide")
 from streamlit.components.v1 import html
 from transformer_lens import HookedTransformer
 from collections import defaultdict
+import tokenizers
 
 from streamlit_styling import styling
 from generate_html import CSS
 from explore_prompts_utils import parse_str_tok_for_printing
 from generate_html import generate_4_html_plots
+
+import torch as t
+t.set_grad_enabled(False)
 
 styling()
 # html(CSS)
@@ -33,7 +38,8 @@ ABLATION_TYPES = ["mean, direct", "zero, direct", "mean, patched", "zero, patche
 ATTENTION_TYPES = ["info-weighted", "standard"]
 ATTN_VIS_TYPES = ["large", "small"]
 
-if "model" not in st.session_state:
+@st.cache(hash_funcs={"tokenizers.Tokenizer": lambda _: None}, show_spinner=False, max_entries=1)
+def load_model():
     with st.spinner("Loading model (this only needs to happen once, it usually takes 5-15 seconds) ..."):
         model = HookedTransformer.from_pretrained(
             "gpt2-small",
@@ -41,10 +47,11 @@ if "model" not in st.session_state:
             center_writing_weights=True,
             fold_ln=True,
             device="cpu"
-        )
+        ) # .half()
         model.set_use_attn_result(True)
-    
-    st.session_state["model"] = model
+    return model
+
+model = load_model()
 
 prompt = st.sidebar.text_area("Prompt", placeholder="Press 'Generate' button to run.", on_change=None)
 
@@ -57,7 +64,6 @@ def generate():
         st.session_state["prompt_list"].append(prompt)
         if "HTML_PLOTS" not in st.session_state:
             st.session_state["HTML_PLOTS"] = defaultdict(dict)
-        model: HookedTransformer = st.session_state["model"]
         toks = model.to_tokens(prompt)
         str_toks = model.to_str_tokens(toks)
         if isinstance(str_toks[0], str): str_toks = [str_toks]
@@ -87,11 +93,11 @@ BATCH_SIZE = len(st.session_state["prompt_list"])
 HTML_PLOTS = st.session_state.get("HTML_PLOTS", None)
 
 if BATCH_SIZE > 0:
-    batch_idx = st.sidebar.radio("Pick a sequence", range(BATCH_SIZE), format_func=lambda x: st.session_state["prompt_list"][x])
+    batch_idx = st.sidebar.radio("Pick a sequence", range(BATCH_SIZE), index=BATCH_SIZE-1, format_func=lambda x: st.session_state["prompt_list"][x])
     head_name = st.sidebar.radio("Pick a head", NEG_HEADS + ["both"])
     assert head_name != "both", "Both not implemented yet. Please choose either 10.7 or 11.10"
     ablation_type = st.sidebar.radio("Pick a type of ablation", ABLATION_TYPES)
-    HTML_LOSS = HTML_PLOTS["LOSS"][(batch_idx, head_name, ablation_type)]
+    # HTML_LOSS = HTML_PLOTS["LOSS"][(batch_idx, head_name, ablation_type)]
     HTML_LOGITS_ORIG = HTML_PLOTS["LOGITS_ORIG"][(batch_idx,)]
     HTML_LOGITS_ABLATED = HTML_PLOTS["LOGITS_ABLATED"][(batch_idx, head_name, ablation_type)]
     # HTML_DLA = HTML_PLOTS["DLA"][(batch_idx, head_name, "NEG/POS")]
@@ -148,6 +154,10 @@ This visualisation shows the loss difference from ablating head 10.7 (for variou
 
 The sign is (loss with ablation) - (original loss), so blue (positive) means the loss increases when you ablate, i.e. the head is useful. Red means the head is harmful.
 """, unsafe_allow_html=True)
+
+        max_loss_color_is_free = st.checkbox("By default, the extreme colors are ± 2.5 cross-entropy loss. Check this box to extremise the colors (so the most important token in this sequence has the most intense color).")
+
+        HTML_LOSS = HTML_PLOTS["LOSS"][(batch_idx, head_name, ablation_type, max_loss_color_is_free)]
 
         html(CSS.replace("min-width: 275px", "min-width: 100px") + HTML_LOSS, height=200)
 
