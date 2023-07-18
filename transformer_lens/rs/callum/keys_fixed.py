@@ -1,6 +1,6 @@
 from torch import native_dropout
 from transformer_lens.cautils.utils import *
-# from transformer_lens.rs.callum.research_sprint.generate_bag_of_words_quad_plot import get_effective_embedding
+# from transformer_lens.rs.callum.generate_bag_of_words_quad_plot import get_effective_embedding
 
 
 def get_effective_embedding_2(model: HookedTransformer) -> Float[Tensor, "d_vocab d_model"]:
