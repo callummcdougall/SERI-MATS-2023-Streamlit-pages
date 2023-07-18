@@ -178,7 +178,7 @@ for hook_name in (
 # %%
 
 pre_negative_residual_state = cache[get_act_name("resid_pre", LAYER_IDX)]
-negative_head_layer_norm_scale = (pre_negative_residual_state.norm(dim=(1, 2), keepdim=True) / np.sqrt(model.cfg.d_model))
+negative_head_layer_norm_scale = (pre_negative_residual_state.norm(dim=2, keepdim=True) / np.sqrt(model.cfg.d_model))
 top5p_negative_head_layer_norm_scale = negative_head_layer_norm_scale[top5p_batch_indices]
 top5p_key_in = {k: v[top5p_batch_indices] / top5p_negative_head_layer_norm_scale for k, v in all_residual_stream.items()}
 
