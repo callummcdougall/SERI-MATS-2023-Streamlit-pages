@@ -249,6 +249,24 @@ average_unembed = einops.einsum(
 
 #%%
 
+logit_lens_pre_ten = einops.einsum(
+    head_pre,
+    model.W_U,
+    "batch pos d_model, \
+    d_model d_vocab -> \
+    batch pos d_vocab",
+)
+
+#%%
+
+logit_lens_top_pre_ten = torch.topk(
+    logit_lens_pre_ten,
+    k=10,
+    dim=-1,
+)
+
+#%%
+
 ABS_MODE = True
 
 def to_string(toks):
@@ -270,8 +288,11 @@ for batch_idx in range(len(top_unembeds_per_position)):
     print("True completion:"+model.to_string(top5p_tokens[batch_idx][top5p_seq_indices[batch_idx]+1]))
     print("Top negs:")
     print(model.to_str_tokens(torch.topk(-total_unembed[batch_idx]+average_unembed, dim=-1, k=10).indices))
-    print("Top negs:", torch.topk(-total_unembed[batch_idx]+average_unembed, dim=-1, k=10).values)
-    print("Top poss:", torch.topk(total_unembed[batch_idx]-average_unembed, dim=-1, k=10).values)
+    # print("Top negative logit changes from 10.7:", torch.topk(-total_unembed[batch_idx]+average_unembed, dim=-1, k=10).values)
+    # print("Top positive logit changes from 10.7:", torch.topk(total_unembed[batch_idx]-average_unembed, dim=-1, k=10).values)
+    logit_lens_pre_ten_top = torch.topk(logit_lens_pre_ten[top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx]], dim=-1, k=10)
+    logit_lens_pre_ten_top_printout = list(zip(model.to_str_tokens(logit_lens_pre_ten_top.indices), logit_lens_pre_ten_top.values.tolist(), strict=True))
+    print("Top model predictions before 10.7:", logit_lens_pre_ten_top_printout)
     display(my_obj)
 
 #%%
