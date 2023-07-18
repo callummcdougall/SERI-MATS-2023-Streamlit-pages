@@ -75,8 +75,7 @@ def generate():
             negative_heads=[(10, 7), (11, 10)],
             save_files=False,
         )
-        # Add these new plots to the main dictionary (we have more than 1 prompt active
-        # at any one time).
+        # Add these new plots to the main dictionary (we have more than 1 prompt active at any one time).
         for k, v in HTML_PLOTS.items():
             v_incremented = {
                 (BATCH_SIZE + first_key, *other_keys): html

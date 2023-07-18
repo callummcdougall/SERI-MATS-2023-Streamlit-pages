@@ -27,8 +27,13 @@ t.set_grad_enabled(False)
 
 styling()
 
-with gzip.open(ST_HTML_PATH / "GZIP_HTML_PLOTS.pkl", "rb") as f:
-    HTML_PLOTS = pickle.load(f)
+@st.cache(show_spinner=False, max_entries=1)
+def load_html():
+    with gzip.open(ST_HTML_PATH / "GZIP_HTML_PLOTS.pkl", "rb") as f:
+        HTML_PLOTS = pickle.load(f)
+    return HTML_PLOTS
+
+HTML_PLOTS = load_html()
 
 BATCH_SIZE = len(HTML_PLOTS["LOGITS_ORIG"])
 
