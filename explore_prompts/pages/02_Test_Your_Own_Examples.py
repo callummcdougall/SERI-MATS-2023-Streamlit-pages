@@ -38,7 +38,7 @@ ABLATION_TYPES = ["mean, direct", "zero, direct", "mean, patched", "zero, patche
 ATTENTION_TYPES = ["info-weighted", "standard"]
 ATTN_VIS_TYPES = ["large", "small"]
 
-@st.cache(hash_funcs={"tokenizers.Tokenizer": lambda _: None}, show_spinner=False, max_entries=1)
+@st.cache_resource(hash_funcs={"tokenizers.Tokenizer": lambda _: None}, show_spinner=False, max_entries=1)
 def load_model():
     with st.spinner("Loading model (this only needs to happen once, it usually takes 5-15 seconds) ..."):
         model = HookedTransformer.from_pretrained(
