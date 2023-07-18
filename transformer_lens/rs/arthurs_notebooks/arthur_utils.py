@@ -33,7 +33,6 @@ def get_metric_from_end_state(
 
     if mode == "kl":
         assert log_probs_reference.shape == log_probs.shape
-        # for batch_idx in range(log_probs.shape):
 
         total_kl = t.zeros((log_probs_reference.shape[0], log_probs_reference.shape[1]))
         for batch_idx in tqdm(range(log_probs_reference.shape[0])):
@@ -109,8 +108,8 @@ def set_to_value(
     return z
 
 def dot_with_query(
-    unnormalized_keys: Float[torch.Tensor, "batch d_model"],
-    unnormalized_queries: Float[torch.Tensor, "batch d_model"],
+    unnormalized_keys: Float[torch.Tensor, "... d_model"],
+    unnormalized_queries: Float[torch.Tensor, "... d_model"],
     model,
     layer_idx,
     head_idx,
@@ -119,13 +118,19 @@ def dot_with_query(
     normalize_keys: bool = True,
     normalize_queries: bool = True,
     use_tqdm: bool = True,
-):
+) -> Float[torch.Tensor, "..."]:
+
+    assert list(unnormalized_keys.shape) == list(unnormalized_queries.shape), (
+        unnormalized_keys.shape,
+        unnormalized_queries.shape,
+    )
+
     W_Q = model.W_Q[layer_idx, head_idx]
     W_K = model.W_K[layer_idx, head_idx]
 
     if normalize_queries:
         queries = torch.stack(
-            [query / (query.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5) # todo remove
+            [query / (query.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
             for query in unnormalized_queries],
             dim=0,
         )
@@ -158,7 +163,7 @@ def dot_with_query(
         key_side_vector = einops.einsum(
             k_vector,
             W_K,
-            "d_model, d_model d_head -> d_head",
+            "... d_model, ... d_model d_head -> d_head",
         )
         if add_key_bias:
             key_side_vector += model.b_K[layer_idx, head_idx]
@@ -173,7 +178,7 @@ def dot_with_query(
         attention_scores = einops.einsum(
             query_side_vector,
             key_side_vector,
-            "d_head, d_head ->",
+            "... d_head, ... d_head ->",
         ) / np.sqrt(model.cfg.d_head)
         results.append(attention_scores.item())
 

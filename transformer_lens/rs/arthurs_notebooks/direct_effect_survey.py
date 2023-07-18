@@ -27,7 +27,7 @@ BATCH_SIZE = 25 # seems to be about the limit of what this box can handle
 NUM_THINGS = 300
 USE_RANDOM_SAMPLE = False
 INDIRECT = True # disable for orig funcitonality
-USE_GPT2XL = True
+USE_GPT2XL = False
 
 # %%
 
@@ -361,6 +361,10 @@ else:
         break
 
 #%%
+
+if not USE_GPT2XL:
+    warnings.warn("There may be a crash here, but it is intended as below here the file is only GPT2-XL KL Divergence experiments")
+    sys.exit(0) # rest of this file is for GPT2-XL...!
 
 all_kls = (gpt2xl_kl).flatten()[:20000]
 all_losses = (mean_ablation_loss - my_loss).flatten()[:20000]
