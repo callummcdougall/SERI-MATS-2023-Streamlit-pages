@@ -128,8 +128,8 @@ np.random.seed(799)
 np.random.shuffle(all_top_5_percent)
 top_5_percent = all_top_5_percent[:BATCH_SIZE]
 
-top5p_batch_indices = [x[0] for x in top_5_percent]
-top5p_seq_indices = [x[1] for x in top_5_percent]
+top5p_batch_indices = torch.LongTensor([x[0] for x in top_5_percent])
+top5p_seq_indices = torch.LongTensor([x[1] for x in top_5_percent])
 
 # %%
 
@@ -178,11 +178,38 @@ for hook_name in (
 # %%
 
 pre_negative_residual_state = cache[get_act_name("resid_pre", LAYER_IDX)]
-negative_head_layer_norm_scale = (pre_negative_residual_state.norm(dim=(1, 2), keepdim=True) * np.sqrt(model.cfg.d_model))
+negative_head_layer_norm_scale = (pre_negative_residual_state.norm(dim=(1, 2), keepdim=True) / np.sqrt(model.cfg.d_model))
 top5p_negative_head_layer_norm_scale = negative_head_layer_norm_scale[top5p_batch_indices]
 top5p_key_in = {k: v[top5p_batch_indices] / top5p_negative_head_layer_norm_scale for k, v in all_residual_stream.items()}
 
 top5p_query_in = pre_negative_residual_state[top5p_batch_indices]
+
+#%%
+
+model_attention_scores = cache[f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_attn_scores"][:, NEGATIVE_HEAD_IDX]
+model_attention_scores_diagonal = model_attention_scores[:, torch.arange(model_attention_scores.shape[1]), torch.arange(model_attention_scores.shape[2])]
+
+normal_attention_scores = dot_with_query(
+    unnormalized_keys=pre_negative_residual_state.clone(),
+    unnormalized_queries=pre_negative_residual_state.clone(),
+    model=model,
+    layer_idx=NEGATIVE_LAYER_IDX,
+    head_idx=NEGATIVE_HEAD_IDX,
+    add_key_bias=True,
+    add_query_bias=True,
+    normalize_keys=True,
+    normalize_queries=True,
+    use_tqdm=True,
+)
+
+# %%
+
+torch.testing.assert_allclose(
+    normal_attention_scores.cuda(),
+    model_attention_scores_diagonal,
+    atol=1e-2,
+    rtol=1e-2,
+)
 
 #%%
 
@@ -227,9 +254,20 @@ total_attention_score = attention_score_components.sum(dim=0) + attention_score_
 
 #%%
 
-torch.testing.assert_allclose(
+manually_created_attention_scores = torch.zeros((BATCH_SIZE, MAX_SEQ_LEN)).cuda()
+
+for batch_idx in range(BATCH_SIZE):
+    for seq_idx in range(MAX_SEQ_LEN):
+        manually_created_attention_scores[batch_idx, seq_idx] = cache[f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_attn_scores"][top5p_batch_indices[batch_idx], NEGATIVE_HEAD_IDX, top5p_seq_indices[batch_idx], seq_idx]
+
+        print(total_attention_score[batch_idx, seq_idx].item(), manually_created_attention_scores[batch_idx, seq_idx].item())
+    assert False
+
+torch.testing.assert_allclose( # rip fails
     total_attention_score.cuda(),
-    cache[f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_attn_scores"][top5p_batch_indices, NEGATIVE_HEAD_IDX, top5p_seq_indices],
+    cache[f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_attn_scores"][top5p_batch_indices.unsqueeze(-1), NEGATIVE_HEAD_IDX, top5p_seq_indices.unsqueeze(-1), torch.arange(MAX_SEQ_LEN).unsqueeze(0)],
+    atol=1e-2,
+    rtol=1e-2,
 )
 
-#%%
+# %%
