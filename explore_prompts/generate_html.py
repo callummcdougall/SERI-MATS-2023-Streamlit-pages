@@ -253,7 +253,7 @@ def generate_html_for_logit_plot(
     str_toks = model.to_str_tokens(toks)
     logprobs_on_correct_token = logprobs[range(len(str_toks)-1), toks[1:]]
     logprobs_on_correct_token_baseline = non_ablated_logprobs[range(len(str_toks)-1), toks[1:]]
-    probs_on_correct_token_baseline = logprobs_on_correct_token_baseline.exp()
+    probs_on_correct_token = logprobs_on_correct_token.exp()
     colors = logprobs_on_correct_token - logprobs_on_correct_token_baseline
     if colors.abs().max() < 1e-4:
         # In this case, we must have the original logprobs, so we set colors based on just these
@@ -297,7 +297,7 @@ def generate_html_for_logit_plot(
 
         lp_orig = logprobs_on_correct_token_baseline[seq_pos]
         lp = logprobs_on_correct_token[seq_pos]
-        p = probs_on_correct_token_baseline[seq_pos]
+        p = probs_on_correct_token[seq_pos]
         empty_row = '<tr class="empty-row"><td></td><td></td><td></td><td></td></tr>'
         new_hover_text = "".join([
             "<table>",
