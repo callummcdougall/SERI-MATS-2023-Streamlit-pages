@@ -1,21 +1,25 @@
 from transformer_lens.cautils.utils import *
-import torch
 
 def get_metric_from_end_state(
-    model,
-    end_state,
-    targets = None,
-    logits = None,
-    return_logits = False,
+    model: HookedTransformer,
+    end_state: Optional[Float[torch.Tensor, "batch seq d_model"]] = None,
+    targets: Optional[Int[torch.Tensor, "batch seq"]] = None,
+    logits: Optional[Float[torch.Tensor, "batch seq d_vocab"]] = None,
+    return_logits: bool = False,
     mode: Literal["loss", "kl"] = "loss",
-    log_probs_reference: Optional[torch.Tensor] = None,
-    device = None,
+    log_probs_reference: Optional[Float[torch.Tensor, "batch seq d_vocab"]] = None,
+    frozen_ln_scale: Optional[Float[torch.Tensor, "batch seq"]] = None, # set to None to recompute the Layer Norm
+    device: Optional[str] = None,
 ):
-    # end state has shape batch, seq_len, hidden_size
-    # targets has shape batch, seq_len
+    """
+    Compute the Lols (or KL Divergence from some reference)
+    from the end state of the residual stream of a model
+    """
 
     assert (mode == "loss") != (log_probs_reference is not None), "Must specify kl_reference if mode is kl"
     assert (mode == "loss") == (targets is not None), "Must specify targets if mode is loss"
+    if frozen_ln_scale is not None:
+        assert end_state is not None, "Recomputing LN only makes sense if we're recomputing from the end state"
 
     if logits is None:
         if mode == "loss":
@@ -23,7 +27,12 @@ def get_metric_from_end_state(
                 model.cfg.d_model
             ], f"end_state.shape: {end_state.shape}, targets.shape: {targets.shape}"
         assert len(end_state.shape) == 3, "We stricter now"
-        post_layer_norm = model.ln_final(end_state.to(device))
+
+        if frozen_ln_scale is None:
+            post_layer_norm = model.ln_final(end_state.to(device))
+        else:
+            post_layer_norm = end_state / frozen_ln_scale
+
         logits = model.unembed(post_layer_norm)
     else:
         assert end_state is None
@@ -183,3 +192,59 @@ def dot_with_query(
         results[index_tuple] = attention_scores
 
     return results
+
+def test_get_metric_from_end_state_no_freezing():
+    """Cribbed from direct_effect_survey.py"""
+
+    model = HookedTransformer.from_pretrained(
+        "gpt2-small",
+        center_unembed=True,
+        center_writing_weights=True,
+        fold_ln=True,
+        refactor_factored_attn_matrices=False,
+    )
+    model.set_use_attn_result(True)
+    model.set_use_hook_mlp_in(True)
+    model.set_use_attn_in(True)
+    DEVICE = "cuda"
+    SHOW_PLOT = True
+    BATCH_SIZE = 25
+
+    mybatch, mytargets = get_filtered_webtext(model, batch_size=BATCH_SIZE)
+    NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX = NEG_HEADS[model.cfg.model_name]
+    END_STATE_HOOK = f"blocks.{model.cfg.n_layers-1}.hook_resid_post"
+    names_filter1 = (
+        lambda name: name == END_STATE_HOOK
+        or name.endswith("hook_result")
+        or name.endswith(".hook_resid_pre")
+        or name == get_act_name("resid_mid", NEGATIVE_LAYER_IDX)
+        or name == get_act_name("resid_pre", NEGATIVE_LAYER_IDX+1)
+        or name == get_act_name("resid_mid", NEGATIVE_LAYER_IDX+1)
+    )
+    logits, cache = model.run_with_cache(
+        mybatch.to("cuda"),
+        names_filter=names_filter1,
+    )
+    end_state = cache[END_STATE_HOOK].to("cuda")
+    full_log_probs = torch.nn.functional.log_softmax(logits.cuda(), dim=-1).cpu()
+    del logits
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    my_loss = get_metric_from_end_state(model, end_state.to(DEVICE), mytargets).cpu()
+    their_loss = model(
+        mybatch.to(DEVICE),
+        return_type="loss",
+        loss_per_token=True,
+    ).cpu()
+    assert list(their_loss.shape) == [
+        my_loss.shape[0],
+        my_loss.shape[1] - 1,
+    ], f"their_loss.shape: {their_loss.shape}, my_loss.shape: {my_loss.shape}"
+
+    torch.testing.assert_close(
+        their_loss,
+        my_loss[:, :-1],
+        atol=1e-2,
+        rtol=1e-2,
+    ) # yey

@@ -166,6 +166,8 @@ def resetter_hook(z, hook, reset_value):
     z += reset_value
     return z
 
+FREEZE_LN = False
+
 if (tl_path / "results_log_NO_MANUAL.pt").exists():
     results_log = torch.load(tl_path / "results_log.pt")
 
