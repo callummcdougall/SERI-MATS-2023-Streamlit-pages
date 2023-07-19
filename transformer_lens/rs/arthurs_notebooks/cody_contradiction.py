@@ -142,22 +142,28 @@ example=webtext[0].split(" ")
 words = []
 vals = []
 
+SPACE_MODE = False
+
 for word in example:
     try:
         lower_word = " "+word.lower()
-        # print(lower_word)
         lower_token = model.to_single_token(lower_word)
-        upper_word = " "+word[:1].upper() + word[1:].lower()
-        # print(upper_word)
-        upper_token = model.to_single_token(upper_word)
-        assert word not in words
-        assert upper_token != lower_token
+
+        if SPACE_MODE:
+            upper_token = model.to_single_token(lower_word[1:])
+            assert word not in words
+
+        else:
+            upper_word = " "+word[:1].upper() + word[1:].lower()
+            upper_token = model.to_single_token(upper_word)
+            assert word not in words
+            assert upper_token != lower_token
+
     except:
         pass
     else:
         vals.append(torch.cosine_similarity(model.W_U.T[lower_token], model.W_U.T[upper_token], dim=0).item())
         words.append(word)
-
 
 
 # %%
