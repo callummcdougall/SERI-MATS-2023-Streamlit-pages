@@ -104,9 +104,69 @@ dirs = ["parallel", "perp"]
 fig = go.Figure(data=[
     go.Bar(name=f'{FREEZE_LN=}', x=[f"{FREEZE_LN=}, {dir=}" for dir in dirs], y=[results[(FREEZE_LN, dir)] for dir in dirs])
     for FREEZE_LN in [True, False]
-] + [go.Bar(name="vanilla", x=[f"vanilla"], y=[vanilla_logit_diff.item()])])
+] + [go.Bar(name="vanilla", x=[f"Normal model"], y=[vanilla_logit_diff.item()])])
 fig.update_layout(barmode='group', title=f"Logit difference for {N} samples. `Dir` means we keep only this component")
+
+# make x title
+fig.update_xaxes(title_text="Freeze LN, Dir")
+fig.update_yaxes(title_text="Logit difference")
 
 fig.show()
 
+# %%
+
+# side quest: cosine similarities between pos embeddings of small
+
+cosine_sims = torch.zeros((model.cfg.n_ctx, model.cfg.n_ctx))
+
+for i in range(model.cfg.n_ctx):
+    for j in range(model.cfg.n_ctx):
+        cosine_sims[i, j] = torch.cosine_similarity(model.pos_embed.W_pos[i], model.pos_embed.W_pos[j], dim=0)
+
+#%%
+
+imshow(
+    cosine_sims,
+    title="Cosine similarity between position embeddings",
+    # xlabel="Position",
+    # ylabel="Position",
+)
+# %%
+
+webtext = get_webtext()
+
+# %%
+
+example=webtext[0].split(" ")
+
+words = []
+vals = []
+
+for word in example:
+    try:
+        lower_word = " "+word.lower()
+        # print(lower_word)
+        lower_token = model.to_single_token(lower_word)
+        upper_word = " "+word[:1].upper() + word[1:].lower()
+        # print(upper_word)
+        upper_token = model.to_single_token(upper_word)
+        assert word not in words
+        assert upper_token != lower_token
+    except:
+        pass
+    else:
+        vals.append(torch.cosine_similarity(model.W_U.T[lower_token], model.W_U.T[upper_token], dim=0).item())
+        words.append(word)
+
+
+
+# %%
+
+# sort this 
+words, vals = zip(*sorted(zip(words, vals), key=lambda x: x[1]))
+
+px.bar(
+    x=words,
+    y=vals,
+).show()
 # %%
