@@ -735,7 +735,7 @@ def project(
     assert return_type in ["projections", "coeffs", "both"]
     device = x.device
     if isinstance(dir, Tensor): dir = [dir]
-    assert all([x.shape == dir_.shape for dir_ in dir])
+    assert all([x.shape == dir_.shape for dir_ in dir]), [x.shape, [d.shape for d in dir]]
     dir = t.stack(dir, dim=-1)
 
     # Get the SVD of the stack of matrices we're projecting in the direction of
