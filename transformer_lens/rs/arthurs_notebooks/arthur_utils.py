@@ -13,6 +13,7 @@ def get_metric_from_end_state(
     log_probs_reference: Optional[Float[torch.Tensor, "batch seq d_vocab"]] = None,
     frozen_ln_scale: Optional[Float[torch.Tensor, "batch seq 1"]] = None, # set to None to recompute the Layer Norm
     device: Optional[str] = None,
+    compare_ln_scales: bool = False,
 ):
     """
     Compute the Lols (or KL Divergence from some reference)
@@ -34,7 +35,13 @@ def get_metric_from_end_state(
 
         if frozen_ln_scale is None:
             post_layer_norm = model.ln_final(end_state.to(device))
+                
         else:
+            if compare_ln_scales:
+                cache = {}
+                model.cache_some(names = lambda name: name=="ln_final.hook_scale", cache=cache)
+                fake_layer_norm = model.ln_final(end_state.to(device).clone())
+
             post_layer_norm = end_state.to(device) / frozen_ln_scale
 
         logits = model.unembed(post_layer_norm)
@@ -76,6 +83,8 @@ def get_metric_from_end_state(
             :, torch.arange(targets.shape[0]), targets
         ]
 
+    if compare_ln_scales:
+        return loss, cache["ln_final.hook_scale"]
     if return_logits:
         return loss, logits
     return loss

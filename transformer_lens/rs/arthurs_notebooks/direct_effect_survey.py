@@ -246,7 +246,23 @@ for FREEZE_LN in [True, False]:
                 targets=mytargets,
                 return_logits=False,
                 frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
+                compare_ln_scales = FREEZE_LN,
             )
+            if FREEZE_LN:
+                mean_ablated_indirect_loss, new_scales = mean_ablated_indirect_loss
+
+            if FREEZE_LN:
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Scatter(
+                        x = cache[final_ln_scale_hook_name].cpu().numpy().flatten(),
+                        y = new_scales.cpu().numpy().flatten(),
+                        mode = "markers",
+                        text = [f"{i} {j}" for i, j in zip(mean_ablated_indirect_loss.cpu().flatten(), my_loss.cpu().flatten(), strict=True)],
+                        name = "Projected Keys Losses",
+                    )
+                )
+                fig.show()
 
             # Also freeze intermediate LNs
             # Empirically this does basically nothing lol though!
