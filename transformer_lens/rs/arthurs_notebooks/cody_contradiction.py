@@ -61,6 +61,7 @@ def editor_hook(z, hook, new_value, head_idx=7, replace=False):
         else:
             z[torch.arange(N), ioi_dataset.word_idx["end"], head_idx, :] += new_value
     else:
+        assert replace
         assert z[torch.arange(N), ioi_dataset.word_idx["end"]].shape == new_value.shape, (z.shape, new_value.shape)
         z[torch.arange(N), ioi_dataset.word_idx["end"]] = new_value
 
@@ -88,12 +89,8 @@ print(vanilla_logit_diff.item(), "is the vanilla logit diff")
 # %%
 
 results = {}
-
-pre_neg_resid_scaled = pre_neg_resid.clone()
-pre_neg_resid_scaled /= pre_neg_resid_scaled.norm(dim=-1, keepdim=True)
-pre_neg_resid_scaled *= np.sqrt(model.cfg.d_model)
-
 projector_heads = [(9, 6), (9, 9)]
+FREEZE_INPUT_LAYER_NORM = True
 
 for mode in ["parallel", "perp"]:
     thing_to_remove = torch.zeros((N, model.cfg.d_model)).to("cuda")
@@ -103,18 +100,28 @@ for mode in ["parallel", "perp"]:
             model.W_U[:, ioi_dataset.io_tokenIDs].T,
         )
 
-        thing_to_remove += (perp_component if mode == "parallel" else parallel_component) / pre_neg_scale
+        thing_to_remove += (perp_component if mode == "parallel" else parallel_component) / (pre_neg_scale if FREEZE_INPUT_LAYER_NORM else 1.0)
 
     model.reset_hooks()
     model.add_hook(
-        "blocks.10.hook_q_normalized_input",
+        f"blocks.10.hook_q_{'normalized_' if FREEZE_INPUT_LAYER_NORM else ''}input",
         partial(editor_hook, new_value=-thing_to_remove, replace=False),
     )
     model.add_hook(
         ln_final_name,
         partial(editor_hook, new_value=end_scale, replace=True, head_idx=None),
     )
-    new_logits = model(ioi_dataset.toks)
+    pattern_name = "blocks.10.attn.hook_attn_scores"
+    new_logits, new_cache = model.run_with_cache(ioi_dataset.toks, names_filter=lambda name: name==pattern_name)
+    for token in ["IO", "S1", "BOS"]:
+        if token == "BOS":
+            token_idx = 0
+        else:
+            token_idx = ioi_dataset.word_idx[token]
+
+        print(
+            f"Average {token=} attention: {str(new_cache[pattern_name][torch.arange(N), 7, ioi_dataset.word_idx['end'], token_idx].mean().item())}",
+        )
     new_logit_diff = _logits_to_ave_logit_diff(new_logits, ioi_dataset)
     print("While only keeping the", mode, "direction, we get logit diff", new_logit_diff.item())
 
