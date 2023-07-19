@@ -324,14 +324,14 @@ normalized_bos_contribution_components = {k: v / bos_key_in_normalization for k,
 #%%
 
 bos_attention_score_components = dot_with_query(
-    unnormalized_keys=einops.repeat(torch.stack(list(bos_contribution_components.values()), dim=0), "c d -> c b d", b=BATCH_SIZE).clone(),
+    unnormalized_keys=einops.repeat(torch.stack(list(normalized_bos_contribution_components.values()), dim=0), "c d -> c b d", b=BATCH_SIZE).clone(),
     unnormalized_queries=einops.repeat(top5p_query_in, "b d -> c b d", c=len(bos_contribution_components)).clone(),
     model=model,
     layer_idx=NEGATIVE_LAYER_IDX,
     head_idx=NEGATIVE_HEAD_IDX,
-    add_key_bias=True,
+    add_key_bias=False,
     add_query_bias=False,
-    normalize_keys=False, # These do need normalizing!
+    normalize_keys=False,
     normalize_queries=True,
     use_tqdm=True,
 )
@@ -358,6 +358,14 @@ attention_score_to_max = dot_with_query(
 # %%
 
 difference_in_scores = attention_score_to_max - bos_attention_score_components
+correct_difference_in_scores = top5p_bos_attention.cpu() - top5p_max_non_bos_attention_values.cpu()
+
+torch.testing.assert_allclose(
+    difference_in_scores.cpu().sum(dim=0),
+    correct_difference_in_scores,
+    atol=1e-2,
+    rtol=1e-2,
+)
 
 # go.Figure(
 #     data = [
@@ -366,4 +374,4 @@ difference_in_scores = attention_score_to_max - bos_attention_score_components
 #     ]
 # ).show()
 
-3# %%
+# %%
