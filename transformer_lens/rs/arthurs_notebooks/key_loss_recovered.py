@@ -45,17 +45,18 @@ effective_embeddings = get_effective_embedding_2(model)
 
 # Find the top 5% of things by importance
 
-LAYER_IDX, NEGATIVE_HEAD_IDX = NEG_HEADS[model.cfg.model_name]
-LAYER_IDX, NEGATIVE_HEAD_IDX = 10, 7
+NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX = NEG_HEADS[model.cfg.model_name]
+NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX = 10, 7
 END_STATE_HOOK = f"blocks.{model.cfg.n_layers-1}.hook_resid_post"
 
-attention_pattern_hook_name = get_act_name("pattern", LAYER_IDX)
+attention_pattern_hook_name = get_act_name("pattern", NEGATIVE_LAYER_IDX)
 names_filter1 = (
     lambda name: name == END_STATE_HOOK
     or name == get_act_name("resid_pre", 1)
-    or name == f"blocks.{LAYER_IDX}.hook_resid_pre"
-    or name == f"blocks.{LAYER_IDX}.attn.hook_result"
-    or name == f"blocks.{LAYER_IDX}.attn.hook_attn_scores"
+    or name == f"blocks.{NEGATIVE_LAYER_IDX}.hook_resid_pre"
+    or name == f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_result"
+    or name == f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_attn_scores"
+    or name == f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_pattern"
     or name == attention_pattern_hook_name
     or "mlp_out" in name 
     or "hook_result" in name
@@ -80,7 +81,7 @@ batched_tokens_loss = get_metric_from_end_state(
 
 # %%
 
-head_output = cache[get_act_name("result", LAYER_IDX)][:, :, NEGATIVE_HEAD_IDX].clone()
+head_output = cache[get_act_name("result", NEGATIVE_LAYER_IDX)][:, :, NEGATIVE_HEAD_IDX].clone()
 assert head_output.shape == (BATCH_SIZE, MAX_SEQ_LEN, model.cfg.d_model)
 
 # %%
@@ -158,9 +159,9 @@ all_residual_stream = {}
 
 for hook_name in (
     ["hook_embed", "hook_pos_embed"]
-    + [f"blocks.{layer_idx}.hook_mlp_out" for layer_idx in range(LAYER_IDX)]
-    + [f"blocks.{layer_idx}.attn.hook_result" for layer_idx in range(LAYER_IDX)]
-    + [f"bias.{layer_idx}" for layer_idx in range(LAYER_IDX)]
+    + [f"blocks.{layer_idx}.hook_mlp_out" for layer_idx in range(NEGATIVE_LAYER_IDX)]
+    + [f"blocks.{layer_idx}.attn.hook_result" for layer_idx in range(NEGATIVE_LAYER_IDX)]
+    + [f"bias.{layer_idx}" for layer_idx in range(NEGATIVE_LAYER_IDX)]
 ): # all the writing weights
     if "bias" in hook_name:
         layer_idx = int(hook_name.split(".")[1])
@@ -180,7 +181,7 @@ for hook_name in (
 
 # %%
 
-pre_negative_residual_state = cache[get_act_name("resid_pre", LAYER_IDX)].clone()
+pre_negative_residual_state = cache[get_act_name("resid_pre", NEGATIVE_LAYER_IDX)].clone()
 
 norm_one = pre_negative_residual_state.norm().item()
 norm_two = sum(list(all_residual_stream.values())).norm().item()
@@ -190,20 +191,23 @@ assert abs(norm_one - norm_two) < 1e-2, (norm_one, norm_two)
 
 negative_head_layer_norm_scale = (pre_negative_residual_state.norm(dim=2, keepdim=True) + model.cfg.eps) / np.sqrt(model.cfg.d_model)
 top5p_negative_head_layer_norm_scale = negative_head_layer_norm_scale[top5p_batch_indices]
-top5p_key_in = {k: v[top5p_batch_indices] / top5p_negative_head_layer_norm_scale for k, v in all_residual_stream.items()}
+top5p_keys_in_normalized = {k: v[top5p_batch_indices] / top5p_negative_head_layer_norm_scale for k, v in all_residual_stream.items()}
+bos_key_in = cache[get_act_name("resid_pre", NEGATIVE_LAYER_IDX)][:, 0]
+assert (bos_key_in - bos_key_in[0:1]).norm().item() < 1e-2
+bos_key_in = bos_key_in[0]
 
 top5p_query_in = pre_negative_residual_state[top5p_batch_indices, top5p_seq_indices]
 
 #%%
 
-model_attention_scores = cache[f"blocks.{LAYER_IDX}.attn.hook_attn_scores"][:, NEGATIVE_HEAD_IDX]
+model_attention_scores = cache[f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_attn_scores"][:, NEGATIVE_HEAD_IDX]
 model_attention_scores_diagonal = model_attention_scores[:, torch.arange(model_attention_scores.shape[1]), torch.arange(model_attention_scores.shape[2])]
 
 normal_attention_scores = dot_with_query(
     unnormalized_keys=pre_negative_residual_state.clone(),
     unnormalized_queries=pre_negative_residual_state.clone(),
     model=model,
-    layer_idx=LAYER_IDX,
+    layer_idx=NEGATIVE_LAYER_IDX,
     head_idx=NEGATIVE_HEAD_IDX,
     add_key_bias=True,
     add_query_bias=True,
@@ -231,10 +235,10 @@ attention_score_components = {}
 #         head_idx = int(attention_score_component_name.split("_")[-1])
 
 attention_score_components = dot_with_query(
-    unnormalized_keys=torch.stack(list(top5p_key_in.values()), dim=0),
-    unnormalized_queries=einops.repeat(top5p_query_in, "b d -> c b s d", s=MAX_SEQ_LEN, c=len(top5p_key_in)).clone(),
+    unnormalized_keys=torch.stack(list(top5p_keys_in_normalized.values()), dim=0),
+    unnormalized_queries=einops.repeat(top5p_query_in, "b d -> c b s d", s=MAX_SEQ_LEN, c=len(top5p_keys_in_normalized)).clone(),
     model=model,
-    layer_idx=LAYER_IDX,
+    layer_idx=NEGATIVE_LAYER_IDX,
     head_idx=NEGATIVE_HEAD_IDX,
     add_key_bias=False,
     add_query_bias=True,
@@ -249,7 +253,7 @@ attention_score_key_component = einops.repeat(dot_with_query(
     unnormalized_keys=torch.zeros((top5p_query_in.shape[0], model.cfg.d_model)).cuda(),
     unnormalized_queries=top5p_query_in,
     model=model,
-    layer_idx=LAYER_IDX,   
+    layer_idx=NEGATIVE_LAYER_IDX,   
     head_idx=NEGATIVE_HEAD_IDX,
     add_key_bias=True, # look!!!
     add_query_bias=True,
@@ -272,10 +276,94 @@ for batch_idx in range(BATCH_SIZE):
         if top5p_seq_indices[batch_idx] < seq_idx:
             continue
 
-        manually_created_attention_scores[batch_idx, seq_idx] = cache[f"blocks.{LAYER_IDX}.attn.hook_attn_scores"][top5p_batch_indices[batch_idx], NEGATIVE_HEAD_IDX, top5p_seq_indices[batch_idx], seq_idx]
+        manually_created_attention_scores[batch_idx, seq_idx] = cache[f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_attn_scores"][top5p_batch_indices[batch_idx], NEGATIVE_HEAD_IDX, top5p_seq_indices[batch_idx], seq_idx]
 
         assert abs(total_attention_score[batch_idx, seq_idx].item()- manually_created_attention_scores[batch_idx, seq_idx].item()) < 1e-2, (total_attention_score[batch_idx, seq_idx].item(), manually_created_attention_scores[batch_idx, seq_idx].item())
 
 
 # %%
 
+top5p_bos_attention = cache[utils.get_act_name("pattern", NEGATIVE_LAYER_IDX)][top5p_batch_indices, NEGATIVE_HEAD_IDX, top5p_seq_indices, 0]
+top5p_max_non_bos_attention = cache[utils.get_act_name("pattern", NEGATIVE_LAYER_IDX)][top5p_batch_indices, NEGATIVE_HEAD_IDX, top5p_seq_indices, 1:].max(dim=-1)
+top5p_max_non_bos_attention_indices = top5p_max_non_bos_attention.indices
+top5p_max_non_bos_attention_values = top5p_max_non_bos_attention.values
+
+go.Figure(
+    data = [
+        go.Bar(x = list(range(BATCH_SIZE)), y = top5p_bos_attention.cpu().numpy(), name="BOS"),
+        go.Bar(x = list(range(BATCH_SIZE)), y = top5p_max_non_bos_attention_values.cpu().numpy(), name="Max non-BOS"),
+    ]
+).show()
+        
+fig = px.scatter(
+    x = top5p_seq_indices.cpu().numpy(),
+    y = top5p_max_non_bos_attention_indices.cpu().numpy(),
+)
+# add y=x line
+fig.add_trace(
+    go.Scatter(
+        x = list(range(MAX_SEQ_LEN)),
+        y = list(range(MAX_SEQ_LEN))
+    )
+)
+fig.show() # all seems good bro to do attention scores on max - BOS : ) 
+
+#%%
+
+bos_contribution_components = {
+    k: v[0, 0].clone() for k, v in all_residual_stream.items()
+}
+torch.testing.assert_close(
+    sum(list(bos_contribution_components.values())),
+    bos_key_in,
+)
+
+bos_key_in_normalization = bos_key_in.var().pow(0.5) + model.cfg.eps
+normalized_bos_contribution_components = {k: v / bos_key_in_normalization for k, v in bos_contribution_components.items()}
+
+#%%
+
+bos_attention_score_components = dot_with_query(
+    unnormalized_keys=einops.repeat(torch.stack(list(bos_contribution_components.values()), dim=0), "c d -> c b d", b=BATCH_SIZE).clone(),
+    unnormalized_queries=einops.repeat(top5p_query_in, "b d -> c b d", c=len(bos_contribution_components)).clone(),
+    model=model,
+    layer_idx=NEGATIVE_LAYER_IDX,
+    head_idx=NEGATIVE_HEAD_IDX,
+    add_key_bias=True,
+    add_query_bias=False,
+    normalize_keys=False, # These do need normalizing!
+    normalize_queries=True,
+    use_tqdm=True,
+)
+
+# %%
+
+top5p_key_attention_max_in = {
+    k: v[torch.arange(len(v)), top5p_max_non_bos_attention_indices].clone() for k, v in top5p_keys_in_normalized.items()
+}
+
+attention_score_to_max = dot_with_query(
+    unnormalized_keys=torch.stack(list(top5p_key_attention_max_in.values()), dim=0),
+    unnormalized_queries=einops.repeat(top5p_query_in, "b d -> c b d", c=len(top5p_key_attention_max_in)).clone(),
+    model=model,
+    layer_idx=NEGATIVE_LAYER_IDX,
+    head_idx=NEGATIVE_HEAD_IDX,
+    add_key_bias=False,
+    add_query_bias=False,
+    normalize_keys=False,
+    normalize_queries=True,
+    use_tqdm=True,
+)
+
+# %%
+
+difference_in_scores = attention_score_to_max - bos_attention_score_components
+
+# go.Figure(
+#     data = [
+#         go.Bar(x = list(range(BATCH_SIZE)), y = top5p_bos_attention.cpu().numpy(), name="BOS"),
+#         go.Bar(x = list(range(BATCH_SIZE)), y = top5p_max_non_bos_attention_values.cpu().numpy(), name="Max non-BOS"),
+#     ]
+# ).show()
+
+3# %%
