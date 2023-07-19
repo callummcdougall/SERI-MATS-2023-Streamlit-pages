@@ -1,4 +1,7 @@
+#%%
+
 from transformer_lens.cautils.utils import *
+import pytest
 
 def get_metric_from_end_state(
     model: HookedTransformer,
@@ -31,6 +34,7 @@ def get_metric_from_end_state(
         if frozen_ln_scale is None:
             post_layer_norm = model.ln_final(end_state.to(device))
         else:
+            print(end_state.shape, frozen_ln_scale.shape)
             post_layer_norm = end_state / frozen_ln_scale
 
         logits = model.unembed(post_layer_norm)
@@ -193,7 +197,8 @@ def dot_with_query(
 
     return results
 
-def test_get_metric_from_end_state_no_freezing():
+@pytest.mark.parametrize("freeze_ln", [True, False]) # test the versions that have both frozen and unfrozen LN
+def test_get_metric_from_end_state(freeze_ln):
     """Cribbed from direct_effect_survey.py"""
 
     model = HookedTransformer.from_pretrained(
@@ -213,6 +218,7 @@ def test_get_metric_from_end_state_no_freezing():
     mybatch, mytargets = get_filtered_webtext(model, batch_size=BATCH_SIZE)
     NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX = NEG_HEADS[model.cfg.model_name]
     END_STATE_HOOK = f"blocks.{model.cfg.n_layers-1}.hook_resid_post"
+    ln_scale_hook_name = "ln_final.hook_scale"
     names_filter1 = (
         lambda name: name == END_STATE_HOOK
         or name.endswith("hook_result")
@@ -220,6 +226,7 @@ def test_get_metric_from_end_state_no_freezing():
         or name == get_act_name("resid_mid", NEGATIVE_LAYER_IDX)
         or name == get_act_name("resid_pre", NEGATIVE_LAYER_IDX+1)
         or name == get_act_name("resid_mid", NEGATIVE_LAYER_IDX+1)
+        or name == ln_scale_hook_name
     )
     logits, cache = model.run_with_cache(
         mybatch.to("cuda"),
@@ -231,7 +238,8 @@ def test_get_metric_from_end_state_no_freezing():
     gc.collect()
     torch.cuda.empty_cache()
 
-    my_loss = get_metric_from_end_state(model, end_state.to(DEVICE), mytargets).cpu()
+    my_loss = get_metric_from_end_state(model, end_state.to(DEVICE), mytargets, frozen_ln_scale = None if not freeze_ln else cache[ln_scale_hook_name]).cpu()
+
     their_loss = model(
         mybatch.to(DEVICE),
         return_type="loss",
@@ -248,3 +256,4 @@ def test_get_metric_from_end_state_no_freezing():
         atol=1e-2,
         rtol=1e-2,
     ) # yey
+
