@@ -121,6 +121,7 @@ if ipython is not None and DO_LOGIT_LENS:
 #%%
 
 mean_head_output = einops.reduce(head_output, "b s d -> d", reduction="mean")
+normalized_mean_head_output = mean_head_output / (mean_head_output.var(dim=-1, keepdim=True) + model.cfg.eps)
 
 #%%
 
@@ -223,8 +224,12 @@ top5p_positionwise_out = einops.einsum(
 
 #%%
 
+normalized_top5p_positionwise_out = (top5p_positionwise_out / (top5p_positionwise_out.var(dim=-1, keepdim=True) + model.cfg.eps))
+
+#%%
+
 top_unembeds_per_position = einops.einsum(
-    top5p_positionwise_out,
+    normalized_top5p_positionwise_out,
     W_U,
     "batch key_pos d_model, \
     d_model d_vocab -> \
@@ -242,7 +247,7 @@ total_unembed = einops.reduce(
 #%%
 
 average_unembed = einops.einsum(
-    mean_head_output,
+    normalized_mean_head_output,
     W_U,
     "d_model, d_model d_vocab -> d_vocab",
 )
@@ -274,7 +279,10 @@ def to_string(toks):
     s = s.replace("\n", "\\n")
     return s
 
+#%%
+
 for batch_idx in range(len(top_unembeds_per_position)):
+    assert top5p_seq_indices[batch_idx]+2 <= top_unembeds_per_position.shape[1], (top5p_seq_indices[batch_idx], top_unembeds_per_position.shape[1])
     the_logits = -top_unembeds_per_position[batch_idx][1:top5p_seq_indices[batch_idx]+2]
     if ABS_MODE: 
         the_logits = torch.abs(the_logits)
@@ -287,7 +295,7 @@ for batch_idx in range(len(top_unembeds_per_position)):
 
     print("True completion:"+model.to_string(top5p_tokens[batch_idx][top5p_seq_indices[batch_idx]+1]))
     print("Top negs:")
-    print(model.to_str_tokens(torch.topk(-total_unembed[batch_idx]+average_unembed, dim=-1, k=10).indices))
+    print(model.to_str_tokens(torch.topk(-total_unembed[batch_idx], dim=-1, k=10).indices))
     # print("Top negative logit changes from 10.7:", torch.topk(-total_unembed[batch_idx]+average_unembed, dim=-1, k=10).values)
     # print("Top positive logit changes from 10.7:", torch.topk(total_unembed[batch_idx]-average_unembed, dim=-1, k=10).values)
     logit_lens_pre_ten_top = torch.topk(logit_lens_pre_ten[top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx]], dim=-1, k=10)
