@@ -166,7 +166,7 @@ def resetter_hook(z, hook, reset_value):
 FREEZE_LN_ON_INTERMEDIATES = True
 all_losses = {}
 
-for FREEZE_LN in [True, False]:
+for FREEZE_LN in [False, True]:
     results_log = {}
     for layer_idx, head_idx in [(NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX)]:
         head_output_hook = f"blocks.{layer_idx}.attn.hook_result"
@@ -240,6 +240,9 @@ for FREEZE_LN in [True, False]:
                 frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
             ).cpu()
 
+            if FREEZE_LN:
+                old_mean_ablated_indirect_loss = mean_ablated_indirect_loss.clone()
+
             mean_ablated_indirect_loss = get_metric_from_end_state(
                 model=model,
                 end_state=(indirect_cache[END_STATE_HOOK].cpu() + head_output - mean_output[None, None]).to(DEVICE),
@@ -255,11 +258,23 @@ for FREEZE_LN in [True, False]:
                 fig = go.Figure()
                 fig.add_trace(
                     go.Scatter(
-                        x = cache[final_ln_scale_hook_name].cpu().numpy().flatten(),
-                        y = new_scales.cpu().numpy().flatten(),
+                        x = (mean_ablated_indirect_loss.cpu()-my_loss.cpu()).flatten(),
+                        y = (old_mean_ablated_indirect_loss.cpu()-my_loss.cpu()).flatten(),
+                        # x = cache[final_ln_scale_hook_name].cpu().numpy().flatten(),
+                        # y = new_scales.cpu().numpy().flatten(),
                         mode = "markers",
-                        text = [f"{i} {j}" for i, j in zip(mean_ablated_indirect_loss.cpu().flatten(), my_loss.cpu().flatten(), strict=True)],
+                        # text = [f"{ii:.4f} {jj:.4f} {kk:.4f}" for ii, jj, kk in zip(mean_ablated_indirect_loss.cpu().flatten(), my_loss.cpu().flatten(), old_mean_ablated_indirect_loss.cpu().flatten(), strict=True)],
+                        text = [f"{ii:.4f} {jj:.4f}" for ii, jj in zip(cache[final_ln_scale_hook_name].cpu().numpy().flatten(), new_scales.cpu().numpy().flatten(), strict=True)],
                         name = "Projected Keys Losses",
+                    )
+                )
+                # add y = x line
+                fig.add_trace(
+                    go.Scatter(
+                        x = [-2, 2],
+                        y = [-2, 2],
+                        mode = "lines",
+                        name = "y=x",
                     )
                 )
                 fig.show()
