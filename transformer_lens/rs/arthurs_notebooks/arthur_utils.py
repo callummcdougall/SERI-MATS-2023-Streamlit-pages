@@ -11,7 +11,7 @@ def get_metric_from_end_state(
     return_logits: bool = False,
     mode: Literal["loss", "kl"] = "loss",
     log_probs_reference: Optional[Float[torch.Tensor, "batch seq d_vocab"]] = None,
-    frozen_ln_scale: Optional[Float[torch.Tensor, "batch seq"]] = None, # set to None to recompute the Layer Norm
+    frozen_ln_scale: Optional[Float[torch.Tensor, "batch seq 1"]] = None, # set to None to recompute the Layer Norm
     device: Optional[str] = None,
 ):
     """
@@ -23,6 +23,7 @@ def get_metric_from_end_state(
     assert (mode == "loss") == (targets is not None), "Must specify targets if mode is loss"
     if frozen_ln_scale is not None:
         assert end_state is not None, "Recomputing LN only makes sense if we're recomputing from the end state"
+        assert frozen_ln_scale.shape == (end_state.shape[0], end_state.shape[1], 1), frozen_ln_scale.shape
 
     if logits is None:
         if mode == "loss":
@@ -34,8 +35,7 @@ def get_metric_from_end_state(
         if frozen_ln_scale is None:
             post_layer_norm = model.ln_final(end_state.to(device))
         else:
-            print(end_state.shape, frozen_ln_scale.shape)
-            post_layer_norm = end_state / frozen_ln_scale
+            post_layer_norm = end_state.to(device) / frozen_ln_scale
 
         logits = model.unembed(post_layer_norm)
     else:

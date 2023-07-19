@@ -80,6 +80,7 @@ if USE_GPT2XL:
 
 NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX = NEG_HEADS[model.cfg.model_name]
 END_STATE_HOOK = f"blocks.{model.cfg.n_layers-1}.hook_resid_post"
+final_ln_scale_hook_name = "ln_final.hook_scale"
 names_filter1 = (
     lambda name: name == END_STATE_HOOK
     or name.endswith("hook_result")
@@ -87,6 +88,7 @@ names_filter1 = (
     or name == get_act_name("resid_mid", NEGATIVE_LAYER_IDX)
     or name == get_act_name("resid_pre", NEGATIVE_LAYER_IDX+1)
     or name == get_act_name("resid_mid", NEGATIVE_LAYER_IDX+1)
+    or name == final_ln_scale_hook_name
 )
 
 model = model.to("cuda:0")
@@ -110,32 +112,26 @@ my_loss = get_metric_from_end_state(model, end_state.to(DEVICE), mytargets).cpu(
 
 # %%
 
+# see also the full test in arthur_utils file
 their_loss = model(
     mybatch.to(DEVICE),
     return_type="loss",
     loss_per_token=True,
 ).cpu()
-
-# %%
-
 assert list(their_loss.shape) == [
     my_loss.shape[0],
     my_loss.shape[1] - 1,
 ], f"their_loss.shape: {their_loss.shape}, my_loss.shape: {my_loss.shape}"
-
 torch.testing.assert_close(
     their_loss,
     my_loss[:, :-1],
     atol=1e-2,
     rtol=1e-2,
-)  # yey
+)
 
 # %%
 
 results_log = {}
-
-# %%
-
 tl_path = Path(__file__)
 assert "/TransformerLens/" in str(tl_path), "This is a hacky way to get the path"
 
@@ -190,6 +186,7 @@ else:
             end_state=(end_state.cpu() - head_output + mean_output[None, None]).to(DEVICE),
             targets=mytargets,
             return_logits=True,
+            frozen_ln_scale=cache[final_ln_scale_hook_name].to(DEVICE),
         )
         mean_ablation_loss = mean_ablation_loss.cpu()
         mean_ablation_log_probs = torch.nn.functional.log_softmax(mean_ablation_logits, dim=-1)
@@ -210,6 +207,7 @@ else:
                 mode="kl",
                 log_probs_reference=log_xl_probs,
                 device="cuda",
+                frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE),
             )
 
             mean_ablation_kl = get_metric_from_end_state(
@@ -220,6 +218,7 @@ else:
                 mode="kl",
                 log_probs_reference=log_xl_probs,
                 device="cuda",
+                frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE),
             )
 
         if INDIRECT:
@@ -240,12 +239,14 @@ else:
                 end_state=indirect_cache[END_STATE_HOOK].to(DEVICE),
                 targets=mytargets,
                 return_logits=False,
+                frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE),
             ).cpu()
             mean_ablated_indirect_loss = get_metric_from_end_state(
                 model=model,
                 end_state=(indirect_cache[END_STATE_HOOK].cpu() + head_output - mean_output[None, None]).to(DEVICE),
                 targets=mytargets,
                 return_logits=False,
+                frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE),
             )
 
             if (NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX) == (layer_idx, head_idx) == (10, 7):
@@ -271,6 +272,7 @@ else:
                     end_state=controlled_indirect_cache[END_STATE_HOOK].to(DEVICE),
                     targets=mytargets,
                     return_logits=False,
+                    frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE),
                 ).cpu()
 
                 # Add the total version, except 11.10 sees normal stuff
@@ -296,6 +298,7 @@ else:
                     end_state=total_control_11[END_STATE_HOOK].to(DEVICE), # + head_output.to(DEVICE) - mean_output.to(DEVICE),
                     targets=mytargets,
                     return_logits=False,
+                    frozen_ln_scale=cache[final_ln_scale_hook_name].to(DEVICE),
                 ).cpu()
 
         loss_changes = (mean_ablation_loss - my_loss).cpu()
