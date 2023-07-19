@@ -31,6 +31,8 @@ model = HookedTransformer.from_pretrained(
     # refactor_factored_attn_matrices=True,
 )
 model.set_use_attn_result(True)
+model.set_use_split_qkv_input(True)
+model.set_use_split_qkv_normalized_input(True)
 
 # %%
 
@@ -46,21 +48,42 @@ ioi_dataset = IOIDataset(
 
 #%%
 
-def editor_hook(z, hook, new_value, head_idx=7):
+def editor_hook(z, hook, new_value, head_idx=7, replace=False):
+    """Set head_idx None to edit the whole of z"""
+
     if "normalized" in hook.name:
         print("Ensuring this is Post LN")
         assert (z.norm(dim=-1) - np.sqrt(model.cfg.d_model)).norm().item() < 1e-3
-    z[torch.arange(N), ioi_dataset.word_idx["end"], head_idx, :] = new_value
+
+    if head_idx is not None:
+        if replace:
+            z[torch.arange(N), ioi_dataset.word_idx["end"], head_idx, :] = new_value
+        else:
+            z[torch.arange(N), ioi_dataset.word_idx["end"], head_idx, :] += new_value
+    else:
+        assert z[torch.arange(N), ioi_dataset.word_idx["end"]].shape == new_value.shape, (z.shape, new_value.shape)
+        z[torch.arange(N), ioi_dataset.word_idx["end"]] = new_value
+
     return z
 
 #%%
 
 hook_pre_name = f"blocks.10.hook_resid_pre"
+ln_pre_name = f"blocks.10.ln1.hook_scale"
+ln_final_name = f"ln_final.hook_scale"
+
+model.set_use_attn_result(True)
 logits, cache = model.run_with_cache(
     ioi_dataset.toks,
-    names_filter = lambda name: name == hook_pre_name
+    names_filter = lambda name: name in [hook_pre_name, "blocks.9.attn.hook_result", "blocks.10.attn.hook_result", ln_pre_name, ln_final_name],
 )
+
 pre_neg_resid = cache[hook_pre_name][torch.arange(N), ioi_dataset.word_idx["end"]]
+pre_neg_scale = cache[ln_pre_name][torch.arange(N), ioi_dataset.word_idx["end"], 7]
+end_scale = cache[ln_final_name][torch.arange(N), ioi_dataset.word_idx["end"]]
+
+vanilla_logit_diff = _logits_to_ave_logit_diff(logits, ioi_dataset)
+print(vanilla_logit_diff.item(), "is the vanilla logit diff")
 
 # %%
 
@@ -70,130 +93,29 @@ pre_neg_resid_scaled = pre_neg_resid.clone()
 pre_neg_resid_scaled /= pre_neg_resid_scaled.norm(dim=-1, keepdim=True)
 pre_neg_resid_scaled *= np.sqrt(model.cfg.d_model)
 
-for FREEZE_LN in [True, False]:
-    parallel_component, perp_component = project(
-        pre_neg_resid_scaled if FREEZE_LN else pre_neg_resid,
-        model.W_U[:, ioi_dataset.io_tokenIDs].T,
-    )
+projector_heads = [(9, 6), (9, 9)]
 
-    model.set_use_split_qkv_input(True)
-    model.set_use_split_qkv_normalized_input(True)
-
-    vanilla_logit_diff = _logits_to_ave_logit_diff(logits, ioi_dataset)
-
-    for new_name, new_value in [("parallel", parallel_component), ("perp", perp_component)]:
-        model.reset_hooks()
-        model.add_hook(
-            "blocks.10.hook_q_normalized_input" if FREEZE_LN else "blocks.10.hook_q_input",
-            partial(editor_hook, new_value=new_value),
+for mode in ["parallel", "perp"]:
+    thing_to_remove = torch.zeros((N, model.cfg.d_model)).to("cuda")
+    for projector_head_layer, projector_head_idx in projector_heads:
+        parallel_component, perp_component = project(
+            cache[f"blocks.{projector_head_layer}.attn.hook_result"][torch.arange(N), ioi_dataset.word_idx["end"], projector_head_idx],
+            model.W_U[:, ioi_dataset.io_tokenIDs].T,
         )
 
-        new_logits = model(ioi_dataset.toks)
-        new_logit_diff = _logits_to_ave_logit_diff(new_logits, ioi_dataset)
+        thing_to_remove += (perp_component if mode == "parallel" else parallel_component) / pre_neg_scale
 
-        print("Change in logit diff", new_logit_diff - vanilla_logit_diff)
-
-        model.reset_hooks()
-
-        results[(FREEZE_LN, new_name)] = (new_logit_diff).item()
-
-#%%
-
-dirs = ["parallel", "perp"]
-
-fig = go.Figure(data=[
-    go.Bar(name=f'{FREEZE_LN=}', x=[f"{FREEZE_LN=}, {dir=}" for dir in dirs], y=[results[(FREEZE_LN, dir)] for dir in dirs])
-    for FREEZE_LN in [True, False]
-] + [go.Bar(name="vanilla", x=[f"Normal model"], y=[vanilla_logit_diff.item()])])
-fig.update_layout(barmode='group', title=f"Logit difference for {N} samples. `Dir` means we keep only this component")
-
-# make x title
-fig.update_xaxes(title_text="Freeze LN, Dir")
-fig.update_yaxes(title_text="Logit difference")
-
-fig.show()
-
-# %%
-
-# side quest: cosine similarities between pos embeddings of small
-
-cosine_sims = torch.zeros((model.cfg.n_ctx, model.cfg.n_ctx))
-
-for i in range(model.cfg.n_ctx):
-    for j in range(model.cfg.n_ctx):
-        cosine_sims[i, j] = torch.cosine_similarity(model.pos_embed.W_pos[i], model.pos_embed.W_pos[j], dim=0)
+    model.reset_hooks()
+    model.add_hook(
+        "blocks.10.hook_q_normalized_input",
+        partial(editor_hook, new_value=-thing_to_remove, replace=False),
+    )
+    model.add_hook(
+        ln_final_name,
+        partial(editor_hook, new_value=end_scale, replace=True, head_idx=None),
+    )
+    new_logits = model(ioi_dataset.toks)
+    new_logit_diff = _logits_to_ave_logit_diff(new_logits, ioi_dataset)
+    print("While only keeping the", mode, "direction, we get logit diff", new_logit_diff.item())
 
 #%%
-
-imshow(
-    cosine_sims,
-    title="Cosine similarity between position embeddings",
-    # xlabel="Position",
-    # ylabel="Position",
-)
-# %%
-
-webtext = get_webtext()
-
-# %%
-
-example=webtext[0].split(" ")
-
-words = []
-vals = []
-
-SPACE_MODE = False
-
-for word in example:
-    try:
-        lower_word = " "+word.lower()
-        lower_token = model.to_single_token(lower_word)
-
-        if SPACE_MODE:
-            upper_token = model.to_single_token(lower_word[1:])
-            assert word not in words
-
-        else:
-            upper_word = " "+word[:1].upper() + word[1:].lower()
-            upper_token = model.to_single_token(upper_word)
-            assert word not in words
-            assert upper_token != lower_token
-
-    except:
-        pass
-    else:
-        vals.append(torch.cosine_similarity(model.W_U.T[lower_token], model.W_U.T[upper_token], dim=0).item())
-        words.append(word)
-
-
-# %%
-
-# sort this 
-words, vals = zip(*sorted(zip(words, vals), key=lambda x: x[1]))
-
-px.bar(
-    x=words,
-    y=vals,
-).show()
-# %%
-
-pier_token = model.to_single_token(" pier")
-
-names = []
-cosine_sims = []
-
-for i in tqdm(range(model.cfg.d_vocab)):
-    names.append(model.to_single_str_token(i))
-    cosine_sims.append(torch.cosine_similarity(model.W_U.T[i], model.W_U.T[pier_token], dim=0).item())
-
-#%%
-
-# sort this
-names, cosine_sims = zip(*sorted(zip(names, cosine_sims), key=lambda x: x[1]))
-
-px.bar(
-    x=names[-30:],
-    y=cosine_sims[-30:],
-    title="Cosine similarity between W_U[:, pier] and W_U[:, x] : biggest cosine sims",
-).show()
-# %%
