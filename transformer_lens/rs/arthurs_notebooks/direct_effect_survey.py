@@ -31,7 +31,7 @@ USE_GPT2XL = False
 
 # %%
 
-dataset = get_webtext(seed=17299)
+dataset = get_webtext(seed=50)
 max_seq_len = model.tokenizer.model_max_length
 
 # %%
@@ -89,6 +89,7 @@ names_filter1 = (
     or name == get_act_name("resid_pre", NEGATIVE_LAYER_IDX+1)
     or name == get_act_name("resid_mid", NEGATIVE_LAYER_IDX+1)
     or name == final_ln_scale_hook_name
+    or "hook_scale" in name
 )
 
 model = model.to("cuda:0")
@@ -146,9 +147,9 @@ def setter_hook(z, hook, setting_value, setter_head_idx=None):
 
     else: 
         if len(z.shape) == 3:
-            assert list(z.shape) == [BATCH_SIZE, max_seq_len, model.cfg.d_model] == list(setting_value.shape), f"z.shape: {z.shape}, setting_value.shape: {setting_value.shape}, {[BATCH_SIZE, max_seq_len, model.cfg.d_model]}"
+            assert len(z.shape) == 3 == len(setting_value.shape)
+            assert list(z.shape[:2]) == [BATCH_SIZE, max_seq_len] == list(setting_value.shape[:2]), f"z.shape: {z.shape}, setting_value.shape: {setting_value.shape}, {[BATCH_SIZE, max_seq_len]}"
         elif len(z.shape) == 4: # blegh annoying hack
-            assert "attn_in" in hook.name
             if len(setting_value.shape) == 3:
                 setting_value = einops.repeat(setting_value, "a b c -> a b n c", n=model.cfg.n_heads)
             assert list(z.shape) == list(setting_value.shape), f"z.shape: {z.shape}, setting_value.shape: {setting_value.shape}"
@@ -162,7 +163,7 @@ def resetter_hook(z, hook, reset_value):
     z += reset_value
     return z
 
-FREEZE_LN = False
+FREEZE_LN_ON_INTERMEDIATES = True
 
 if (tl_path / "results_log_NO_MANUAL.pt").exists():
     results_log = torch.load(tl_path / "results_log.pt")
@@ -234,6 +235,8 @@ else:
                 names_filter=lambda name: name == END_STATE_HOOK,
                 device="cpu",
             )
+            model.reset_hooks()
+
             mean_ablated_total_loss = get_metric_from_end_state(
                 model=model,
                 end_state=indirect_cache[END_STATE_HOOK].to(DEVICE),
@@ -241,9 +244,37 @@ else:
                 return_logits=False,
                 frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE),
             ).cpu()
+
             mean_ablated_indirect_loss = get_metric_from_end_state(
                 model=model,
                 end_state=(indirect_cache[END_STATE_HOOK].cpu() + head_output - mean_output[None, None]).to(DEVICE),
+                targets=mytargets,
+                return_logits=False,
+                frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE),
+            )
+
+            # Also freeze intermediate LNs
+            # Empirically this does basically nothing lol though!
+            model.reset_hooks()
+            model.add_hook(
+                head_output_hook,
+                partial(setter_hook, setting_value=mean_output, setter_head_idx=head_idx),
+            )
+            for hook_name in [f"blocks.{layer_idx}.ln2.hook_scale" for layer_idx in range(NEGATIVE_LAYER_IDX, model.cfg.n_layers)] + [f"blocks.{layer_idx}.ln1.hook_scale" for layer_idx in range(NEGATIVE_LAYER_IDX+1, model.cfg.n_layers)]: # add freezing LN on the input hooks to the downstream MLPs and attention heads. We deal with the final LN in the get_metric function.
+                model.add_hook(
+                    hook_name,
+                    partial(setter_hook, setting_value=cache[hook_name], setter_head_idx=None),
+                )
+            _, indirect_freeze_intermediate_cache = model.run_with_cache(
+                mybatch.to("cuda:0"),
+                names_filter=lambda name: name == END_STATE_HOOK,
+                device="cpu",
+            )
+            model.reset_hooks()
+
+            mean_ablated_indirect_freeze_intermediate_loss = get_metric_from_end_state(
+                model=model,
+                end_state=(indirect_freeze_intermediate_cache[END_STATE_HOOK].cpu() + head_output - mean_output[None, None]).to(DEVICE),
                 targets=mytargets,
                 return_logits=False,
                 frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE),
@@ -310,10 +341,11 @@ else:
             assert INDIRECT
 
             all_losses = {
-                "loss": my_loss,
-                "mean_ablation_direct_loss": mean_ablation_loss,
-                "mean_ablated_total_loss": mean_ablated_total_loss,
-                "mean_ablated_indirect_loss": mean_ablated_indirect_loss,
+                "clean": my_loss,
+                "mean_ablate_direct_effect": mean_ablation_loss,
+                "mean_ablate_all_effects": mean_ablated_total_loss,
+                "mean_ablate_indirect_effects": mean_ablated_indirect_loss,
+                "mean_ablated_indirect_freeze_intermediate_loss": mean_ablated_indirect_freeze_intermediate_loss,
             }
 
             if (NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX) == (layer_idx, head_idx) == (10, 7):
@@ -332,20 +364,54 @@ else:
                 print(key, all_losses[key].mean())
 
             # sort all losses by mean
-            all_losses = dict(sorted(all_losses.items(), key=lambda x: x[1].mean()))
+
+            filtered_all_losses = {key: all_losses[key] for key in all_losses_keys if key in ["clean", "mean_ablate_indirect_effects", "mean_ablate_direct_effect"]}
+            sorted_losses = dict(sorted(filtered_all_losses.items(), key=lambda x: x[1].mean()))
 
             # actually I prefer a bar chart
-            px.bar(
-                x=[str(x) for x in list(all_losses.keys())],
-                y=[y.mean().item() for y in all_losses.values()],
-                color = ["blue" for _ in range(len(all_losses)-2)] + ["red", "blue"],
+            yvalues=[y.mean().item() for y in sorted_losses.values()]
+            fig = px.bar(
+                x=[str(x) for x in list(sorted_losses.keys())],
+                y=yvalues,
+                color = ["blue" for _ in range(len(sorted_losses)-1)] + ["red"],
                 labels={
-                    "x": "10.7 Ablation Type",
+                    "x": "10.7 Intervention",
                     "y": "Average OWT Loss",
                 },
-                # error_y=[y.std().item()/np.sqrt(len(y)) for y in all_losses.values()], # TODO find a way to sample tons of points to drive down std
-            ).show()
-            normal_loss = all_losses.pop("loss")
+                # error_y=[y.std().item()/np.sqrt(len(y)) for y in sorted_losses.values()], # TODO find a way to sample tons of points to drive down std
+            )
+            maxy = max(yvalues)
+            miny = min(yvalues)
+            fig.update_layout(
+                yaxis_range=[miny - 0.1 * (maxy - miny), maxy + 0.1 * (maxy - miny)]
+            )
+
+            for inc in [0.001, 0.01]: # add line inc greater than clean loss, labellled inc increase
+                fig.add_shape(
+                    type="line",
+                    x0=-0.5,
+                    y0=all_losses["clean"].mean().item() + inc,
+                    x1=len(sorted_losses) - 0.5,
+                    y1=all_losses["clean"].mean().item() + inc,
+                    line=dict(
+                        color="black",
+                        width=4,
+                        dash="dash",
+                    ),
+                )
+                fig.add_annotation(
+                    x=0,
+                    y=all_losses["clean"].mean().item() + inc,
+                    text=f"{inc} increase in loss",
+                    showarrow=True,
+                    arrowhead=1,
+                    ax=0,
+                    ay=-30,
+                )
+            
+
+            fig.show()
+            normal_loss = all_losses.pop("clean")
             # assert False
 
         results_log[(layer_idx, head_idx)] = {
@@ -384,6 +450,7 @@ px.scatter(
         "y": "Change in GPT-2 Small loss when mean ablating 10.7",
     }
 ).show()
+
 
 #%%
 
