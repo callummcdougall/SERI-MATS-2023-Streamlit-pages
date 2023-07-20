@@ -37,7 +37,7 @@ model.set_use_attn_result(True)
 MAX_SEQ_LEN = 512
 BATCH_SIZE = 30
 batched_tokens, targets = get_filtered_webtext(
-    model, batch_size=BATCH_SIZE, seed=1717, device="cuda", max_seq_len=MAX_SEQ_LEN
+    model, batch_size=BATCH_SIZE, seed=17717, device="cuda", max_seq_len=MAX_SEQ_LEN
 )
 effective_embeddings = get_effective_embedding_2(model)
 
@@ -299,7 +299,7 @@ for batch_idx in range(BATCH_SIZE):
 
 top5p_bos_attention = cache[utils.get_act_name("attn_scores", NEGATIVE_LAYER_IDX)][top5p_batch_indices, NEGATIVE_HEAD_IDX, top5p_seq_indices, 0]
 top5p_max_non_bos_attention = cache[utils.get_act_name("attn_scores", NEGATIVE_LAYER_IDX)][top5p_batch_indices, NEGATIVE_HEAD_IDX, top5p_seq_indices, 1:].max(dim=-1)
-top5p_max_non_bos_attention_indices = top5p_max_non_bos_attention.indices
+top5p_max_non_bos_attention_indices = top5p_max_non_bos_attention.indices + 1
 top5p_max_non_bos_attention_values = top5p_max_non_bos_attention.values
 
 go.Figure(
@@ -447,4 +447,18 @@ torch.testing.assert_allclose(
 #     ]
 # ).show()
 
+# %%
+
+for thing_name, thing in zip(["score on max", "bos", "diff"], [attention_score_to_max, bos_attention_score_components, difference_in_scores], strict=True):
+    print(thing.sum())
+    fig=px.bar(
+        x = top5p_key_attention_max_in.keys(),
+        y = thing.mean(dim=-1),
+        error_y = thing.std(dim=-1),
+    )
+    fig.update_layout(
+        title="Mean attention score to " + thing_name,
+        # yaxis = dict(range=[0, 1]),
+    )
+    fig.show()
 # %%
