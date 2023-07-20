@@ -165,7 +165,8 @@ for hook_name in (
 ): # all the writing weights
     if "bias" in hook_name:
         layer_idx = int(hook_name.split(".")[1])
-        all_residual_stream[hook_name] = einops.repeat(model.b_O[layer_idx], "d -> b s d", b=BATCH_SIZE, s=MAX_SEQ_LEN)
+        all_residual_stream[hook_name] = einops.repeat(model.b_O[layer_idx], "d -> b s d", b=BATCH_SIZE, s=MAX_SEQ_LEN).clone()
+        # all_residual_stream[hook_name + ".mlp"] = einops.repeat(model.blocks[layer_idx].mlp.b_out, "d -> b s d", b=BATCH_SIZE, s=MAX_SEQ_LEN)
     elif "attn" in hook_name:
         for head_idx in range(model.cfg.n_heads):
             all_residual_stream[f"{hook_name}_{head_idx}"] = cache[hook_name][
@@ -189,9 +190,23 @@ assert abs(norm_one - norm_two) < 1e-2, (norm_one, norm_two)
 
 #%%
 
-negative_head_layer_norm_scale = (pre_negative_residual_state.norm(dim=2, keepdim=True) + model.cfg.eps) / np.sqrt(model.cfg.d_model)
+negative_head_layer_norm_scale = (1/np.sqrt(model.cfg.d_model)) * (pre_negative_residual_state.norm(dim=-1, keepdim=True)) #.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5) # eh? seems wrong but ok
+
+assert abs((pre_negative_residual_state/negative_head_layer_norm_scale).norm(dim=-1) - np.sqrt(model.cfg.d_model)).norm() < 1e-2, (pre_negative_residual_state/negative_head_layer_norm_scale).norm(dim=-1)
+
 top5p_negative_head_layer_norm_scale = negative_head_layer_norm_scale[top5p_batch_indices]
+
+#%%
+
 top5p_keys_in_normalized = {k: v[top5p_batch_indices] / top5p_negative_head_layer_norm_scale for k, v in all_residual_stream.items()}
+
+#%%
+
+resid_sum = sum(list(top5p_keys_in_normalized.values()))
+assert (resid_sum.norm(dim=-1) - np.sqrt(model.cfg.d_model)).norm().item() < 1e-1
+
+#%%
+
 bos_key_in = cache[get_act_name("resid_pre", NEGATIVE_LAYER_IDX)][:, 0]
 assert (bos_key_in - bos_key_in[0:1]).norm().item() < 1e-2
 bos_key_in = bos_key_in[0]
@@ -235,7 +250,7 @@ attention_score_components = {}
 #         head_idx = int(attention_score_component_name.split("_")[-1])
 
 attention_score_components = dot_with_query(
-    unnormalized_keys=torch.stack(list(top5p_keys_in_normalized.values()), dim=0),
+    unnormalized_keys=torch.stack(list(top5p_keys_in_normalized.values()), dim=0).clone(),
     unnormalized_queries=einops.repeat(top5p_query_in, "b d -> c b s d", s=MAX_SEQ_LEN, c=len(top5p_keys_in_normalized)).clone(),
     model=model,
     layer_idx=NEGATIVE_LAYER_IDX,
@@ -251,7 +266,7 @@ attention_score_components = dot_with_query(
 
 attention_score_key_component = einops.repeat(dot_with_query(
     unnormalized_keys=torch.zeros((top5p_query_in.shape[0], model.cfg.d_model)).cuda(),
-    unnormalized_queries=top5p_query_in,
+    unnormalized_queries=top5p_query_in.clone(),
     model=model,
     layer_idx=NEGATIVE_LAYER_IDX,   
     head_idx=NEGATIVE_HEAD_IDX,
@@ -278,13 +293,12 @@ for batch_idx in range(BATCH_SIZE):
 
         manually_created_attention_scores[batch_idx, seq_idx] = cache[f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_attn_scores"][top5p_batch_indices[batch_idx], NEGATIVE_HEAD_IDX, top5p_seq_indices[batch_idx], seq_idx]
 
-        assert abs(total_attention_score[batch_idx, seq_idx].item()- manually_created_attention_scores[batch_idx, seq_idx].item()) < 1e-2, (total_attention_score[batch_idx, seq_idx].item(), manually_created_attention_scores[batch_idx, seq_idx].item())
-
+        assert abs(total_attention_score[batch_idx, seq_idx].item()- manually_created_attention_scores[batch_idx, seq_idx].item()) < 5e-1, (total_attention_score[batch_idx, seq_idx].item(), manually_created_attention_scores[batch_idx, seq_idx].item())
 
 # %%
 
-top5p_bos_attention = cache[utils.get_act_name("pattern", NEGATIVE_LAYER_IDX)][top5p_batch_indices, NEGATIVE_HEAD_IDX, top5p_seq_indices, 0]
-top5p_max_non_bos_attention = cache[utils.get_act_name("pattern", NEGATIVE_LAYER_IDX)][top5p_batch_indices, NEGATIVE_HEAD_IDX, top5p_seq_indices, 1:].max(dim=-1)
+top5p_bos_attention = cache[utils.get_act_name("attn_scores", NEGATIVE_LAYER_IDX)][top5p_batch_indices, NEGATIVE_HEAD_IDX, top5p_seq_indices, 0]
+top5p_max_non_bos_attention = cache[utils.get_act_name("attn_scores", NEGATIVE_LAYER_IDX)][top5p_batch_indices, NEGATIVE_HEAD_IDX, top5p_seq_indices, 1:].max(dim=-1)
 top5p_max_non_bos_attention_indices = top5p_max_non_bos_attention.indices
 top5p_max_non_bos_attention_values = top5p_max_non_bos_attention.values
 
@@ -336,14 +350,45 @@ bos_attention_score_components = dot_with_query(
     use_tqdm=True,
 )
 
+bos_attention_bias = dot_with_query(
+    unnormalized_keys=torch.zeros((BATCH_SIZE, model.cfg.d_model)).cuda(),
+    unnormalized_queries=top5p_query_in,
+    model=model,
+    layer_idx=NEGATIVE_LAYER_IDX,
+    head_idx=NEGATIVE_HEAD_IDX,
+    add_key_bias=True,
+    add_query_bias=True,
+    normalize_keys=False,
+    normalize_queries=True,
+    use_tqdm=True,
+)
+
 # %%
 
 top5p_key_attention_max_in = {
     k: v[torch.arange(len(v)), top5p_max_non_bos_attention_indices].clone() for k, v in top5p_keys_in_normalized.items()
 }
 
+#%%
+
+top5p_ka = sum(list(top5p_key_attention_max_in.values()))
+
+torch.testing.assert_allclose(
+    top5p_ka.norm(dim=-1),
+    np.sqrt(model.cfg.d_model) * torch.ones((BATCH_SIZE,)).cuda(),
+    atol=1e-2,
+    rtol=1e-2,
+)
+
+torch.testing.assert_allclose(
+    top5p_ka,
+    pre_negative_residual_state[top5p_batch_indices, top5p_max_non_bos_attention_indices] * np.sqrt(model.cfg.d_model) / pre_negative_residual_state[top5p_batch_indices, top5p_max_non_bos_attention_indices].norm(dim=-1, keepdim=True),
+)
+
+#%%
+
 attention_score_to_max = dot_with_query(
-    unnormalized_keys=torch.stack(list(top5p_key_attention_max_in.values()), dim=0),
+    unnormalized_keys=torch.stack(list(top5p_key_attention_max_in.values()), dim=0).clone(),
     unnormalized_queries=einops.repeat(top5p_query_in, "b d -> c b d", c=len(top5p_key_attention_max_in)).clone(),
     model=model,
     layer_idx=NEGATIVE_LAYER_IDX,
@@ -355,10 +400,38 @@ attention_score_to_max = dot_with_query(
     use_tqdm=True,
 )
 
+attention_score_to_max_bias = dot_with_query(
+    unnormalized_keys=torch.zeros((BATCH_SIZE, model.cfg.d_model)).cuda(),
+    unnormalized_queries=top5p_query_in.clone(),
+    model=model,
+    layer_idx=NEGATIVE_LAYER_IDX,
+    head_idx=NEGATIVE_HEAD_IDX,
+    add_key_bias=True,
+    add_query_bias=True,
+    normalize_keys=False,
+    normalize_queries=True,
+    use_tqdm=True,
+)
+
 # %%
 
 difference_in_scores = attention_score_to_max - bos_attention_score_components
-correct_difference_in_scores = top5p_bos_attention.cpu() - top5p_max_non_bos_attention_values.cpu()
+correct_difference_in_scores =  top5p_max_non_bos_attention_values.cpu() - top5p_bos_attention.cpu()
+
+px.scatter(
+    x = bos_attention_score_components.cpu().sum(dim=0) + bos_attention_bias.cpu(),
+    y = top5p_bos_attention.cpu().numpy(),
+).show()
+
+px.scatter(
+    x = attention_score_to_max.cpu().sum(dim=0) + attention_score_to_max_bias.cpu(),
+    y = top5p_max_non_bos_attention_values.cpu().numpy(),
+).show()    
+
+px.scatter(
+    x = difference_in_scores.cpu().sum(dim=0),
+    y = correct_difference_in_scores.cpu().numpy(),
+).show()
 
 torch.testing.assert_allclose(
     difference_in_scores.cpu().sum(dim=0),

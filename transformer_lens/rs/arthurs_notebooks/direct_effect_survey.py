@@ -255,45 +255,9 @@ for FREEZE_LN in [False, True]:
                 mean_ablated_indirect_loss, new_scales = mean_ablated_indirect_loss
 
             if FREEZE_LN:
-                fig = go.Figure()
-                
-                fig.add_trace(
-                    go.Scatter(
-                        x = (old_mean_ablated_indirect_loss.cpu() - mean_ablated_indirect_loss.cpu()).flatten(),
-                        y = (cache[final_ln_scale_hook_name].cpu() - new_scales.cpu()).flatten(),
-
-                        # x = (mean_ablated_indirect_loss.cpu()-my_loss.cpu()).flatten(),
-                        # y = (old_mean_ablated_indirect_loss.cpu()-my_loss.cpu()).flatten(),
-
-                        # x = cache[final_ln_scale_hook_name].cpu().numpy().flatten(),
-                        # y = new_scales.cpu().numpy().flatten(),
-
-                        mode = "markers",
-                        # text = [f"{ii:.4f} {jj:.4f} {kk:.4f}" for ii, jj, kk in zip(mean_ablated_indirect_loss.cpu().flatten(), my_loss.cpu().flatten(), old_mean_ablated_indirect_loss.cpu().flatten(), strict=True)],
-                        # text = [f"{ii:.4f} {jj:.4f}" for ii, jj in zip(cache[final_ln_scale_hook_name].cpu().numpy().flatten(), new_scales.cpu().numpy().flatten(), strict=True)],
-                        name = "Projected Keys Losses",
-                    )
+                hist(
+                    [(cache[final_ln_scale_hook_name].cpu() - new_scales.cpu()).flatten()],
                 )
-
-                fig.update_layout(
-                    xaxis_title = "(Loss under mean ablation of indirect effects, with RECOMPUTED Layer Norm) - (Loss under mean ablation of indirect effects, with FROZEN Layer Norm)",
-                )
-                
-                fig.update_layout(
-                    yaxis_title = "(Layer Norm scale under mean ablation of indirect effects, with RECOMPUTED Layer Norm) \n - (Layer Norm scale under mean ablation of indirect effects, with FROZEN Layer Norm)",
-                    height = 1500,
-                )
-
-                # # add y = x line
-                # fig.add_trace(
-                #     go.Scatter(
-                #         x = [-2, 2],
-                #         y = [-2, 2],
-                #         mode = "lines",
-                #         name = "y=x",
-                #     )
-                # )
-                fig.show()
 
             # Also freeze intermediate LNs
             # Empirically this does basically nothing lol though!
@@ -403,6 +367,40 @@ for key in all_losses_keys:
         all_losses[key], "batch seq_len -> (batch seq_len)"
     )
     print(key, all_losses[key].mean())
+
+#%%
+
+# nice figure that is about how there's correlation between the two interventions
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x = (mean_ablated_indirect_loss.cpu()-my_loss.cpu()).flatten(),
+        y = (old_mean_ablated_indirect_loss.cpu()-my_loss.cpu()).flatten(),
+        # x = cache[final_ln_scale_hook_name].cpu().numpy().flatten(),
+        # y = new_scales.cpu().numpy().flatten(),
+        mode = "markers",
+        # text = [f"{ii:.4f} {jj:.4f} {kk:.4f}" for ii, jj, kk in zip(mean_ablated_indirect_loss.cpu().flatten(), my_loss.cpu().flatten(), old_mean_ablated_indirect_loss.cpu().flatten(), strict=True)],
+        text = [f"{ii:.4f} {jj:.4f}" for ii, jj in zip(cache[final_ln_scale_hook_name].cpu().numpy().flatten(), new_scales.cpu().numpy().flatten(), strict=True)],
+        name = "Change in loss in individual example",
+    )
+)
+
+fig.update_layout(
+    xaxis_title = "Change in loss when we mean ablate indirect effects, and recompute LN",
+    yaxis_title = "Change in loss when we mean ablate indirect effects, and freeze LN",
+    height = 750,
+)
+
+# add y = x line
+fig.add_trace(
+    go.Scatter(
+        x = [-2, 2],
+        y = [-2, 2],
+        mode = "lines",
+        name = "y=x",
+    )
+)
+fig.show()
 
 #%%
 
