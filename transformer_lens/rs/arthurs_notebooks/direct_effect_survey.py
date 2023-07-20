@@ -256,7 +256,13 @@ for FREEZE_LN in [False, True]:
 
             if FREEZE_LN:
                 hist(
-                    [(cache[final_ln_scale_hook_name].cpu() - new_scales.cpu()).flatten()],
+                    [cache[final_ln_scale_hook_name].cpu().flatten(), new_scales.cpu().flatten()],
+                    names = ["Frozen", "Recomputed"],
+                    width=800,
+                    height=600,
+                    opacity=0.7,
+                    marginal="box",
+                    template="simple_white",
                 )
 
             # Also freeze intermediate LNs
@@ -374,10 +380,10 @@ for key in all_losses_keys:
 fig = go.Figure()
 fig.add_trace(
     go.Scatter(
-        x = (mean_ablated_indirect_loss.cpu()-my_loss.cpu()).flatten(),
-        y = (old_mean_ablated_indirect_loss.cpu()-my_loss.cpu()).flatten(),
-        # x = cache[final_ln_scale_hook_name].cpu().numpy().flatten(),
-        # y = new_scales.cpu().numpy().flatten(),
+        # x = (mean_ablated_indirect_loss.cpu()-my_loss.cpu()).flatten(),
+        # y = (old_mean_ablated_indirect_loss.cpu()-my_loss.cpu()).flatten(),
+        x = cache[final_ln_scale_hook_name].cpu().numpy().flatten(),
+        y = new_scales.cpu().numpy().flatten(),
         mode = "markers",
         # text = [f"{ii:.4f} {jj:.4f} {kk:.4f}" for ii, jj, kk in zip(mean_ablated_indirect_loss.cpu().flatten(), my_loss.cpu().flatten(), old_mean_ablated_indirect_loss.cpu().flatten(), strict=True)],
         text = [f"{ii:.4f} {jj:.4f}" for ii, jj in zip(cache[final_ln_scale_hook_name].cpu().numpy().flatten(), new_scales.cpu().numpy().flatten(), strict=True)],

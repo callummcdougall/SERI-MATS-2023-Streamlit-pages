@@ -449,7 +449,7 @@ torch.testing.assert_allclose(
 
 # %%
 
-for thing_name, thing in zip(["score on max", "bos", "diff"], [attention_score_to_max, bos_attention_score_components, difference_in_scores], strict=True):
+for thing_name, thing in zip(["score on max", "bos", "difference between max and BOS"], [attention_score_to_max, bos_attention_score_components, difference_in_scores], strict=True):
     print(thing.sum())
     fig=px.bar(
         x = top5p_key_attention_max_in.keys(),
