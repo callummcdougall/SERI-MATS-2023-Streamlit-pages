@@ -31,7 +31,7 @@ USE_GPT2XL = False
 
 # %%
 
-dataset = get_webtext(seed=50)
+dataset = get_webtext(seed=17299)
 max_seq_len = model.tokenizer.model_max_length
 
 # %%
@@ -258,7 +258,7 @@ for FREEZE_LN in [False, True]:
                 hist(
                     [cache[final_ln_scale_hook_name].cpu().flatten(), new_scales.cpu().flatten()],
                     names = ["Frozen", "Recomputed"],
-                    width=800,
+                    width=1600,
                     height=600,
                     opacity=0.7,
                     marginal="box",

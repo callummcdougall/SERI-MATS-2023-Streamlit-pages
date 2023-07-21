@@ -126,3 +126,27 @@ for mode in ["parallel", "perp"]:
     print("While only keeping the", mode, "direction, we get logit diff", new_logit_diff.item())
 
 #%%
+
+# %%
+
+pier_token = model.to_single_token(" pier")
+
+names = []
+cosine_sims = []
+
+for i in tqdm(range(model.cfg.d_vocab)):
+    names.append(model.to_single_str_token(i))
+    cosine_sims.append(torch.cosine_similarity(model.W_U.T[i], model.W_U.T[pier_token], dim=0).item())
+
+#%%
+
+# sort this
+names, cosine_sims = zip(*sorted(zip(names, cosine_sims), key=lambda x: x[1]))
+
+px.bar(
+    x=names[-30:],
+    y=cosine_sims[-30:],
+    title="Cosine similarity between W_U[:, pier] and W_U[:, x] : biggest cosine sims",
+).show()
+
+# %%
