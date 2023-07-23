@@ -312,7 +312,7 @@ def to_string(toks):
 for batch_idx in range(len(top_unembeds_per_position)):
     assert top5p_seq_indices[batch_idx]+2 <= top_unembeds_per_position.shape[1], (top5p_seq_indices[batch_idx], top_unembeds_per_position.shape[1])
     the_logits = -top_unembeds_per_position[batch_idx][1:top5p_seq_indices[batch_idx]+2]
-    if ABS_MODE: 
+    if ABS_MODE:  # WAT
         the_logits = torch.abs(the_logits)
     max_logits = the_logits[:, 1:-1].max().item()
     my_obj = cv.logits.token_log_probs( # I am using this in a very cursed way: 
