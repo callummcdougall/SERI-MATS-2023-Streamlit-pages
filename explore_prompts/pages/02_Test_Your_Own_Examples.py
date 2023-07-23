@@ -35,6 +35,8 @@ if "prompt_list" not in st.session_state:
 
 NEG_HEADS = ["10.7", "11.10"]
 ABLATION_TYPES = ["mean, direct", "zero, direct", "mean, patched", "zero, patched"]
+ABLATION_TYPES_0 = ["mean", "zero"]
+ABLATION_TYPES_1 = ["direct", "patched"] # , "indirect"]
 ATTENTION_TYPES = ["info-weighted", "standard"]
 ATTN_VIS_TYPES = ["large", "small"]
 
@@ -95,7 +97,9 @@ if BATCH_SIZE > 0:
     batch_idx = st.sidebar.radio("Pick a sequence", range(BATCH_SIZE), index=BATCH_SIZE-1, format_func=lambda x: st.session_state["prompt_list"][x])
     head_name = st.sidebar.radio("Pick a head", NEG_HEADS + ["both"])
     assert head_name != "both", "Both not implemented yet. Please choose either 10.7 or 11.10"
-    ablation_type = st.sidebar.radio("Pick a type of ablation", ABLATION_TYPES)
+    ablation_type_0 = st.sidebar.radio("Pick a type of patching", ABLATION_TYPES_0)
+    ablation_type_1 = st.sidebar.radio("Pick a type of intervention effect", ABLATION_TYPES_1)
+    ablation_type = f"{ablation_type_0}, {ablation_type_1}"
     # HTML_LOSS = HTML_PLOTS["LOSS"][(batch_idx, head_name, ablation_type)]
     HTML_LOGITS_ORIG = HTML_PLOTS["LOGITS_ORIG"][(batch_idx,)]
     HTML_LOGITS_ABLATED = HTML_PLOTS["LOGITS_ABLATED"][(batch_idx, head_name, ablation_type)]

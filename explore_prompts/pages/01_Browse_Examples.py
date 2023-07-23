@@ -38,6 +38,8 @@ HTML_PLOTS = load_html()
 BATCH_SIZE = len(HTML_PLOTS["LOGITS_ORIG"])
 
 NEG_HEADS = ["10.7", "11.10"]
+ABLATION_TYPES_0 = ["mean", "zero"]
+ABLATION_TYPES_1 = ["direct", "patched"] # , "indirect"]
 ABLATION_TYPES = ["mean, direct", "zero, direct", "mean, patched", "zero, patched"]
 ATTENTION_TYPES = ["info-weighted", "standard"]
 ATTN_VIS_TYPES = ["large", "small"]
@@ -46,7 +48,9 @@ first_idx = 36
 batch_idx = st.sidebar.slider("Pick a sequence", 0, BATCH_SIZE, first_idx)
 head_name = st.sidebar.radio("Pick a head", NEG_HEADS + ["both"])
 assert head_name != "both", "Both not implemented yet. Please choose either 10.7 or 11.10"
-ablation_type = st.sidebar.radio("Pick a type of ablation", ABLATION_TYPES)
+ablation_type_0 = st.sidebar.radio("Pick a type of patching", ABLATION_TYPES_0)
+ablation_type_1 = st.sidebar.radio("Pick a type of intervention effect", ABLATION_TYPES_1)
+ablation_type = f"{ablation_type_0}, {ablation_type_1}"
 
 # HTML_LOSS = HTML_PLOTS["LOSS"][(batch_idx, head_name, ablation_type)]
 HTML_LOGITS_ORIG = HTML_PLOTS["LOGITS_ORIG"][(batch_idx,)]
@@ -74,7 +78,9 @@ When all put together, the 2nd/3rd/4th plots should show that:
 * Negative heads' direct effect on logits is to push down a token which appears earlier in context,
 * Negative heads are attending to this token which appears earlier in context,
 * The reason they're attending to this token is because it was being predicted at that destination position.
-""")
+
+<br>
+""", unsafe_allow_html=True)
 
 tabs = st.tabs([
     "Loss",

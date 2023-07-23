@@ -197,7 +197,7 @@ from generate_html import (
     generate_html_for_loss_plot,
     attn_filter,
 )
-from model_results import ModelResults, get_model_results
+from explore_prompts.model_results_2 import ModelResults, get_model_results
 
 MODEL_RESULTS = get_model_results(model, DATA_TOKS, negative_heads = NEGATIVE_HEADS)
 

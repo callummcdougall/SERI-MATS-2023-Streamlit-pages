@@ -13,7 +13,7 @@ for root_dir in [
 os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
 
-from typing import Tuple
+from typing import Tuple, List
 from jaxtyping import Float
 import torch as t
 from torch import Tensor
@@ -38,6 +38,9 @@ def parse_str_tok_for_printing(s: str):
     s = s.replace("\n", "\\n")
     return s
 
+def parse_str_toks_for_printing(s: List[str]):
+    return list(map(parse_str_tok_for_printing, s))
+
 
 # %%
 
@@ -53,6 +56,12 @@ def topk_of_Nd_tensor(tensor: Float[Tensor, "rows cols"], k: int):
     return np.array(np.unravel_index(utils.to_numpy(i), tensor.shape)).T.tolist()
 
 # %%
+
+def create_title_and_subtitles(
+    title: str,
+    subtitles: List[str],
+) -> str:
+    return f"{title}<br><span style='font-size:13px'>{'<br>'.join(subtitles)}</span>"
 
 
 
