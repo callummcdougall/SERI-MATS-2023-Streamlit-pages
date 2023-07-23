@@ -29,7 +29,7 @@ styling()
 
 @st.cache_data(show_spinner=False, max_entries=1)
 def load_html():
-    with gzip.open(ST_HTML_PATH / "GZIP_HTML_PLOTS.pkl", "rb") as f:
+    with gzip.open(ST_HTML_PATH / "GZIPPED_HTML_PLOTS.pkl", "rb") as f:
         HTML_PLOTS = pickle.load(f)
     return HTML_PLOTS
 
