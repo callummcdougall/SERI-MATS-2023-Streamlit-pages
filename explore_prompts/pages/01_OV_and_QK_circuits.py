@@ -1,3 +1,15 @@
+import sys, os
+
+for root_dir in [
+    os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts", # For Arthur's branch
+    "/app/seri-mats-2023-streamlit-pages/explore_prompts", # For Streamlit page (public)
+    os.getcwd().split("seri_mats_23_streamlit_pages")[0] + "seri_mats_23_streamlit_pages/explore_prompts", # For Arthur's branch
+]:
+    if os.path.exists(root_dir):
+        break
+os.chdir(root_dir)
+if root_dir not in sys.path: sys.path.append(root_dir)
+
 import streamlit as st
 import gzip
 import pickle
@@ -12,6 +24,7 @@ import pandas as pd
 import textwrap
 from functools import partial
 # from transformers import AutoTokenizer
+from explore_prompts_utils import ST_HTML_PATH
 
 st.set_page_config(layout="wide")
 
@@ -214,8 +227,6 @@ def plot_full_matrix_histogram(
     return fig
 
 
-
-ST_HTML_PATH = Path('/home/ubuntu/TransformerLens/transformer_lens/rs/callum2/explore_prompts/media/')
 
 if "dict_to_store_less" not in st.session_state:
     dict_to_store_less = pickle.load(gzip.open(ST_HTML_PATH / f"OV_QK_circuits_less.pkl", "rb"))
