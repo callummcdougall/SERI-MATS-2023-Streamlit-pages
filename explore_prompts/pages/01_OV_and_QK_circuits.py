@@ -1,5 +1,3 @@
-import queue
-from matplotlib.backend_bases import NonGuiException
 import streamlit as st
 import gzip
 import pickle
