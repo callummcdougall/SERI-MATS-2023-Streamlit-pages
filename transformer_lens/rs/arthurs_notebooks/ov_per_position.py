@@ -194,6 +194,7 @@ W_O = model.W_O.clone()[LAYER_IDX, HEAD_IDX] # d_head d_model
 
 resid_pre = cache[get_act_name("resid_pre", LAYER_IDX)]
 head_pre = model.blocks[LAYER_IDX].ln1(resid_pre)
+head_pre_normalized = head_pre / (head_pre.var(dim=-1, keepdim=True) + model.cfg.eps)
 head_v = cache[get_act_name("v", LAYER_IDX)][:, :, HEAD_IDX, :]
 head_pattern = cache[get_act_name("pattern", LAYER_IDX)][:, HEAD_IDX, :, :]
 
@@ -235,6 +236,7 @@ top_unembeds_per_position = einops.einsum(
     d_model d_vocab -> \
     batch key_pos d_vocab",
 )
+print(top_unembeds_per_position.norm())
 
 #%%
 
@@ -243,6 +245,7 @@ total_unembed = einops.reduce(
     "batch key_pos d_vocab -> batch d_vocab",
     reduction="sum",
 )
+print(total_unembed.norm())
 
 #%%
 
@@ -251,21 +254,27 @@ average_unembed = einops.einsum(
     W_U,
     "d_model, d_model d_vocab -> d_vocab",
 )
+print(average_unembed.norm())
 
 #%%
 
 logit_lens_pre_ten = einops.einsum(
-    head_pre,
-    model.W_U,
+    head_pre_normalized,
+    W_U,
     "batch pos d_model, \
     d_model d_vocab -> \
     batch pos d_vocab",
 )
+print(logit_lens_pre_ten.norm())
+
+#%%
+
+logit_lens_pre_ten_cpu = logit_lens_pre_ten.cpu()
 
 #%%
 
 logit_lens_top_pre_ten = torch.topk(
-    logit_lens_pre_ten,
+    logit_lens_pre_ten_cpu,
     k=10,
     dim=-1,
 )
