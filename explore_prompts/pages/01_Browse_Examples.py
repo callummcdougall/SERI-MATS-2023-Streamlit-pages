@@ -45,7 +45,7 @@ ATTENTION_TYPES = ["info-weighted", "standard"]
 ATTN_VIS_TYPES = ["large", "small"]
 
 first_idx = 36
-batch_idx = st.sidebar.slider("Pick a sequence", 0, BATCH_SIZE, first_idx)
+batch_idx = st.sidebar.slider("Pick a sequence", 0, BATCH_SIZE-1, first_idx)
 head_name = st.sidebar.radio("Pick a head", NEG_HEADS + ["both"])
 assert head_name != "both", "Both not implemented yet. Please choose either 10.7 or 11.10"
 ablation_type_0 = st.sidebar.radio("Pick a type of patching", ABLATION_TYPES_0)
