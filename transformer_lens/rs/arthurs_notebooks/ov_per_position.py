@@ -226,12 +226,8 @@ top5p_positionwise_out = einops.einsum(
 
 #%%
 
-normalized_top5p_positionwise_out = (top5p_positionwise_out / (top5p_positionwise_out.var(dim=-1, keepdim=True) + model.cfg.eps))
-
-#%%
-
 top_unembeds_per_position = einops.einsum(
-    normalized_top5p_positionwise_out,
+    top5p_positionwise_out,
     W_U,
     "batch key_pos d_model, \
     d_model d_vocab -> \
