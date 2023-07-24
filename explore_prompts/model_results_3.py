@@ -13,7 +13,7 @@ os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
 
 from typing import Dict, Any, Tuple, List, Optional, Literal, Type, cast
-from transformer_lens import HookedTransformer, utils
+from transformer_lens import HookedTransformer, utils, ActivationCache
 from functools import partial
 import einops
 from dataclasses import dataclass
@@ -22,6 +22,7 @@ import pickle
 from jaxtyping import Int, Float, Bool
 import torch as t
 from collections import defaultdict
+import time
 from torch import Tensor
 
 Head = Tuple[int, int]
@@ -167,6 +168,8 @@ class HeadResults:
         return self.data[layer_and_head]
     def __setitem__(self, layer_and_head: Head, value):
         self.data[layer_and_head] = value
+    def keys(self):
+        return self.data.keys() # repetitive code, should improve
     def items(self):
         return self.data.items()
 
@@ -182,6 +185,8 @@ class LayerResults:
         return self.data[layer]
     def __setitem__(self, layer: int, value):
         self.data[layer] = value
+    def keys(self):
+        return self.data.keys() # repetitive code, should improve
     def items(self):
         return self.data.items()
 
@@ -201,6 +206,8 @@ class DictOfHeadResults:
         return self.data[key]
     def __setitem__(self, key, value):
         self.data[key] = value
+    def keys(self):
+        return self.data.keys() # repetitive code, should improve
     def items(self):
         return self.data.items()
 
@@ -237,6 +244,7 @@ class ModelResults:
         # We need the result vectors for each head, we'll use it for patching
         self.result: HeadResults = HeadResults()
         self.result_mean: HeadResults = HeadResults()
+        self.z: HeadResults = HeadResults()
 
         # We need data for attn & weighted attn (and for projecting result at source token unembeds)
         self.pattern: HeadResults = HeadResults()
@@ -366,21 +374,30 @@ def project(
 def model_fwd_pass_from_resid_pre(
     model: HookedTransformer, 
     resid_pre: Float[Tensor, "batch seq d_model"],
-    layer: int
+    layer: int,
+    return_type: Literal["logits", "resid_post", "both"] = "logits",
 ) -> Float[Tensor, "batch seq d_vocab"]:
     '''
     Performs a forward pass starting from an intermediate point.
 
     For instance, if layer=10, this will apply the TransformerBlocks from
     layers 10, 11 respectively, then ln_final and unembed.
+
+    Also, if return_resid_post = True, then it just returns the final value
+    of the residual stream, i.e. omitting ln_final and unembed.
     '''
+    assert return_type in ["logits", "resid_post", "both"]
+
     resid = resid_pre
     for i in range(layer, model.cfg.n_layers):
         resid = model.blocks[i](resid)
     
-    resid = model.ln_final(resid)
-    logits = model.unembed(resid)
-    return logits
+    if (return_type == "resid_post"): return resid
+
+    resid_scaled = model.ln_final(resid)
+    logits = model.unembed(resid_scaled)
+    
+    return logits if (return_type == "logits") else (resid, logits)
 
 
 def get_model_results(
@@ -432,7 +449,7 @@ def get_model_results(
 
     batch_size, seq_len = toks.shape
     
-    FUNCTION_TOKS = model.to_tokens(FUNCTION_STR_TOKS, prepend_bos=False).squeeze()
+    # FUNCTION_TOKS = model.to_tokens(FUNCTION_STR_TOKS, prepend_bos=False).squeeze()
     
     model.reset_hooks(including_permanent=True)
     t.cuda.empty_cache()
@@ -445,7 +462,9 @@ def get_model_results(
 
     model_results = ModelResults()
 
-    if verbose: print("Running forward pass...")
+    if verbose:
+        print(f"{'Running forward pass':<41} ... ", end="\r")
+        t0 = time.time()
 
     # Cache the head results and attention patterns, and final ln scale, and residual stream pre heads
     # (note, this is preferable to using names_filter argument for cache, because you can't pick specific heads)
@@ -458,6 +477,9 @@ def get_model_results(
     
     def cache_head_v(v: Float[Tensor, "batch seq n_heads d_head"], hook: HookPoint, head: int):
         model_results.v[hook.layer(), head] = v[:, :, head]
+
+    def cache_head_z(z: Float[Tensor, "batch seq n_heads d_head"], hook: HookPoint, head: int):
+        model_results.z[hook.layer(), head] = z[:, :, head]
     
     def cache_scale(scale: Float[Tensor, "batch seq 1"], hook: HookPoint):
         model_results.scale = scale
@@ -481,6 +503,7 @@ def get_model_results(
     for layer, head in negative_heads:
         model.add_hook(utils.get_act_name("result", layer), partial(cache_head_result, head=head))
         model.add_hook(utils.get_act_name("v", layer), partial(cache_head_v, head=head))
+        model.add_hook(utils.get_act_name("z", layer), partial(cache_head_z, head=head))
         model.add_hook(utils.get_act_name("pattern", layer), partial(cache_head_pattern, head=head))
     # We also need some things at the very end of the model
     model.add_hook(utils.get_act_name("resid_post", model.cfg.n_layers-1), partial(cache_resid_post, key="orig"))
@@ -492,26 +515,14 @@ def get_model_results(
 
 
     # ! Get all the tokens in context, and what unembeddings most attend to them, i.e. the pairs (S, Q)
-    if verbose: print("Computing unembedding components to project onto for CSPA...")
+    if verbose:
+        print(f"{'Running forward pass':<41} ... {time.time()-t0:.2f}s")
+        print(f"{'Computing logit lens (& CSPA)':<41} ... ", end="\r")
+        t0 = time.time()
 
     for layer, head in negative_heads:
 
-        # E(s,q) are the tokens s.t. W_EE[s] is negatively copied to -W_U[q]
-        # i.e. E_sq[b, sK, :] are the token IDs of all such q, for the source token s at position sK
-        W_EE_toks: Float[Tensor, "batch seqK d_model"] = W_EE[toks]
-        # W_QK = model.W_Q[layer, head] @ model.W_K[layer, head].T / (model.cfg.d_head ** 0.5)
-        # submatrix_of_full_QK_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks @ W_QK.T @ W_U
-        # E_sq: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_QK_matrix.topk(K_semantic, dim=-1).indices
-        W_OV = model.W_V[layer, head] @ model.W_O[layer, head]
-        submatrix_of_full_OV_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks @ W_OV @ W_U
-        E_sq: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_OV_matrix.topk(K_semantic, dim=-1, largest=False).indices
-        # ! Not sure if this is reasonable; we explicitly make sure pure copy-suppression is handled (even if the OV circuit is not amazing at this)
-        # e.g. `" system"` is not the most negatively-copied token when we attend to `" system"`, but we're including it anyway
-        E_sq_contains_self: Bool[Tensor, "batch seqK"] = (E_sq == toks[:, :, None]).any(-1)
-        E_sq[..., -1] = t.where(E_sq_contains_self, E_sq[..., -1], toks)
-        model_results.E_sq[layer, head] = E_sq
-
-        # We also get the logit lens, so that (for each head) we can figure out what to project onto
+        # We get the logit lens, so that (for each head) we can figure out what to project onto
         resid_pre = model_results.resid_pre[layer]
         scale = model_results.scale_attn[layer]
         resid_pre_scaled: Float[Tensor, "batch seqQ d_model"] = resid_pre / scale
@@ -519,50 +530,63 @@ def get_model_results(
         logit_lens: Float[Tensor, "batch seqQ d_vocab"] = resid_pre_scaled @ W_U
         model_results.logit_lens[layer] = logit_lens
 
-        # Now, for each (batch, seqQ), we want the logits for all the tokens in E_sq[batch, :, :], so we can pick the best K_unembed of those
-        # i.e. logits_for_E_sq[b, sQ, sK, K_sem] = logit_lens[b, sQ, E_sq[b, sK, K_sem]]
-        b = einops.repeat(t.arange(batch_size), "b -> b sQ sK K_sem", sQ=seq_len, sK=seq_len, K_sem=K_semantic)
-        sQ = einops.repeat(t.arange(seq_len), "sQ -> b sQ sK K_sem", b=batch_size, sK=seq_len, K_sem=K_semantic)
-        E_sq_repeated = einops.repeat(E_sq, "b sK K_sem -> b sQ sK K_sem", sQ=seq_len)
-        assert b.shape == sQ.shape == E_sq_repeated.shape
-        logits_for_E_sq: Float[Tensor, "batch seqQ seqK K_semantic"] = logit_lens[b, sQ, E_sq_repeated]
-        # logits_for_E_sq: Float[Tensor, "batch seqQ seqK K_semantic"] = t.zeros((batch_size, seq_len, seq_len, K_semantic)).to(current_device)
-        # for b in range(batch_size):
-        #     for sQ in range(seq_len):
-        #         for sK in range(seq_len):
-        #             logits_for_E_sq[b, sQ, sK] = logit_lens[b, sQ, E_sq[b, sK]]
-        assert logits_for_E_sq.shape == (batch_size, seq_len, seq_len, K_semantic)
-        # We then want to make sure that the causal mask has been applied, because no pair (S, Q) for destination token D should have S < D
-        sQ = einops.repeat(t.arange(seq_len), "sQ -> b sQ sK K_sem", b=batch_size, sK=seq_len, K_sem=K_semantic)
-        sK = einops.repeat(t.arange(seq_len), "sK -> b sQ sK K_sem", b=batch_size, sQ=seq_len, K_sem=K_semantic)
-        logits_for_E_sq = t.where(sQ >= sK, logits_for_E_sq, t.full_like(logits_for_E_sq, -1e9))
-        
-        # Now we find the top K_unembed logit values of pairs (S, Q) for each destination token D
-        # (we get the values so that we can create a boolean mask from them)
-        top_logits_for_E_sq: Float[Tensor, "batch seqQ K_unembed"] = logits_for_E_sq.flatten(-2, -1).topk(dim=-1, k=K_unembed).values
-        top_logits_borderline: Float[Tensor, "batch seqQ 1 1"] = top_logits_for_E_sq[..., [[-1]]]
-        top_toks_for_E_sq: Int[Tensor, "N 4"] = t.nonzero(logits_for_E_sq >= top_logits_borderline)
-        model_results.misc[(layer, "logits_for_E_sq")] = logits_for_E_sq.clone()
-        model_results.misc[(layer, "top_toks_for_E_sq")] = top_toks_for_E_sq
-        model_results.misc[(layer, "logit_lens")] = logit_lens
-        # Above is a nice trick: each row is (b, sQ, sK, Ks), and E_sq[b, sK, Ks] is the token ID whose unembedding direction we want to preserve when moving from sK->sQ
-        # Here is also a nice trick - get the earliest possible indices I can insert the vectors into (so that I don't overwrite any). It means we can slice the vectors so 
-        # that there are fewer than `K_unembed` (which is the theoretical upper limit but in practice we don't get anywhere near that because for each D, the (S, Q) pairs 
-        # are distributed over several different S's
-        N = top_toks_for_E_sq.shape[0]
-        b, sQ, sK, Ks = top_toks_for_E_sq.unbind(-1)
-        Ku = (top_toks_for_E_sq[None, :, :3] == top_toks_for_E_sq[:, None, :3]).all(-1).cumsum(-1).diag() - 1
-        # Now we can get the projection directions!
-        unembeddings_for_projection: Float[Tensor, "batch seqQ seqK K_unembed d_model"] = t.zeros(
-            (batch_size, seq_len, seq_len, Ku.max().item()+1, model.cfg.d_model)
-        ).to(current_device)
-        unembeddings: Float[Tensor, "N d_model"] = W_U.T[E_sq[b, sK, Ks]]
-        unembeddings_for_projection[b, sQ, sK, Ku, :] = unembeddings
-        # Do G-S orthonormalization (note that we need to tranpose to get the `nums` dimension (which is K_unembed) at the end, then we transpose back)
-        model_results.unembedding_projection_dirs[layer, head] = gram_schmidt(unembeddings_for_projection.transpose(-2, -1))
+        if cspa:
+            # E(s,q) are the tokens s.t. W_EE[s] is negatively copied to -W_U[q]
+            # i.e. E_sq[b, sK, :] are the token IDs of all such q, for the source token s at position sK
+            W_EE_toks: Float[Tensor, "batch seqK d_model"] = W_EE[toks]
+            # W_QK = model.W_Q[layer, head] @ model.W_K[layer, head].T / (model.cfg.d_head ** 0.5)
+            # submatrix_of_full_QK_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks @ W_QK.T @ W_U
+            # E_sq: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_QK_matrix.topk(K_semantic, dim=-1).indices
+            W_OV = model.W_V[layer, head] @ model.W_O[layer, head]
+            submatrix_of_full_OV_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks @ W_OV @ W_U
+            E_sq: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_OV_matrix.topk(K_semantic, dim=-1, largest=False).indices
+            # ! Not sure if this is reasonable; we explicitly make sure pure copy-suppression is handled (even if the OV circuit is not amazing at this)
+            # e.g. `" system"` is not the most negatively-copied token when we attend to `" system"`, but we're including it anyway
+            E_sq_contains_self: Bool[Tensor, "batch seqK"] = (E_sq == toks[:, :, None]).any(-1)
+            E_sq[..., -1] = t.where(E_sq_contains_self, E_sq[..., -1], toks)
+            model_results.E_sq[layer, head] = E_sq
+
+            # Now, for each (batch, seqQ), we want the logits for all the tokens in E_sq[batch, :, :], so we can pick the best K_unembed of those
+            # i.e. logits_for_E_sq[b, sQ, sK, K_sem] = logit_lens[b, sQ, E_sq[b, sK, K_sem]]
+            b = einops.repeat(t.arange(batch_size), "b -> b sQ sK K_sem", sQ=seq_len, sK=seq_len, K_sem=K_semantic)
+            sQ = einops.repeat(t.arange(seq_len), "sQ -> b sQ sK K_sem", b=batch_size, sK=seq_len, K_sem=K_semantic)
+            E_sq_repeated = einops.repeat(E_sq, "b sK K_sem -> b sQ sK K_sem", sQ=seq_len)
+            assert b.shape == sQ.shape == E_sq_repeated.shape
+            logits_for_E_sq: Float[Tensor, "batch seqQ seqK K_semantic"] = logit_lens[b, sQ, E_sq_repeated]
+            assert logits_for_E_sq.shape == (batch_size, seq_len, seq_len, K_semantic)
+            # We then want to make sure that the causal mask has been applied, because no pair (S, Q) for destination token D should have S < D
+            sQ = einops.repeat(t.arange(seq_len), "sQ -> b sQ sK K_sem", b=batch_size, sK=seq_len, K_sem=K_semantic)
+            sK = einops.repeat(t.arange(seq_len), "sK -> b sQ sK K_sem", b=batch_size, sQ=seq_len, K_sem=K_semantic)
+            logits_for_E_sq = t.where(sQ >= sK, logits_for_E_sq, t.full_like(logits_for_E_sq, -1e9))
+            
+            # Now we find the top K_unembed logit values of pairs (S, Q) for each destination token D
+            # (we get the values so that we can create a boolean mask from them)
+            top_logits_for_E_sq: Float[Tensor, "batch seqQ K_unembed"] = logits_for_E_sq.flatten(-2, -1).topk(dim=-1, k=K_unembed).values
+            top_logits_borderline: Float[Tensor, "batch seqQ 1 1"] = top_logits_for_E_sq[..., [[-1]]]
+            top_toks_for_E_sq: Int[Tensor, "N 4"] = t.nonzero(logits_for_E_sq >= top_logits_borderline)
+            # model_results.misc[(layer, "logits_for_E_sq")] = logits_for_E_sq.clone()
+            # model_results.misc[(layer, "top_toks_for_E_sq")] = top_toks_for_E_sq
+            # model_results.misc[(layer, "logit_lens")] = logit_lens
+            # Above is a nice trick: each row is (b, sQ, sK, Ks), and E_sq[b, sK, Ks] is the token ID whose unembedding direction we want to preserve when moving from sK->sQ
+            # Here is also a nice trick - get the earliest possible indices I can insert the vectors into (so that I don't overwrite any). It means we can slice the vectors so 
+            # that there are fewer than `K_unembed` (which is the theoretical upper limit but in practice we don't get anywhere near that because for each D, the (S, Q) pairs 
+            # are distributed over several different S's
+            b, sQ, sK, Ks = top_toks_for_E_sq.unbind(-1)
+            Ku = (top_toks_for_E_sq[None, :, :3] == top_toks_for_E_sq[:, None, :3]).all(-1).cumsum(-1).diag() - 1
+            # Now we can get the projection directions!
+            unembeddings_for_projection: Float[Tensor, "batch seqQ seqK K_unembed d_model"] = t.zeros(
+                (batch_size, seq_len, seq_len, Ku.max().item()+1, model.cfg.d_model)
+            ).to(current_device)
+            unembeddings: Float[Tensor, "N d_model"] = W_U.T[E_sq[b, sK, Ks]]
+            unembeddings_for_projection[b, sQ, sK, Ku, :] = unembeddings
+            # Do G-S orthonormalization (note that we need to tranpose to get the `nums` dimension (which is K_unembed) at the end, then we transpose back)
+            model_results.unembedding_projection_dirs[layer, head] = gram_schmidt(unembeddings_for_projection.transpose(-2, -1))
 
 
-    if verbose: print("Computing misc things...")
+    if verbose:
+        print(f"{'Computing logit lens (& CSPA)':<41} ... {time.time()-t0:.2f}s")
+        print(f"{'Computing misc things':<41} ... ", end="\r")
+        t0 = time.time()
 
     for (layer, head) in negative_heads:
         
@@ -585,9 +609,25 @@ def get_model_results(
     # I calculate "both" by doing patching at the output of the head, "direct" by patching at resid_post final, and "indirect" by subtracting the two
     # What about DLA? For each head, there are 4 different kinds (mean/zero, frozen/unfrozen), and so I also store these at the same time
     # What about loss? We have 12 different losses, one for each of the 12 logit terms.
-    if verbose: print("Computing logits, loss and direct effects...")
+    if verbose:
+        print(f"{'Computing misc things':<41} ... {time.time()-t0:.2f}s")
+        print(f"{'Computing logits, loss and direct effects':<41} ... ", end="\r")
+        t0 = time.time()
 
     resid_post_orig = model.hook_dict[utils.get_act_name("resid_post", model.cfg.n_layers-1)].ctx.pop("orig")
+
+
+    def freeze_head_z(
+        z: Float[Tensor, "batch seq n_heads d_model"],
+        hook: HookPoint,
+        head: int,
+    ):
+        '''
+        Freeze a head's output to what it was before (we stored this in model results).
+        '''
+        z[:, :, head] = model_results.z[hook.layer(), head]
+        return z
+
 
     def ablate_head_result(
         result: Float[Tensor, "batch seq n_heads d_model"],
@@ -679,18 +719,17 @@ def get_model_results(
             # Calculate "both" for unfrozen layernorm, by replacing this head's output with the ablated version and doing forward pass
             # Also calculate "both" for frozen layernorm, by directly computing it from the ablated value of the residual stream (which we get from patching at attn head result)
             model.add_hook(utils.get_act_name("result", layer), partial(ablate_head_result, head=head, ablation_type=ablation_type))
-            model.add_hook(utils.get_act_name("resid_post", model.cfg.n_layers-1), partial(cache_resid_post, key="both"))
-            model_results.logits[("both", "unfrozen", ablation_type)][layer, head] = model_fwd_pass_from_resid_pre(model, model_results.resid_pre[layer], layer)
-            resid_post_both_ablated = model.hook_dict[utils.get_act_name("resid_post", model.cfg.n_layers-1)].ctx.pop("both")
+            resid_post_both_ablated, logits_both_ablated = model_fwd_pass_from_resid_pre(model, model_results.resid_pre[layer], layer, return_type="both")
+            model_results.logits[("both", "unfrozen", ablation_type)][layer, head] = logits_both_ablated
             model_results.logits[("both", "frozen", ablation_type)][layer, head] = (resid_post_both_ablated / model_results.scale) @ model.W_U + model.b_U
 
             # Do exactly the same thing, just with a different (fancier!) form of ablation which preserves the pure copy-suppression mechanism.
             if cspa:
                 model.add_hook(utils.get_act_name("result", layer), partial(ablate_head_result_preserve_copy_suppression_mechanism, head=head, ablation_type=ablation_type))
                 model.add_hook(utils.get_act_name("resid_post", model.cfg.n_layers-1), partial(cache_resid_post, key="both"))
-                model_results.logits[("both", "unfrozen", ablation_type, "CS")][layer, head] = model_fwd_pass_from_resid_pre(model, model_results.resid_pre[layer], layer)
-                resid_post_both_ablated_CS = model.hook_dict[utils.get_act_name("resid_post", model.cfg.n_layers-1)].ctx.pop("both")
-                model_results.logits[("both", "frozen", ablation_type, "CS")][layer, head] = (resid_post_both_ablated_CS / model_results.scale) @ model.W_U + model.b_U
+                resid_both_CSPA, logits_both_CSPA = model_fwd_pass_from_resid_pre(model, model_results.resid_pre[layer], layer, return_type="both")
+                model_results.logits[("both", "unfrozen", ablation_type, "CS")][layer, head] = logits_both_CSPA
+                model_results.logits[("both", "frozen", ablation_type, "CS")][layer, head] = (resid_both_CSPA / model_results.scale) @ model.W_U + model.b_U
 
             # ! Calculate new logits & C-S classification, for the "direct" intervention effect, and calculate the DLA
 
@@ -706,9 +745,9 @@ def get_model_results(
             # Do exactly the same thing, just with a different (fancier!) form of ablation which preserves the pure copy-suppression mechanism.
             if cspa:
                 resid_post_DLA_CS = model_results.result[layer, head] - model.hook_dict[utils.get_act_name("result", layer)].ctx.pop(("result_CSPA", head))
-                resid_post_direct_ablated_CS = resid_post_orig - resid_post_DLA_CS
-                logits_direct_ablated_frozen_CS = (resid_post_direct_ablated_CS / model_results.scale) @ model.W_U + model.b_U
-                logits_direct_ablated_unfrozen_CS = (resid_post_direct_ablated_CS / resid_post_direct_ablated_CS.std(-1, keepdim=True)) @ model.W_U + model.b_U
+                resid_post_direct_CSPA = resid_post_orig - resid_post_DLA_CS
+                logits_direct_ablated_frozen_CS = (resid_post_direct_CSPA / model_results.scale) @ model.W_U + model.b_U
+                logits_direct_ablated_unfrozen_CS = (resid_post_direct_CSPA / resid_post_direct_CSPA.std(-1, keepdim=True)) @ model.W_U + model.b_U
                 model_results.logits[("direct", "frozen", ablation_type, "CS")][layer, head] = logits_direct_ablated_frozen_CS
                 model_results.logits[("direct", "unfrozen", ablation_type, "CS")][layer, head] = logits_direct_ablated_unfrozen_CS
 
@@ -726,14 +765,28 @@ def get_model_results(
 
             # Do exactly the same thing, just with a different (fancier!) form of ablation which preserves the pure copy-suppression mechanism.
             if cspa:
-                resid_post_indirect_ablated_CS = resid_post_orig + (resid_post_both_ablated_CS - resid_post_direct_ablated_CS)
-                model_results.logits[("indirect", "frozen", ablation_type, "CS")][layer, head] = (resid_post_indirect_ablated_CS / model_results.scale) @ model.W_U + model.b_U
-                model_results.logits[("indirect", "unfrozen", ablation_type, "CS")][layer, head] = (resid_post_indirect_ablated_CS / resid_post_indirect_ablated_CS.std(-1, keepdim=True)) @ model.W_U + model.b_U
+                resid_post_indirect_CSPA = resid_post_orig + (resid_both_CSPA - resid_post_direct_CSPA)
+                model_results.logits[("indirect", "frozen", ablation_type, "CS")][layer, head] = (resid_post_indirect_CSPA / model_results.scale) @ model.W_U + model.b_U
+                model_results.logits[("indirect", "unfrozen", ablation_type, "CS")][layer, head] = (resid_post_indirect_CSPA / resid_post_indirect_CSPA.std(-1, keepdim=True)) @ model.W_U + model.b_U
+
+            # ! Calculate the effect of ablating the indirect effect minus 11.10, i.e. ablating all indirect paths which DON'T involve head 11.10
+
+            if (layer, head) == (10, 7):
+                # For this case, we perform 3 interventions: (1) ablate output of head 10.7 (i.e. actually change attn result), (2) freeze 11.10's input, (3) recover 10.7's full output at resid post
+                later_layer, later_head = (11, 10)
+                effect = f"indirect (excluding {later_layer}.{later_head})"
+                model.add_hook(utils.get_act_name("result", layer), partial(ablate_head_result, head=head, ablation_type=ablation_type)) # (1)
+                model.add_hook(utils.get_act_name("z", later_layer), partial(freeze_head_z, head=later_head)) # (2)
+                # Unlike the last 2 times we performed `model_fwd_pass_from_resid_pre`, we're calculating logits explicitly rather than returning them (cause we need to add DLA back in)
+                resid_post_pre_step3 = model_fwd_pass_from_resid_pre(model, model_results.resid_pre[layer], layer, return_type="resid_post") # (3) (and below)
+                resid_post_post_step3 = resid_post_pre_step3 + resid_post_DLA
+                model_results.logits[(effect, "frozen", ablation_type)][layer, head] = (resid_post_post_step3 / model_results.scale) @ model.W_U + model.b_U
+                model_results.logits[(effect, "unfrozen", ablation_type)][layer, head] = (resid_post_post_step3 / resid_post_post_step3.std(-1, keepdim=True)) @ model.W_U + model.b_U
 
             # ! Calculate new loss (and while doing this, get all the tensors which tell us if this example is copy suppression)
 
             # For each of these six logits, calculate loss differences (for regular ablation, and CS-preserving ablation)
-            for effect in ["both", "direct", "indirect"]:
+            for effect in ["both", "direct", "indirect"] + ([f"indirect (excluding {later_layer}.{later_head})"] if (layer, head) == (10, 7) else []):
                 for ln_mode in ["frozen", "unfrozen"]:
 
                     # Get the logits, compute and store the corresponding loss
@@ -754,7 +807,8 @@ def get_model_results(
                             "L_CS": loss_CS,
                         }
 
-    if verbose: print("Finishing...")
+    if verbose:
+        print(f"{'Computing logits, loss and direct effects':<41} ... {time.time()-t0:.2f}s")
 
     model_results.clear()
 

@@ -1,4 +1,14 @@
 # from transformer_lens.cautils.utils import *
+import sys, os
+for root_dir in [
+    os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts", # For Arthur's branch
+    "/app/seri-mats-2023-streamlit-pages/explore_prompts", # For Streamlit page (public)
+    os.getcwd().split("seri_mats_23_streamlit_pages")[0] + "seri_mats_23_streamlit_pages/explore_prompts", # For Arthur's branch
+]:
+    if os.path.exists(root_dir):
+        break
+os.chdir(root_dir)
+if root_dir not in sys.path: sys.path.append(root_dir)
 
 from typing import List, Tuple, Literal, Union, Dict, Optional
 import torch as t
@@ -8,7 +18,7 @@ import plotly.express as px
 from copy import copy
 from transformer_lens import utils, ActivationCache, HookedTransformer
 import pandas as pd
-from transformer_lens.rs.callum2.explore_prompts.explore_prompts_utils import create_title_and_subtitles
+from explore_prompts_utils import create_title_and_subtitles
 
 def generate_scatter(
     ICS: Dict[str, Tensor], # the thing we get from MODEL_RESULTS.is_copy_suppression

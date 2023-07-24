@@ -21,11 +21,12 @@ from transformer_lens import HookedTransformer
 from IPython.display import display, HTML
 from plotly.colors import sample_colorscale
 import einops
-from tqdm import tqdm
 import circuitsvis as cv
 import pickle
 import pandas as pd
 import numpy as np
+import time
+import itertools
 
 from explore_prompts_utils import (
     ST_HTML_PATH,
@@ -134,12 +135,16 @@ $(document).ready(function(){
 import re
 
 def attn_filter(html):
+    # designed to reduce the space taken up by attention plots, by only showing to 4dp
     html = str(html)
     def round_match(match):
         return "{:.4f}".format(float(match.group()))
     return re.sub(r'\b0\.\d+\b', round_match, html)
 
 
+def rearrange_list(my_list, list_length):
+    assert len(my_list) % list_length == 0
+    return [my_list[i:i+list_length] for i in range(0, len(my_list), list_length)]
 
 
 def _get_color(importances):
@@ -200,7 +205,7 @@ def generate_html_for_loss_plot(
 
     importances = [t.clip(0.5 + loss_diff / (2 * max_color), 0.0, 1.0).tolist() for max_color in max_colors]
 
-    hover_text_list = [f"({i}) <b>'{s}'</b><br>{d:.4f}" for i, (s, d) in enumerate(zip(str_toks[:-1], loss_diff))] + [""]
+    hover_text_list = [f"({i}) <b>'{s}'</b><br>{d:.4f}" for i, (s, d) in enumerate(zip(str_toks[:-1], loss_diff))] + ["(next token unknown)"]
 
     html_25 = format_word_importances(str_toks, importances[0], hover_text_list)
     html_max = format_word_importances(str_toks, importances[1], hover_text_list)
@@ -254,15 +259,12 @@ def generate_html_for_unembedding_components_plot(
     return results
 
 
-
 def generate_html_for_logit_plot(
-    toks: Int[Tensor, "batch seq"],
-    logprobs: Float[Tensor, "batch seq d_vocab"],
-    logprobs_top10: Any,
-    non_ablated_logprobs: Float[Tensor, "batch seq d_vocab"],
-    batch_idx: int,
+    full_toks: Int[Tensor, "batch seq"],
+    full_logprobs: Float[Tensor, "batch seq d_vocab"],
+    full_non_ablated_logprobs: Float[Tensor, "batch seq d_vocab"],
     model: HookedTransformer,
-    logprobs_top5_in_ctx: Any = None,
+    full_logprobs_top5_in_ctx: Any = None,
 ):
     '''
     This gets the top predicted tokens for the model (and the prediction for the actual next token).
@@ -275,167 +277,300 @@ def generate_html_for_logit_plot(
     to the top 5 predictions for the next token WHICH ALSO APPEAR IN CONTEXT. This is useful for the logit
     lens visualisations, when we want to verify prediction-attention is happening
     '''
-    toks = toks[batch_idx]
-    logprobs = logprobs[batch_idx]
-    non_ablated_logprobs = non_ablated_logprobs[batch_idx]
-    seq_len = logprobs.size(0)
+    batch_size, seq_len = full_toks.shape
 
     max_color = 4 # This is the fixed point for the color scale
 
-    # Get the thing I'll use to color the tokens (leaving white if there's basically no difference)
-    str_toks = model.to_str_tokens(toks)
-    logprobs_on_correct_token = logprobs[range(len(str_toks)-1), toks[1:]]
-    logprobs_on_correct_token_baseline = non_ablated_logprobs[range(len(str_toks)-1), toks[1:]]
-    probs_on_correct_token = logprobs_on_correct_token.exp()
-    colors = logprobs_on_correct_token - logprobs_on_correct_token_baseline
-    if colors.abs().max() < 1e-4:
-        # In this case, we must have the original logprobs, so we set colors based on just these
-        orig = True
-        # 0.5 is the baseline for "very low probability" (logprob=-4), we get 1.0 close to logprob=0
-        colors = 1 + t.maximum(
-            logprobs_on_correct_token / (2 * max_color),
-            t.full_like(logprobs_on_correct_token, -0.5)
-        )
-    else:
-        # In this case, these must be ablated logprobs, so we set colors based on the difference
-        orig = False
-        diff = logprobs_on_correct_token - logprobs_on_correct_token_baseline
-        # 0.5 is the baseline for "no change in logprob", we get 1.0 or 0.0 for a change of ±4
-        colors = t.clip(0.5 + diff / (2 * max_color), 0.0, 1.0)
-    colors = colors.tolist() + [0.5]
+    # Get the top10 logprobs, and the corresponding str toks
+    full_logprobs_top10 = full_logprobs.topk(10, dim=-1)
+    full_str_toks_top10 = [rearrange_list(model.to_str_tokens(logprobs_top10_indices.flatten()), 10) for logprobs_top10_indices in full_logprobs_top10.indices]
 
-    # Now, get the top10 predictions for each token
-    str_toks_top10_all = [model.to_str_tokens(logprobs_top10.indices[batch_idx, i]) for i in range(seq_len)]
-    logprobs_top10_all = logprobs_top10.values[batch_idx]
-    if logprobs_top5_in_ctx is not None:
+    # Get the thing I'll use to color the tokens (leaving white if there's basically no difference)
+    all_str_toks = rearrange_list(model.to_str_tokens(full_toks.flatten()), list_length=seq_len)
+    batch_idx = einops.repeat(t.arange(batch_size), 'b -> b seq', seq=seq_len-1)
+    seq_idx = einops.repeat(t.arange(seq_len-1), 'seq -> b seq', b=batch_size)
+    logprobs_on_correct_token = full_logprobs[batch_idx, seq_idx, full_toks[:, 1:]]
+    logprobs_on_correct_token_baseline = full_non_ablated_logprobs[batch_idx, seq_idx, full_toks[:, 1:]]
+    probs_on_correct_token = logprobs_on_correct_token.exp()
+    all_colors = []
+    for L, L_baseline in zip(logprobs_on_correct_token, logprobs_on_correct_token_baseline):
+        if (L - L_baseline).abs().max() < 1e-4:
+            # In this case, we must have the original logprobs, so we set colors based on just these
+            orig = True
+            # 0.5 is the baseline for "very low probability" (logprob=-4), we get 1.0 close to logprob=0
+            colors = 1 + t.maximum(L / (2 * max_color), t.full_like(L, -0.5))
+        else:
+            # In this case, these must be ablated logprobs, so we set colors based on the difference
+            orig = False
+            # 0.5 is the baseline for "no change in logprob", we get 1.0 or 0.0 for a change of ±4
+            colors = t.clip(0.5 + (L - L_baseline) / (2 * max_color), 0.0, 1.0)
+        all_colors.append(colors.tolist() + [0.5])
+
+    # Now, get the top10 predictions for each token (note that `full_logprobs_top5_in_ctx` are indices over seq_pos, not over d_vocab)
+    if full_logprobs_top5_in_ctx is not None:
         max_color = 30
-        seqpos_top5_ctx = logprobs_top5_in_ctx.indices[batch_idx] # shape (seqQ, 5)
-        str_toks_top5_ctx_all = [model.to_str_tokens(toks[seqpos_top5_ctx[i]]) for i in range(seq_len)]
-        logprobs_top5_ctx_all = logprobs_top5_in_ctx.values[batch_idx] # shape (seqQ, 5)
+        seqpos_top5_ctx = full_logprobs_top5_in_ctx.indices # shape (batch, seqQ, 5)
+        batch_idx = einops.repeat(t.arange(batch_size), 'b -> b seq k', seq=seq_len, k=seqpos_top5_ctx.shape[-1])
+        tokenIDs_top5_ctx = full_toks[batch_idx, seqpos_top5_ctx] # shape (batch, seqQ, 5)
+        str_toks_top5_ctx_all = [rearrange_list(model.to_str_tokens(tokenIDs.flatten()), 5) for tokenIDs in tokenIDs_top5_ctx]
 
     # Now, get the hovertext for my formatting function
 
-    hover_text_list = []
 
-    all_correct_ranks = (logprobs_on_correct_token.unsqueeze(1) < logprobs[range(len(str_toks)-1)]).sum(dim=1)
-    if logprobs_top5_in_ctx is not None:
-        logprobs_top5_ctx_all_rep = einops.repeat(logprobs_top5_ctx_all, 'seqQ K -> seqQ 1 K')
-        logprobs_rep = einops.repeat(logprobs, 'seqQ d_vocab -> seqQ d_vocab 1')
-        all_top5_ctx_ranks: Int[Tensor, "seqQ K"] = (logprobs_top5_ctx_all_rep < logprobs_rep).sum(dim=1)
+    logprobs_on_correct_token_rep = einops.repeat(logprobs_on_correct_token, "b seqQ -> b seqQ 1")
+    all_correct_ranks = (logprobs_on_correct_token_rep < full_logprobs[:, :seq_len-1]).sum(dim=-1)
+    if full_logprobs_top5_in_ctx is not None:
+        logprobs_top5_ctx_all_rep = einops.repeat(full_logprobs_top5_in_ctx.values, 'b seqQ K -> b seqQ 1 K')
+        logprobs_rep = einops.repeat(full_logprobs, 'b seqQ d_vocab -> b seqQ d_vocab 1')
+        all_top5_ctx_ranks: Int[Tensor, "b seqQ K"] = (logprobs_top5_ctx_all_rep < logprobs_rep).sum(dim=-2)
 
-    for seq_pos in range(len(str_toks) - 1):
+    html_list = []
 
-        current_word = str_toks[seq_pos]
-        next_word = str_toks[seq_pos + 1]
+    for batch_idx in range(full_toks.size(0)):
+        hover_text_list = []
 
-        correct_rank = all_correct_ranks[seq_pos]
-        str_toks_top10 = str_toks_top10_all[seq_pos]
-        logprobs_top10 = logprobs_top10_all[seq_pos]
-        probs_top10 = logprobs_top10.exp()
-        if logprobs_top5_in_ctx is not None:
-            str_toks_top5_ctx = str_toks_top5_ctx_all[seq_pos]
-            logprobs_top5_ctx = logprobs_top5_ctx_all[seq_pos]
-            probs_top5_ctx = logprobs_top5_ctx.exp()
-            top5_ctx_ranks = all_top5_ctx_ranks[seq_pos]
+        for seq_pos in range(seq_len-1):
 
+            current_word = all_str_toks[batch_idx][seq_pos]
+            next_word = all_str_toks[batch_idx][seq_pos + 1]
 
-        table_body = ""
-        for idx, (word, logprob, prob) in enumerate(zip(str_toks_top10, logprobs_top10, probs_top10)):
-            table_body += f"<tr><td>#{idx}</td><td>{word!r}</td><td>{logprob:.2f}</td><td>{prob:.2%}</td></tr>"
+            correct_rank = all_correct_ranks[batch_idx, seq_pos]
+            str_toks_top10 = full_str_toks_top10[batch_idx][seq_pos]
+            logprobs_top10 = full_logprobs_top10.values[batch_idx, seq_pos]
+            probs_top10 = logprobs_top10.exp()
+            if full_logprobs_top5_in_ctx is not None:
+                str_toks_top5_ctx = str_toks_top5_ctx_all[batch_idx][seq_pos]
+                logprobs_top5_ctx = full_logprobs_top5_in_ctx.values[batch_idx, seq_pos]
+                probs_top5_ctx = logprobs_top5_ctx.exp()
+                top5_ctx_ranks = all_top5_ctx_ranks[batch_idx, seq_pos]
 
-        lp_orig = logprobs_on_correct_token_baseline[seq_pos]
-        lp = logprobs_on_correct_token[seq_pos]
-        p = probs_on_correct_token[seq_pos]
-        empty_row = '<tr class="empty-row"><td></td><td></td><td></td><td></td></tr>'
-        new_hover_text = "".join([
-            "<table>",
-            "<thead><tr><th>Rank</th><th>Word</th><th>Logprob</th><th>Prob</th></tr></thead>",
-            f"<tbody><tr><td>#{correct_rank}</td><td>{next_word!r}</td><td>{lp:.2f}</td><td>{p:.2%}</td></tr>"
-        ]).replace('<td>', '<td style="background-color:#c2d9ff; color:black">') + f"{empty_row}{table_body}</tbody></table>"
-        if not(orig):
-            new_hover_text = f"Δ logprob on correct token = {lp-lp_orig:.2f}<br><br>" + new_hover_text
-
-        # Finally, get the top5 in context thing, if we are given it
-        if logprobs_top5_in_ctx is not None:
-            logprobs_mean = logprobs[seq_pos].mean()
             table_body = ""
-            for (rank, word, logprob, prob) in zip(top5_ctx_ranks, str_toks_top5_ctx, logprobs_top5_ctx, probs_top5_ctx):
-                if logprob > -1e4:
-                    # * Not coloring in this way because it's visually unclear and confusing (e.g. function words, what baseline to use).
-                    # colors[seq_pos] = min(1, 0.5 + (logprob - logprobs_mean).item() / (2 * max_color))
-                    table_body += f"<tr><td>#{rank}</td><td>{word!r}</td><td>{logprob:.2f}</td><td>{prob:.2%}</td></tr>"
-            new_hover_text += f"<br><b>Top 5 predictions from context (avg = {logprobs_mean:.2f}):</b><br><br>" + "".join([
+            for idx, (word, logprob, prob) in enumerate(zip(str_toks_top10, logprobs_top10, probs_top10)):
+                table_body += f"<tr><td>#{idx}</td><td>{word!r}</td><td>{logprob:.2f}</td><td>{prob:.2%}</td></tr>"
+
+            lp_orig = logprobs_on_correct_token_baseline[batch_idx, seq_pos]
+            lp = logprobs_on_correct_token[batch_idx, seq_pos]
+            p = probs_on_correct_token[batch_idx, seq_pos]
+            empty_row = '<tr class="empty-row"><td></td><td></td><td></td><td></td></tr>'
+            new_hover_text = "".join([
                 "<table>",
                 "<thead><tr><th>Rank</th><th>Word</th><th>Logprob</th><th>Prob</th></tr></thead>",
-                f"<tbody>{table_body}</tbody></table>"
-            ])
+                f"<tbody><tr><td>#{correct_rank}</td><td>{next_word!r}</td><td>{lp:.2f}</td><td>{p:.2%}</td></tr>"
+            ]).replace('<td>', '<td style="background-color:#c2d9ff; color:black">') + f"{empty_row}{table_body}</tbody></table>"
+            if not(orig):
+                new_hover_text = f"Δ logprob on correct token = {lp-lp_orig:.2f}<br><br>" + new_hover_text
 
-        hover_text_list.append(f"<span background-color:'#ddd'>{current_word!r}</span> ➔ <span background-color:'#ddd'>{next_word!r}</span><br><br>{new_hover_text}")
+            # Finally, get the top5 in context thing, if we are given it
+            if full_logprobs_top5_in_ctx is not None:
+                logprobs_mean = full_logprobs[batch_idx, seq_pos].mean()
+                table_body = ""
+                for (rank, word, logprob, prob) in zip(top5_ctx_ranks, str_toks_top5_ctx, logprobs_top5_ctx, probs_top5_ctx):
+                    if logprob > -1e4:
+                        # * Not coloring in this way because it's visually unclear and confusing (e.g. function words, what baseline to use).
+                        # colors[seq_pos] = min(1, 0.5 + (logprob - logprobs_mean).item() / (2 * max_color))
+                        table_body += f"<tr><td>#{rank}</td><td>{word!r}</td><td>{logprob:.2f}</td><td>{prob:.2%}</td></tr>"
+                new_hover_text += f"<br><b>Top 5 predictions from context (avg = {logprobs_mean:.2f}):</b><br><br>" + "".join([
+                    "<table>",
+                    "<thead><tr><th>Rank</th><th>Word</th><th>Logprob</th><th>Prob</th></tr></thead>",
+                    f"<tbody>{table_body}</tbody></table>"
+                ])
 
-    hover_text_list = hover_text_list + ["(next token unknown)"]
-    html = format_word_importances(str_toks, colors, hover_text_list)
+            hover_text_list.append(f"<span background-color:'#ddd'>{current_word!r}</span> ➔ <span background-color:'#ddd'>{next_word!r}</span><br><br>{new_hover_text}")
 
-    return html
+        html = format_word_importances(all_str_toks[batch_idx], all_colors[batch_idx], hover_text_list + ["(next token unknown)"])
+        html_list.append(html)
+
+    return html_list
+
+
+# def generate_html_for_logit_plot(
+#     toks: Int[Tensor, "batch seq"],
+#     logprobs: Float[Tensor, "batch seq d_vocab"],
+#     logprobs_top10: Any,
+#     str_toks_top10: List[List[str]],
+#     non_ablated_logprobs: Float[Tensor, "batch seq d_vocab"],
+#     batch_idx: int,
+#     model: HookedTransformer,
+#     logprobs_top5_in_ctx: Any = None,
+# ):
+#     '''
+#     This gets the top predicted tokens for the model (and the prediction for the actual next token).
+
+#     We use non_ablated_logits as a baseline. The baseline tokens will be colored by the logprob of the
+#     token which actually came next, the non-baseline tokens will be colored by the difference in this prob
+#     from the baseline to them.
+
+#     If logprobs_top5_in_ctx is given, then we also add 5 rows to the end of the hovertext, which correspond
+#     to the top 5 predictions for the next token WHICH ALSO APPEAR IN CONTEXT. This is useful for the logit
+#     lens visualisations, when we want to verify prediction-attention is happening
+#     '''
+#     toks = toks[batch_idx]
+#     logprobs = logprobs[batch_idx]
+#     non_ablated_logprobs = non_ablated_logprobs[batch_idx]
+#     seq_len = logprobs.size(0)
+
+#     max_color = 4 # This is the fixed point for the color scale
+
+#     # Get the thing I'll use to color the tokens (leaving white if there's basically no difference)
+#     str_toks = model.to_str_tokens(toks)
+#     logprobs_on_correct_token = logprobs[range(len(str_toks)-1), toks[1:]]
+#     logprobs_on_correct_token_baseline = non_ablated_logprobs[range(len(str_toks)-1), toks[1:]]
+#     probs_on_correct_token = logprobs_on_correct_token.exp()
+#     colors = logprobs_on_correct_token - logprobs_on_correct_token_baseline
+#     if colors.abs().max() < 1e-4:
+#         # In this case, we must have the original logprobs, so we set colors based on just these
+#         orig = True
+#         # 0.5 is the baseline for "very low probability" (logprob=-4), we get 1.0 close to logprob=0
+#         colors = 1 + t.maximum(
+#             logprobs_on_correct_token / (2 * max_color),
+#             t.full_like(logprobs_on_correct_token, -0.5)
+#         )
+#     else:
+#         # In this case, these must be ablated logprobs, so we set colors based on the difference
+#         orig = False
+#         diff = logprobs_on_correct_token - logprobs_on_correct_token_baseline
+#         # 0.5 is the baseline for "no change in logprob", we get 1.0 or 0.0 for a change of ±4
+#         colors = t.clip(0.5 + diff / (2 * max_color), 0.0, 1.0)
+#     colors = colors.tolist() + [0.5]
+
+#     # Now, get the top10 predictions for each token
+#     str_toks_top10_all = str_toks_top10[batch_idx]
+#     logprobs_top10_all = logprobs_top10.values[batch_idx]
+#     if logprobs_top5_in_ctx is not None:
+#         max_color = 30
+#         seqpos_top5_ctx = logprobs_top5_in_ctx.indices[batch_idx] # shape (seqQ, 5)
+#         str_toks_top5_ctx_all = [model.to_str_tokens(toks[seqpos_top5_ctx[i]]) for i in range(seq_len)]
+#         logprobs_top5_ctx_all = logprobs_top5_in_ctx.values[batch_idx] # shape (seqQ, 5)
+
+#     # Now, get the hovertext for my formatting function
+
+#     hover_text_list = []
+
+#     all_correct_ranks = (logprobs_on_correct_token.unsqueeze(1) < logprobs[:len(str_toks)-1]).sum(dim=1)
+#     if logprobs_top5_in_ctx is not None:
+#         logprobs_top5_ctx_all_rep = einops.repeat(logprobs_top5_ctx_all, 'seqQ K -> seqQ 1 K')
+#         logprobs_rep = einops.repeat(logprobs, 'seqQ d_vocab -> seqQ d_vocab 1')
+#         all_top5_ctx_ranks: Int[Tensor, "seqQ K"] = (logprobs_top5_ctx_all_rep < logprobs_rep).sum(dim=1)
+
+#     for seq_pos in range(len(str_toks) - 1):
+
+#         current_word = str_toks[seq_pos]
+#         next_word = str_toks[seq_pos + 1]
+
+#         correct_rank = all_correct_ranks[seq_pos]
+#         str_toks_top10 = str_toks_top10_all[seq_pos]
+#         logprobs_top10 = logprobs_top10_all[seq_pos]
+#         probs_top10 = logprobs_top10.exp()
+#         if logprobs_top5_in_ctx is not None:
+#             str_toks_top5_ctx = str_toks_top5_ctx_all[seq_pos]
+#             logprobs_top5_ctx = logprobs_top5_ctx_all[seq_pos]
+#             probs_top5_ctx = logprobs_top5_ctx.exp()
+#             top5_ctx_ranks = all_top5_ctx_ranks[seq_pos]
+
+
+#         table_body = ""
+#         for idx, (word, logprob, prob) in enumerate(zip(str_toks_top10, logprobs_top10, probs_top10)):
+#             table_body += f"<tr><td>#{idx}</td><td>{word!r}</td><td>{logprob:.2f}</td><td>{prob:.2%}</td></tr>"
+
+#         lp_orig = logprobs_on_correct_token_baseline[seq_pos]
+#         lp = logprobs_on_correct_token[seq_pos]
+#         p = probs_on_correct_token[seq_pos]
+#         empty_row = '<tr class="empty-row"><td></td><td></td><td></td><td></td></tr>'
+#         new_hover_text = "".join([
+#             "<table>",
+#             "<thead><tr><th>Rank</th><th>Word</th><th>Logprob</th><th>Prob</th></tr></thead>",
+#             f"<tbody><tr><td>#{correct_rank}</td><td>{next_word!r}</td><td>{lp:.2f}</td><td>{p:.2%}</td></tr>"
+#         ]).replace('<td>', '<td style="background-color:#c2d9ff; color:black">') + f"{empty_row}{table_body}</tbody></table>"
+#         if not(orig):
+#             new_hover_text = f"Δ logprob on correct token = {lp-lp_orig:.2f}<br><br>" + new_hover_text
+
+#         # Finally, get the top5 in context thing, if we are given it
+#         if logprobs_top5_in_ctx is not None:
+#             logprobs_mean = logprobs[seq_pos].mean()
+#             table_body = ""
+#             for (rank, word, logprob, prob) in zip(top5_ctx_ranks, str_toks_top5_ctx, logprobs_top5_ctx, probs_top5_ctx):
+#                 if logprob > -1e4:
+#                     # * Not coloring in this way because it's visually unclear and confusing (e.g. function words, what baseline to use).
+#                     # colors[seq_pos] = min(1, 0.5 + (logprob - logprobs_mean).item() / (2 * max_color))
+#                     table_body += f"<tr><td>#{rank}</td><td>{word!r}</td><td>{logprob:.2f}</td><td>{prob:.2%}</td></tr>"
+#             new_hover_text += f"<br><b>Top 5 predictions from context (avg = {logprobs_mean:.2f}):</b><br><br>" + "".join([
+#                 "<table>",
+#                 "<thead><tr><th>Rank</th><th>Word</th><th>Logprob</th><th>Prob</th></tr></thead>",
+#                 f"<tbody>{table_body}</tbody></table>"
+#             ])
+
+#         hover_text_list.append(f"<span background-color:'#ddd'>{current_word!r}</span> ➔ <span background-color:'#ddd'>{next_word!r}</span><br><br>{new_hover_text}")
+
+#     hover_text_list = hover_text_list + ["(next token unknown)"]
+#     html = format_word_importances(str_toks, colors, hover_text_list)
+
+#     return html
 
 
 
 def generate_html_for_DLA_plot(
-    toks: Int[Tensor, "seq_len"],
-    dla_logits: Float[Tensor, "seq_len-1 d_vocab"],
+    toks: Int[Tensor, "batch seq_len"],
+    dla_logits: Float[Tensor, "batch seq_len-1 d_vocab"],
     model: HookedTransformer,
 ):
+    batch_size, seq_len = toks.shape
     dla_logits_topk = dla_logits.topk(dim=-1, k=10)
     dla_logits_botk = dla_logits.topk(dim=-1, k=10, largest=False)
 
-    # * From eyeballing data, it looks like logit suppression of 2.5 is a sufficiently extreme value
-    # * for it to be reasonable setting this as the default upper color.
-    importances_pos_raw = dla_logits.max(dim=-1).values.tolist()
-    importances_neg_raw = (-dla_logits).max(dim=-1).values.tolist()
-    denom = 2 * max([2.5] + importances_pos_raw + importances_neg_raw)
+    # * From eyeballing data, it looks like logit suppression of 2.5 is a sufficiently extreme value to warrant setting this as the default upper color
+    all_importances_pos_raw: Float[Tensor, "b s-1"] = dla_logits.max(dim=-1).values
+    all_importances_neg_raw: Float[Tensor, "b s-1"] = (-dla_logits).max(dim=-1).values
+    all_importances = {"pos": [], "neg": []}
+    for importances_pos_raw, importances_neg_raw in zip(all_importances_pos_raw, all_importances_neg_raw):
+        denom = 2 * max(2.5, importances_pos_raw.max().item(), importances_neg_raw.max().item())
+        all_importances["pos"].append((0.5 + (importances_pos_raw / denom)).tolist())
+        all_importances["neg"].append((0.5 + (importances_neg_raw / denom)).tolist())
 
-    importances_pos = [0.5 + imp / denom for imp in importances_pos_raw]
-    importances_neg = [0.5 - imp / denom for imp in importances_neg_raw]
+    words = rearrange_list(model.to_str_tokens(toks.flatten()), seq_len)
+    words_nbsp = [list(map(lambda word: word.replace(" ", "&nbsp;"), words_list)) + ["(can't see next token)"] for words_list in words]
+    words = [words_list + ["(can't see next token)"] for words_list in words]
 
-    words = model.to_str_tokens(toks) + ["(can't see next token)"]
+    all_hover_text = {"pos": [], "neg": []}
 
-    hover_text_list_neg = []
-    hover_text_list_pos = []
+    for b in range(batch_size):
+        hover_text_list_pos = []
+        hover_text_list_neg = []
 
-    for i in range(len(toks)):
-        current_word = words[i].replace(" ", "&nbsp;")
-        next_word = words[i+1].replace(" ", "&nbsp;")
+        for s in range(seq_len):
+            current_word = words_nbsp[b][s]
+            next_word = words_nbsp[b][s+1]
 
-        top10_values = dla_logits_topk.values[i].tolist()
-        top10_indices = dla_logits_topk.indices[i].tolist()
-        top10_str_toks = list(map(model.to_single_str_token, top10_indices))
-        bot10_values = dla_logits_botk.values[i].tolist()
-        bot10_indices = dla_logits_botk.indices[i].tolist()
-        bot10_str_toks = list(map(model.to_single_str_token, bot10_indices))
+            top10_values = dla_logits_topk.values[b, s].tolist()
+            top10_str_toks = model.to_str_tokens(dla_logits_topk.indices[b, s])
+            bot10_values = dla_logits_botk.values[b, s].tolist()
+            bot10_str_toks = model.to_str_tokens(dla_logits_botk.indices[b, s])
 
-        neg_table_body = ""
-        pos_table_body = ""
-        for idx, (word, value) in enumerate(zip(bot10_str_toks, bot10_values)):
-            neg_table_body += f"<tr><td>#{idx}</td><td>{word!r}</td><td>{value:.2f}</td></tr>"
-        for idx, (word, value) in enumerate(zip(top10_str_toks, top10_values)):
-            pos_table_body += f"<tr><td>#{idx}</td><td>{word!r}</td><td>{value:.2f}</td></tr>"
+            neg_table_body = ""
+            pos_table_body = ""
+            for idx, (word, value) in enumerate(zip(bot10_str_toks, bot10_values)):
+                neg_table_body += f"<tr><td>#{idx}</td><td>{word!r}</td><td>{value:.2f}</td></tr>"
+            for idx, (word, value) in enumerate(zip(top10_str_toks, top10_values)):
+                pos_table_body += f"<tr><td>#{idx}</td><td>{word!r}</td><td>{value:.2f}</td></tr>"
 
-        hover_text_list_neg.append("".join([
-            f"<span background-color:'#ddd'>{current_word!r}</span> ➔ <span background-color:'#ddd'>{next_word!r}</span><br><br>",
-            "<table>",
-            "<thead><tr><th>Rank</th><th>Word</th><th>Logit</th></tr></thead>",
-            f"<tbody>{neg_table_body}</tbody></table>",
-        ]))
-        hover_text_list_pos.append("".join([
-            f"<span background-color:'#ddd'>{current_word!r}</span> ➔ <span background-color:'#ddd'>{next_word!r}</span><br><br>",
-            "<table>",
-            "<thead><tr><th>Rank</th><th>Word</th><th>Logit</th></tr></thead>",
-            f"<tbody>{pos_table_body}</tbody></table>"
-        ]))
+            hover_text_list_neg.append("".join([
+                f"<span background-color:'#ddd'>{current_word!r}</span> ➔ <span background-color:'#ddd'>{next_word!r}</span><br><br>",
+                "<table>",
+                "<thead><tr><th>Rank</th><th>Word</th><th>Logit</th></tr></thead>",
+                f"<tbody>{neg_table_body}</tbody></table>",
+            ]))
+            hover_text_list_pos.append("".join([
+                f"<span background-color:'#ddd'>{current_word!r}</span> ➔ <span background-color:'#ddd'>{next_word!r}</span><br><br>",
+                "<table>",
+                "<thead><tr><th>Rank</th><th>Word</th><th>Logit</th></tr></thead>",
+                f"<tbody>{pos_table_body}</tbody></table>"
+            ]))
+        all_hover_text["pos"].append(hover_text_list_pos)
+        all_hover_text["neg"].append(hover_text_list_neg)
 
-    html_neg = format_word_importances(words[:-1], importances_neg, hover_text_list_neg)
-    html_pos = format_word_importances(words[:-1], importances_pos, hover_text_list_pos)
+    html_pos_list = [format_word_importances(words[b][:-1], all_importances["pos"][b], all_hover_text["pos"][b]) for b in range(batch_size)]
+    html_neg_list = [format_word_importances(words[b][:-1], all_importances["neg"][b], all_hover_text["neg"][b]) for b in range(batch_size)]
 
-    return html_neg, html_pos
+    return html_pos_list, html_neg_list
 
 
 
@@ -447,7 +582,7 @@ def generate_4_html_plots(
     negative_heads: List[Tuple[int, int]] = NEGATIVE_HEADS,
     save_files: bool = False,
     model_results: Optional[ModelResults] = None,
-    progress_bar: bool = False,
+    verbose: bool = False,
     restrict_computation: List[str] = ["LOSS", "LOGITS", "ATTN", "UNEMBEDDINGS"],
     cspa: bool = True,
 ) -> Dict[str, Dict[Tuple, str]]:
@@ -473,103 +608,96 @@ def generate_4_html_plots(
     BATCH_SIZE = data_toks.shape[0]
 
     if model_results is None:
-        model_results = get_model_results(model, data_toks, negative_heads=negative_heads, cspa=cspa)
+        model_results = get_model_results(model, data_toks, negative_heads=negative_heads, cspa=cspa, verbose=verbose)
 
-    # ! (1) Calculate the loss diffs from ablating
+
+    # ! Calculate the loss diffs from ablating
 
     if "LOSS" in restrict_computation:
 
-        for batch_idx in (tqdm(range(BATCH_SIZE), "LOSS") if progress_bar else range(BATCH_SIZE)):
+        if verbose: print(f"{'LOSS':<20} ... ", end="\r"); t0 = time.time()
+        
+        for batch_idx in range(BATCH_SIZE):
             for (layer, head) in negative_heads:
                 head_name = f"{layer}.{head}"
-
                 # For each different type of ablation, get the loss diffs
-                for effect in ["direct", "indirect", "both"]:
-                    for ln_mode in ["frozen", "unfrozen"]:
-                        for ablation_mode in ["zero", "mean"]:
-                            # Get the loss per token, and pad with zeros at the end (cause we don't know the last value!)
-                            loss_diff = model_results.loss_diffs[(effect, ln_mode, ablation_mode)][layer, head][batch_idx]
-                            loss_diff_padded = t.cat([loss_diff, t.zeros((1,))], dim=-1)
-                            html_25, html_max = generate_html_for_loss_plot(
-                                data_str_toks_parsed[batch_idx],
-                                loss_diff = loss_diff_padded,
-                            )
-                            full_ablation_mode = "+".join([effect, ln_mode, ablation_mode])
-                            HTML_PLOTS["LOSS"][(batch_idx, head_name, full_ablation_mode, True)] = str(html_max)
-                            HTML_PLOTS["LOSS"][(batch_idx, head_name, full_ablation_mode, False)] = str(html_25)
+                for full_ablation_type_tuple, loss_diff_by_head in model_results.loss_diffs.items():
+                    # Get the loss per token, and pad with zeros at the end (cause we don't know the last value!)
+                    full_ablation_type_name = "+".join(full_ablation_type_tuple)
+                    if head_name not in full_ablation_type_name: # this makes sure "indirect excluding 11.10" isn't counted for head 11.10
+                        loss_diff = loss_diff_by_head[layer, head][batch_idx]
+                        loss_diff_padded = t.cat([loss_diff, t.zeros((1,))], dim=-1)
+                        html_25, html_max = generate_html_for_loss_plot(
+                            data_str_toks_parsed[batch_idx],
+                            loss_diff = loss_diff_padded,
+                        )
+                        HTML_PLOTS["LOSS"][(batch_idx, head_name, full_ablation_type_name, True)] = str(html_max)
+                        HTML_PLOTS["LOSS"][(batch_idx, head_name, full_ablation_type_name, False)] = str(html_25)
+
+        if verbose: print(f"{'LOSS':<20} ... {time.time()-t0:.2f}s")
 
 
-    # ! (2, 3, 4) Calculate the logits & direct logit attributions
+    # ! Calculate the logits & direct logit attributions
     # For logprobs, we batch this - first calculating all the logprobs and the top10s, then passing them all into the `generate_html_for_logit_plot` 
     # function along with a `batch_idx` argument.
     # For DLA, we don't batch it, i.e. we just pass in the vector of DLA logits.
 
     if "LOGITS" in restrict_computation:
 
-        LOGPROBS_DICT = {
-            "orig": model_results.logits_orig.log_softmax(-1),
-            **{
-                ('+'.join([effect, ln_mode, ablation_mode]), f"{layer}.{head}"): model_results.logits[(effect, ln_mode, ablation_mode)][layer, head].log_softmax(-1)
-                for layer, head in negative_heads
-                for effect in ["direct", "indirect", "both"]
-                for ln_mode in ["frozen", "unfrozen"]
-                for ablation_mode in ["zero", "mean"]
-            }
-        }
-        LOGPROBS_TOP10_DICT = {
-            k: v.topk(10, dim=-1)
-            for (k, v) in LOGPROBS_DICT.items()
-        }
-
-        for batch_idx in (tqdm(range(BATCH_SIZE), "LOGITS") if progress_bar else range(BATCH_SIZE)):
-
-            html_orig = generate_html_for_logit_plot(
-                toks = data_toks,
-                logprobs = LOGPROBS_DICT["orig"],
-                logprobs_top10 = LOGPROBS_TOP10_DICT["orig"],
-                non_ablated_logprobs = LOGPROBS_DICT["orig"],
-                batch_idx = batch_idx,
-                model = model,
-            )
+        if verbose: print(f"{'LOGITS ORIG':<20} ... ", end="\r"); t0 = time.time()
+        logprobs_orig = model_results.logits_orig.log_softmax(-1)
+        html_orig_list = generate_html_for_logit_plot(
+            full_toks = data_toks,
+            full_logprobs = logprobs_orig,
+            full_non_ablated_logprobs = logprobs_orig,
+            model = model,
+        )
+        for batch_idx, html_orig in enumerate(html_orig_list):
             HTML_PLOTS["LOGITS_ORIG"][(batch_idx,)] = str(html_orig)
+        if verbose: print(f"{'LOGITS ORIG':<20} ... {time.time()-t0:.2f}s")
 
-            for (layer, head) in negative_heads:
-                head_name = f"{layer}.{head}"
+        for (layer, head) in negative_heads:
+            head_name = f"{layer}.{head}"
+            if verbose: print(f"{'LOGITS ABLATED '+head_name:<20} ... ", end="\r"); t0 = time.time()
 
-                # Save new log probs (post-ablation)
-                for effect in ["direct", "indirect", "both"]:
-                    for ln_mode in ["frozen", "unfrozen"]:
-                        for ablation_mode in ["zero", "mean"]:
-                            full_ablation_mode = "+".join([effect, ln_mode, ablation_mode])
-                            html_ablated = generate_html_for_logit_plot(
-                                toks = data_toks,
-                                logprobs = LOGPROBS_DICT[(full_ablation_mode, head_name)],
-                                logprobs_top10 = LOGPROBS_TOP10_DICT[(full_ablation_mode, head_name)],
-                                non_ablated_logprobs = LOGPROBS_DICT["orig"],
-                                batch_idx = batch_idx,
-                                model = model,
-                            )
-                            HTML_PLOTS["LOGITS_ABLATED"][(batch_idx, head_name, full_ablation_mode)] = str(html_ablated)
+            # Save new log probs (post-ablation)
+            for full_ablation_type, logprobs_by_head in model_results.logits.items():
+                full_ablation_type_name = "+".join(full_ablation_type)
+                if head_name not in full_ablation_type_name: # this makes sure "indirect excluding 11.10" isn't counted for head 11.10
+                    html_list = generate_html_for_logit_plot(
+                        full_toks = data_toks,
+                        full_logprobs = logprobs_by_head[layer, head],
+                        full_non_ablated_logprobs = logprobs_orig,
+                        model = model,
+                    )
+                    for batch_idx, html in enumerate(html_list):
+                        HTML_PLOTS["LOGITS_ABLATED"][(batch_idx, head_name, full_ablation_type_name)] = str(html)
 
-                # Save direct logit effect
-                for ln_mode in ["frozen", "unfrozen"]:
-                    for ablation_mode in ["zero", "mean"]:
-                        full_ablation_mode = "+".join([ln_mode, ablation_mode])
-                        dla_neg, dla_pos = generate_html_for_DLA_plot(
-                            toks = data_toks[batch_idx],
-                            dla_logits = model_results.dla[(ln_mode, ablation_mode)][layer, head][batch_idx],
-                            model = model,
-                        )
-                        HTML_PLOTS["DLA"][(batch_idx, head_name, full_ablation_mode, "neg")] = str(dla_neg)
-                        HTML_PLOTS["DLA"][(batch_idx, head_name, full_ablation_mode, "pos")] = str(dla_pos)
+            if verbose: print(f"{'LOGITS ABLATED '+head_name:<20} ... {time.time()-t0:.2f}s")
+            if verbose: print(f"{'DLA '+head_name:<20} ... ", end="\r"); t0 = time.time()
+
+            # Save direct logit attribution
+            for ln_mode, ablation_mode in itertools.product(["frozen", "unfrozen"], ["zero", "mean"]):
+                full_ablation_mode = "+".join([ln_mode, ablation_mode])
+                html_pos_list, html_neg_list = generate_html_for_DLA_plot(
+                    toks = data_toks,
+                    dla_logits = model_results.dla[(ln_mode, ablation_mode)][layer, head],
+                    model = model,
+                )
+                for batch_idx, (html_pos, html_neg) in enumerate(zip(html_pos_list, html_neg_list)):
+                    HTML_PLOTS["DLA"][(batch_idx, head_name, full_ablation_mode, "neg")] = str(html_neg)
+                    HTML_PLOTS["DLA"][(batch_idx, head_name, full_ablation_mode, "pos")] = str(html_pos)
+            
+            if verbose: print(f"{'DLA '+head_name:<20} ... {time.time()-t0:.2f}s")
 
 
-
-    # ! (5) Calculate the attention probs
+    # ! Calculate the attention probs
 
     if "ATTN" in restrict_computation:
 
-        for batch_idx in (tqdm(range(BATCH_SIZE), "ATTN") if progress_bar else range(BATCH_SIZE)):
+        if verbose: print(f"{'ATTN':<20} ... ", end="\r"); t0 = time.time()
+
+        for batch_idx in range(BATCH_SIZE):
 
             for layer, head in negative_heads:
                 head_name = f"{layer}.{head}"
@@ -593,34 +721,39 @@ def generate_4_html_plots(
                     html_standard, html_weighted = list(map(attn_filter, [html_standard, html_weighted]))
                     HTML_PLOTS["ATTN"][(batch_idx, head_name, vis_name, "standard")] = str(html_standard)
                     HTML_PLOTS["ATTN"][(batch_idx, head_name, vis_name, "info-weighted")] = str(html_weighted)
+            
+        if verbose: print(f"{'ATTN':<20} ... {time.time()-t0:.2f}s")
 
             
-    # ! (6) Calculate the component of the unembeddings in pre-head residual stream
+    # ! Calculate the component of the unembeddings in pre-head residual stream
 
     if "UNEMBEDDINGS" in restrict_computation:
 
+        if verbose: print(f"{'UNEMBEDDINGS':<20} ... ", end="\r"); t0 = time.time()
+
         for layer, head in negative_heads:
             head_name = f"{layer}.{head}"
+
             # Get the unembedding components in resid_pre just before this head
             logit_lens: Tensor = model_results.logit_lens[layer]
             logprobs = logit_lens.log_softmax(-1)
-            # Get the top 10 logprobs, and get the top logprobs for words which are actually in context
-            logprobs_top10 = logprobs.topk(dim=-1, k=10)
-            logprobs_top5_in_ctx = get_top_logprobs_in_context(logprobs, data_toks)
-            for batch_idx in (tqdm(range(BATCH_SIZE), f"UNEMBEDDINGS: {head_name}") if progress_bar else range(BATCH_SIZE)):
-                html = generate_html_for_logit_plot(
-                    toks = data_toks,
-                    logprobs = logprobs,
-                    logprobs_top10 = logprobs_top10,
-                    logprobs_top5_in_ctx = logprobs_top5_in_ctx,
-                    non_ablated_logprobs = logprobs,
-                    batch_idx = batch_idx,
-                    model = model,
-                )
+
+            html_list = generate_html_for_logit_plot(
+                full_toks = data_toks,
+                full_logprobs = logprobs,
+                full_logprobs_top5_in_ctx = get_top_logprobs_in_context(logprobs, data_toks),
+                full_non_ablated_logprobs = logprobs,
+                model = model,
+            )
+            for batch_idx, html in enumerate(html_list):
                 HTML_PLOTS["UNEMBEDDINGS"][(batch_idx, head_name)] = str(html)
+
+        if verbose: print(f"{'UNEMBEDDINGS':<20} ... {time.time()-t0:.2f}s")
+
 
     # Optionally, save the files (we do this if we're generating it from OWT, for the Streamlit page)
     if save_files:
+        if verbose: print(f"{'Saving':<20} ... ", end="\r"); t0 = time.time()
         # If we've only computed a few new things (to save time), then make sure you keep the old values
         if len(restrict_computation) < 4:
             with gzip.open(ST_HTML_PATH / "GZIP_HTML_PLOTS.pkl", "rb") as f:
@@ -632,6 +765,7 @@ def generate_4_html_plots(
         # Now, save the new file
         with gzip.open(ST_HTML_PATH / "GZIP_HTML_PLOTS.pkl", "wb") as f:
             pickle.dump(HTML_PLOTS, f)
+        if verbose: print(f"{'Saving':<20} ... {time.time()-t0:.2f}s")
 
     return HTML_PLOTS
 

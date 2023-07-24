@@ -10,11 +10,11 @@ for root_dir in [
         break
 os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 import streamlit as st
 st.set_page_config(layout="wide")
 from streamlit.components.v1 import html
-from pathlib import Path
 import pickle
 import gzip
 
@@ -47,23 +47,47 @@ ATTN_VIS_TYPES = ["large", "small"]
 first_idx = 36
 batch_idx = st.sidebar.slider("Pick a sequence", 0, BATCH_SIZE-1, first_idx)
 head_name = st.sidebar.radio("Pick a head", NEG_HEADS) # , "both"
-assert head_name != "both", "Both not implemented yet. Please choose either 10.7 or 11.10"
+# assert head_name != "both", "Both not implemented yet. Please choose either 10.7 or 11.10"
+if head_name == "10.7":
+    EFFECTS = ["direct", "indirect", "indirect (excluding 11.10)", "both"]
 effect = st.sidebar.radio("Pick a type of intervention effect", EFFECTS)
 ln_mode = st.sidebar.radio("Pick a type of layernorm mode for the intervention", LN_MODES)
 ablation_mode = st.sidebar.radio("Pick a type of ablation", ABLATION_MODES)
 full_ablation_mode = "+".join([effect, ln_mode, ablation_mode])
 full_ablation_mode_dla = "+".join([ln_mode, ablation_mode])
 
-st.sidebar.markdown(r"""
----
+st.sidebar.markdown(
+r"""---
 
 ### Explanation for the sidebar options
 
-When we intervene on an attention head, there are 3 choices we can make. We can choose the:
+<details>
+<summary>Intervention effect</summary>
 
-* **Intervention effect** - just the direct path from the head to the final logits, or just the indirect path (everything excluding the direct path), or both.
-* **LayerNorm mode** - whether we freeze the LayerNorm parameters to what they were on the clean run, or unfreeze them (so the new residual stream is normalised).
-* **Ablation type** - we can mean-ablate, or zero-ablate.
+We have the option to measure:
+
+* **Direct effect** (just the effect that the head has on the final logit output),
+* **Indirect effect** (the effect of all paths from the head to the final logit output *except for* the direct path),
+* **Both** (the sum of the direct and indirect effects).
+
+Also, if we're dealing with head 10.7, we have the extra option **Indirect effect (excluding head 11.10)**. This is because head 11.10 also performs copy-suppression, and if it's reading the output from head 10.7 then it might not need to perform copy-suppression (because copy-suppression is a self-correcting mechanism: successfully copy-suppressing removes the signal from the query-side residual stream which is used for copy-suppression). It's useful to be able to measure the indirect effect of 10.7 which doesn't go through 11.10 (and validate that this is small).
+                    
+</details>
+
+<details>
+<summary>LayerNorm mode</summary>
+
+If "frozen", then we use the same layernorm parameters than we did in the clean run (so e.g. the direct effect will just be a linear function of the output of the head). If "unfrozen", then the layernom parameters are recomputed for the new ablated run.
+                    
+</details>
+
+<details>
+<summary>Ablation type</summary>
+
+We can zero-ablate the output of our head, or mean-ablate. Mean ablation is more principled, because it takes into account things like a constant bias term.
+                    
+</details>
+
 """)
 
 # HTML_LOSS = HTML_PLOTS["LOSS"][(batch_idx, head_name, full_ablation_mode)]

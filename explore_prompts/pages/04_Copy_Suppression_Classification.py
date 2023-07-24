@@ -9,6 +9,7 @@ for root_dir in [
         break
 os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 import streamlit as st
 st.set_page_config(layout="wide")
