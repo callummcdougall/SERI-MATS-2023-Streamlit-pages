@@ -327,8 +327,10 @@ for batch_idx in range(len(top_unembeds_per_position)):
         to_string = to_string
     )
 
+    print("True completion:"+model.to_string(top5p_tokens[batch_idx][top5p_seq_indices[batch_idx]+1]))
+
     print(
-        "10.7 Attentions", # TODO deal with ? char crap
+        "\n10.7 Attentions\n", # TODO deal with ? char crap
         sorted(list(zip(head_pattern[top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx], :top5p_seq_indices[batch_idx]+1].tolist(), model.to_str_tokens(top5p_tokens[batch_idx][:top5p_seq_indices[batch_idx]+1]), strict=True)), reverse=True)[:10],
     )
 
@@ -340,26 +342,22 @@ for batch_idx in range(len(top_unembeds_per_position)):
         #     # attention_head_names = ["0"],
         # )
 
-    print("True completion:"+model.to_string(top5p_tokens[batch_idx][top5p_seq_indices[batch_idx]+1]))
+    print("\nTop model predictions before 10.7:")
+    cur_ten_probs = logit_lens_top_pre_ten_probs[top5p_batch_indices[batch_idx]]
+    print(
+        list(zip(cur_ten_probs[0][top5p_seq_indices[batch_idx]].tolist(), model.to_str_tokens(cur_ten_probs[1][top5p_seq_indices[batch_idx]]), cur_ten_probs[1][top5p_seq_indices[batch_idx]].tolist(), strict=True))
+    )
 
-    print("Model's top logits:")
+    print("\nTop negative logit changes from 10.7:\n", model.to_str_tokens(logit_lens_head_bottom_ten.indices[top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx]])) # TODO make this show logits too?
+
+    print("\nModel's top probs:")
     cur_top_probs = top_probs[top5p_batch_indices[batch_idx]]
 
     print(
-        list(zip(cur_top_probs[0][top5p_seq_indices[batch_idx]], model.to_str_tokens(cur_top_probs[1][top5p_seq_indices[batch_idx]])))
+        list(zip(cur_top_probs[0][top5p_seq_indices[batch_idx]].tolist(), model.to_str_tokens(cur_top_probs[1][top5p_seq_indices[batch_idx]]), cur_top_probs[1][top5p_seq_indices[batch_idx]].tolist(), strict=True))
     )
 
-    print("Top negs:")
-    # print(model.to_str_tokens(torch.topk(-total_unembed[batch_idx], dim=-1, k=10).indices))
-    print("Top negative logit changes from 10.7:", model.to_str_tokens(logit_lens_head_bottom_ten.indices[top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx]]))
-
-    print("Top model predictions before 10.7:")
-    cur_ten_probs = logit_lens_top_pre_ten_probs[top5p_batch_indices[batch_idx]]
-    print(
-        list(zip(cur_ten_probs[0][top5p_seq_indices[batch_idx]], model.to_str_tokens(cur_ten_probs[1][top5p_seq_indices[batch_idx]]), cur_ten_probs[1][top5p_seq_indices[batch_idx]], strict=True))
-    )
     display(my_obj)
-    break
 
 #%%
 
