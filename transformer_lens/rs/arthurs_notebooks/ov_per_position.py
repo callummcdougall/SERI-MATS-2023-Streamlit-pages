@@ -305,7 +305,7 @@ def to_string(toks):
 
 #%%
 
-for batch_idx in range(len(top_unembeds_per_position)):
+for batch_idx in range(30): # range(len(top_unembeds_per_position)):
     assert top5p_seq_indices[batch_idx]+2 <= top_unembeds_per_position.shape[1], (top5p_seq_indices[batch_idx], top_unembeds_per_position.shape[1])
     the_logits = -top_unembeds_per_position[batch_idx][1:top5p_seq_indices[batch_idx]+2]
     if ABS_MODE:  # WAT
@@ -317,6 +317,19 @@ for batch_idx in range(len(top_unembeds_per_position)):
         to_string = to_string
     )
 
+    print(
+        "10.7 Attentions", # TODO deal with ? char crap
+        sorted(list(zip(head_pattern[top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx], :top5p_seq_indices[batch_idx]+1].tolist(), model.to_str_tokens(top5p_tokens[batch_idx][:top5p_seq_indices[batch_idx]+1]), strict=True)), reverse=True)[:10],
+    )
+
+        # ugh why bugged
+        # my_att_obj = cv.attention.attention_patterns(
+        #     attention = head_pattern[top5p_batch_indices[batch_idx]:top5p_batch_indices[batch_idx]+1, :top5p_seq_indices[batch_idx]+1, :top5p_seq_indices[batch_idx]+1],
+        #     tokens = top5p_tokens[batch_idx][:top5p_seq_indices[batch_idx]+1], 
+        #     # data_str_toks_parsed[batch_idx], # list of length seqQ
+        #     # attention_head_names = ["0"],
+        # )
+
     print("True completion:"+model.to_string(top5p_tokens[batch_idx][top5p_seq_indices[batch_idx]+1]))
     print("Top negs:")
     # print(model.to_str_tokens(torch.topk(-total_unembed[batch_idx], dim=-1, k=10).indices))
@@ -326,6 +339,7 @@ for batch_idx in range(len(top_unembeds_per_position)):
     logit_lens_pre_ten_top_printout = list((model.to_str_tokens(logit_lens_top_pre_ten.indices[top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx]]))) # , logit_lens_top_pre_ten[batch_idx].values.tolist(), strict=True))
     print("Top model predictions before 10.7:", logit_lens_pre_ten_top_printout)
     display(my_obj)
+    display(my_att_obj)
 
 #%%
 
