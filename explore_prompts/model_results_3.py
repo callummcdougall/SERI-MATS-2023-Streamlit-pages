@@ -400,6 +400,40 @@ def model_fwd_pass_from_resid_pre(
     return logits if (return_type == "logits") else (resid, logits)
 
 
+def get_effective_embedding(model: HookedTransformer) -> Float[Tensor, "d_vocab d_model"]:
+
+    # TODO - make this consistent (i.e. change the func in `generate_bag_of_words_quad_plot` to also return W_U and W_E separately)
+
+    W_E = model.W_E.clone()
+    W_U = model.W_U.clone()
+    # t.testing.assert_close(W_E[:10, :10], W_U[:10, :10].T)  NOT TRUE, because of the center unembed part!
+
+    resid_pre = W_E.unsqueeze(0)
+    pre_attention = model.blocks[0].ln1(resid_pre)
+    attn_out = einops.einsum(
+        pre_attention, 
+        model.W_V[0],
+        model.W_O[0],
+        "b s d_model, num_heads d_model d_head, num_heads d_head d_model_out -> b s d_model_out",
+    )
+    resid_mid = attn_out + resid_pre
+    normalized_resid_mid = model.blocks[0].ln2(resid_mid)
+    mlp_out = model.blocks[0].mlp(normalized_resid_mid)
+    
+    W_EE = mlp_out.squeeze()
+    W_EE_full = resid_mid.squeeze() + mlp_out.squeeze()
+
+    t.cuda.empty_cache()
+
+    return {
+        "W_E (no MLPs)": W_E,
+        "W_U": W_U.T,
+        # "W_E (raw, no MLPs)": W_E,
+        "W_E (including MLPs)": W_EE_full,
+        "W_E (only MLPs)": W_EE
+    }
+
+
 def get_model_results(
     model: HookedTransformer,
     toks: Int[Tensor, "batch seq"],
@@ -441,7 +475,6 @@ def get_model_results(
     (" Pier", " pier") and (" Pier", " Pier") - that way we correctly suppress the model's belief that the next
     token has something to do with the word pier (which is really the core of the copy-suppression mechanism).
     '''
-    from transformer_lens.rs.callum.keys_fixed import get_effective_embedding_2
     W_EE_dict = get_effective_embedding_2(model)
     W_EE = W_EE_dict[effective_embedding]
     W_EE = W_EE / W_EE.std(dim=-1, keepdim=True)

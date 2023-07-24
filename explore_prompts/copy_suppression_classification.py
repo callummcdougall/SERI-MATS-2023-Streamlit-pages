@@ -1,4 +1,3 @@
-# from transformer_lens.cautils.utils import *
 import sys, os
 for root_dir in [
     os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts", # For Arthur's branch
