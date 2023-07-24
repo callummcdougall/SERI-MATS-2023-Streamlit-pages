@@ -339,8 +339,6 @@ for batch_idx in range(30): # range(len(top_unembeds_per_position)):
     logit_lens_pre_ten_top_printout = list((model.to_str_tokens(logit_lens_top_pre_ten.indices[top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx]]))) # , logit_lens_top_pre_ten[batch_idx].values.tolist(), strict=True))
     print("Top model predictions before 10.7:", logit_lens_pre_ten_top_printout)
     display(my_obj)
-    display(my_att_obj)
-
 #%%
 
 tot_cont = top5p_positionwise_out.sum(dim=1)[0] # batch key_pos d_model
