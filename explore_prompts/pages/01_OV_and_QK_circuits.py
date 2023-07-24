@@ -13,16 +13,12 @@ if root_dir not in sys.path: sys.path.append(root_dir)
 import streamlit as st
 import gzip
 import pickle
-import torch as t
-from pathlib import Path
-from typing import Tuple, List, Union, Literal
+from typing import List, Union, Literal
 from torch import Tensor
-from transformer_lens import HookedTransformer
 from jaxtyping import Float
 import plotly.express as px
 import pandas as pd
 import textwrap
-from functools import partial
 # from transformers import AutoTokenizer
 from explore_prompts_utils import ST_HTML_PATH
 

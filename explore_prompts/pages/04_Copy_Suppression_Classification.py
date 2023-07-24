@@ -12,15 +12,11 @@ if root_dir not in sys.path: sys.path.append(root_dir)
 
 import streamlit as st
 st.set_page_config(layout="wide")
-from streamlit.components.v1 import html
 import pickle
 import gzip
 
 from streamlit_styling import styling
-from generate_html import CSS
 from explore_prompts_utils import ST_HTML_PATH
-import plotly.express as px
-import plotly.graph_objects as go
 
 import torch as t
 t.set_grad_enabled(False)

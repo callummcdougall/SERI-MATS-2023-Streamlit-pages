@@ -15,7 +15,6 @@ st.set_page_config(layout="wide")
 from streamlit.components.v1 import html
 from transformer_lens import HookedTransformer
 from collections import defaultdict
-import tokenizers
 
 from streamlit_styling import styling
 from generate_html import CSS
