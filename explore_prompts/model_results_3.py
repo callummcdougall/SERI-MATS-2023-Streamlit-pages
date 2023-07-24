@@ -12,13 +12,12 @@ for root_dir in [
 os.chdir(root_dir)
 if root_dir not in sys.path: sys.path.append(root_dir)
 
-from typing import Dict, Any, Tuple, List, Optional, Literal, Type, cast
-from transformer_lens import HookedTransformer, utils, ActivationCache
+from typing import Dict, Any, Tuple, List, Optional, Literal
+from transformer_lens import HookedTransformer, utils
 from functools import partial
 import einops
 from dataclasses import dataclass
 from transformer_lens.hook_points import HookPoint
-import pickle
 from jaxtyping import Int, Float, Bool
 import torch as t
 from collections import defaultdict
@@ -475,7 +474,7 @@ def get_model_results(
     (" Pier", " pier") and (" Pier", " Pier") - that way we correctly suppress the model's belief that the next
     token has something to do with the word pier (which is really the core of the copy-suppression mechanism).
     '''
-    W_EE_dict = get_effective_embedding_2(model)
+    W_EE_dict = get_effective_embedding(model)
     W_EE = W_EE_dict[effective_embedding]
     W_EE = W_EE / W_EE.std(dim=-1, keepdim=True)
     W_U = model.W_U

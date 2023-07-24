@@ -84,7 +84,6 @@ def plot_full_matrix_histogram(
 
     But if "flip" is True, then it looks at what things attend to src most (OV), or what causes dest to be most suppressed (OV).
     '''
-    _head = head.replace(".", "")
     tokenizer = dict_to_store_less["tokenizer"]
     W_EE_V = dict_to_store_less["W_EE_V"].float()
     W_U_O = dict_to_store_less["W_U_O"].float()
@@ -228,11 +227,10 @@ def plot_full_matrix_histogram(
 
 ST_HTML_PATH = Path(root_dir) / "media"
 
-if "dict_to_store_less" not in st.session_state:
-    dict_to_store_less = pickle.load(gzip.open(ST_HTML_PATH / f"OV_QK_circuits_less.pkl", "rb"))
-    st.session_state["dict_to_store_less"] = dict_to_store_less
-
-dict_to_store_less = st.session_state["dict_to_store_less"]
+@st.cache_data(show_spinner=False, max_entries=1)
+def return_dict_to_store_less():
+    return pickle.load(gzip.open(ST_HTML_PATH / f"OV_QK_circuits_less.pkl", "rb"))
+dict_to_store_less = return_dict_to_store_less()
 
 st.markdown(
 r"""
