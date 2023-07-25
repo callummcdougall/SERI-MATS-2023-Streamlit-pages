@@ -151,7 +151,7 @@ FUNCTION_STR_TOKS =  [
     ' meanwhile',
     ' nevertheless',
     'Its',
-    ' at', ' of', 'to', ' now', "'s", 'The', ".", ",", # Need to go through these words and add more to them, I suspect this list is minimal
+    ' at', ' of', 'to', ' now', "'s", 'The', ".", ",", "?", "!", # Need to go through these words and add more to them, I suspect this list is minimal
 ]
 
 
@@ -331,6 +331,7 @@ def project(
     proj_directions: Float[Tensor, "... d num"],
     only_keep: Optional[Literal["pos", "neg"]] = None,
     gs: bool = True,
+    return_coeffs: bool = False,
 ):
     '''
     `vectors` is a batch of vectors, with last dimension `d` and all earlier dimensions as batch dims.
@@ -351,6 +352,7 @@ def project(
         vectors, proj_directions_basis,
         "... d, ... d num -> ... num"
     )
+    if return_coeffs: return components_in_proj_dir
     
     if only_keep is not None:
         components_in_proj_dir = t.where(

@@ -1,7 +1,8 @@
 import streamlit as st
 
 def styling():
-    st.markdown(r"""
+    st.markdown(
+r"""
 <style>
 img {
     margin-bottom: 15px;
@@ -45,9 +46,6 @@ p {
 }
 header {
     background: rgba(255, 255, 255, 0) !important;
-}
-code:not(pre code) {
-    color: red !important;
 }
 pre code {
     white-space: pre-wrap !important;
@@ -113,6 +111,9 @@ ul.contents a:hover {
 .css-fg4pbf details {
     background-color: #eee;
 }
+section[data-testid="stSidebar"] details {
+    background-color: transparent;
+}
 details {
     margin-bottom: 10px;
     padding-left: 15px;
@@ -130,13 +131,9 @@ summary {
 .css-fg4pbf pre {
     background: rgb(247, 248, 250);
 }
-.css-fg4pbf code {
-    background: rgb(247, 248, 250);
-}
-.css-fg4pbf code.language-c, .css-fg4pbf pre:has(code.language-c) {
-    background-color: #ffe3c4 !important;
-}
-.css-ffhzg2 code.language-c, .css-ffhzg2 pre:has(code.language-c) {
-    background-color: #3d2000 !important;
+code:not(pre code) {
+    color: red;
+    background: #F0F2F6;
 }
 </style>""", unsafe_allow_html=True)
+

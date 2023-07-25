@@ -17,10 +17,10 @@ from streamlit.components.v1 import html
 from transformer_lens import HookedTransformer
 from collections import defaultdict
 
-from streamlit_styling import styling
-from generate_html import CSS
-from explore_prompts_utils import parse_str_tok_for_printing
-from generate_html import generate_4_html_plots
+from streamlit_styling import styling # type: ignore
+from generate_html import CSS # type: ignore
+from explore_prompts_utils import parse_str_tok_for_printing # type: ignore
+from generate_html import generate_4_html_plots # type: ignore
 
 import torch as t
 t.set_grad_enabled(False)
@@ -105,7 +105,8 @@ HTML_PLOTS = st.session_state.get("HTML_PLOTS", None)
 if BATCH_SIZE > 0:
     batch_idx = st.sidebar.radio("Pick a sequence", range(BATCH_SIZE), index=BATCH_SIZE-1, format_func=lambda x: st.session_state["prompt_list"][x])
     head_name = st.sidebar.radio("Pick a head", NEG_HEADS) #  + ["both"])
-    assert head_name != "both", "Both not implemented yet. Please choose either 10.7 or 11.10"
+    if head_name == "10.7":
+        EFFECTS = ["direct", "indirect", "indirect (excluding 11.10)", "both"]
     effect = st.sidebar.radio("Pick a type of intervention effect", EFFECTS)
     ln_mode = st.sidebar.radio("Pick a type of layernorm mode for the intervention", LN_MODES)
     ablation_mode = st.sidebar.radio("Pick a type of ablation", ABLATION_MODES)

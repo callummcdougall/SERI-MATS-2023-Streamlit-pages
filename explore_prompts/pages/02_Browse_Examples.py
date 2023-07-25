@@ -18,9 +18,9 @@ from streamlit.components.v1 import html
 import pickle
 import gzip
 
-from streamlit_styling import styling
-from generate_html import CSS
-from explore_prompts_utils import ST_HTML_PATH
+from streamlit_styling import styling # type: ignore
+from generate_html import CSS # type: ignore
+from explore_prompts_utils import ST_HTML_PATH # type: ignore
 
 import torch as t
 t.set_grad_enabled(False)
@@ -63,19 +63,22 @@ r"""---
 
 <details>
 <summary>Intervention effect</summary>
+<br>
 
-We have the option to measure:
+**Direct effect** = just the effect that the head has on the final logit output.
 
-* **Direct effect** (just the effect that the head has on the final logit output),
-* **Indirect effect** (the effect of all paths from the head to the final logit output *except for* the direct path),
-* **Both** (the sum of the direct and indirect effects).
+**Indirect effect** = the effect of all paths from the head to the final logit output *except for* the direct path.
 
-Also, if we're dealing with head 10.7, we have the extra option **Indirect effect (excluding head 11.10)**. This is because head 11.10 also performs copy-suppression, and if it's reading the output from head 10.7 then it might not need to perform copy-suppression (because copy-suppression is a self-correcting mechanism: successfully copy-suppressing removes the signal from the query-side residual stream which is used for copy-suppression). It's useful to be able to measure the indirect effect of 10.7 which doesn't go through 11.10 (and validate that this is small).
+**Both** = the sum of the direct and indirect effects.
+
+**Indirect (excluding 11.10)** = if we're looking at head 10.7, then it's informative to look at the indirect effect not counting the path from 10.7 to 11.10. This is because both these heads are doing copy-suppression, and copy-suppression is self-correcting (i.e. once you do it, you remove the signal that causes it to be done).
                     
 </details>
 
 <details>
 <summary>LayerNorm mode</summary>
+
+<br>
 
 If "frozen", then we use the same layernorm parameters than we did in the clean run (so e.g. the direct effect will just be a linear function of the output of the head). If "unfrozen", then the layernom parameters are recomputed for the new ablated run.
                     
@@ -84,11 +87,13 @@ If "frozen", then we use the same layernorm parameters than we did in the clean 
 <details>
 <summary>Ablation type</summary>
 
+<br>
+
 We can zero-ablate the output of our head, or mean-ablate. Mean ablation is more principled, because it takes into account things like a constant bias term.
                     
 </details>
 
-""")
+""", unsafe_allow_html=True)
 
 # HTML_LOSS = HTML_PLOTS["LOSS"][(batch_idx, head_name, full_ablation_mode)]
 HTML_LOGITS_ORIG = HTML_PLOTS["LOGITS_ORIG"][(batch_idx,)]

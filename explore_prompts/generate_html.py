@@ -28,11 +28,11 @@ import numpy as np
 import time
 import itertools
 
-from explore_prompts_utils import (
+from explore_prompts_utils import (  # type: ignore
     ST_HTML_PATH,
     NEGATIVE_HEADS
 )
-from model_results_3 import (
+from model_results_3 import (  # type: ignore
     ModelResults,
     get_model_results
 )
@@ -524,7 +524,7 @@ def generate_html_for_DLA_plot(
     for importances_pos_raw, importances_neg_raw in zip(all_importances_pos_raw, all_importances_neg_raw):
         denom = 2 * max(2.5, importances_pos_raw.max().item(), importances_neg_raw.max().item())
         all_importances["pos"].append((0.5 + (importances_pos_raw / denom)).tolist())
-        all_importances["neg"].append((0.5 + (importances_neg_raw / denom)).tolist())
+        all_importances["neg"].append((0.5 - (importances_neg_raw / denom)).tolist())
 
     words = rearrange_list(model.to_str_tokens(toks.flatten()), seq_len)
     words_nbsp = [list(map(lambda word: word.replace(" ", "&nbsp;"), words_list)) + ["(can't see next token)"] for words_list in words]
@@ -661,12 +661,12 @@ def generate_4_html_plots(
             if verbose: print(f"{'LOGITS ABLATED '+head_name:<20} ... ", end="\r"); t0 = time.time()
 
             # Save new log probs (post-ablation)
-            for full_ablation_type, logprobs_by_head in model_results.logits.items():
+            for full_ablation_type, logits_by_head in model_results.logits.items():
                 full_ablation_type_name = "+".join(full_ablation_type)
                 if head_name not in full_ablation_type_name: # this makes sure "indirect excluding 11.10" isn't counted for head 11.10
                     html_list = generate_html_for_logit_plot(
                         full_toks = data_toks,
-                        full_logprobs = logprobs_by_head[layer, head],
+                        full_logprobs = logits_by_head[layer, head].log_softmax(-1),
                         full_non_ablated_logprobs = logprobs_orig,
                         model = model,
                     )

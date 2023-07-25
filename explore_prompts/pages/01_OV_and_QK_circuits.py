@@ -20,6 +20,8 @@ from jaxtyping import Float
 import plotly.express as px
 import pandas as pd
 import textwrap
+import torch as t
+t.set_grad_enabled(False)
 # from transformers import AutoTokenizer
 
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
@@ -65,7 +67,7 @@ short_error_msg = """
 
 You should use single or double quotes to specify your tokens, e.g. `' pier'` or `" pier"`. When entering multiple tokens, they should be comma-separated. For example, the input `' pier', ' Pier'` will be accepted."""
 
-def customwrap(s, width=90):
+def customwrap(s, width=70):
     return "<br>".join(textwrap.wrap(s, width=width))
 
 
@@ -84,6 +86,7 @@ def plot_full_matrix_histogram(
 
     But if "flip" is True, then it looks at what things attend to src most (OV), or what causes dest to be most suppressed (OV).
     '''
+    _head = head.replace(".", "")
     tokenizer = dict_to_store_less["tokenizer"]
     W_EE_V = dict_to_store_less["W_EE_V"].float()
     W_U_O = dict_to_store_less["W_U_O"].float()
@@ -228,9 +231,10 @@ def plot_full_matrix_histogram(
 ST_HTML_PATH = Path(root_dir) / "media"
 
 @st.cache_data(show_spinner=False, max_entries=1)
-def return_dict_to_store_less():
+def get_dict_to_store_less():
     return pickle.load(gzip.open(ST_HTML_PATH / f"OV_QK_circuits_less.pkl", "rb"))
-dict_to_store_less = return_dict_to_store_less()
+
+dict_to_store_less = get_dict_to_store_less()
 
 st.markdown(
 r"""
@@ -337,7 +341,8 @@ def format_user_input(s: str):
             return
     return s
 
-def display_histograms(
+@st.cache_data(show_spinner=False, max_entries=1)
+def create_histograms(
     src_input: str,
     dest_input: str,
     k: int,
@@ -349,9 +354,9 @@ def display_histograms(
     # Remove the whitespace from each token, and make sure it's wrapped with quotations
     # Also check if any of them returned "None", in which case we should return None
     src_str_toks = list(map(lambda x: format_user_input(x.strip()), src_input_split))
-    if None in src_str_toks: return
+    if None in src_str_toks: return None, None
     dest_str_toks = list(map(lambda x: format_user_input(x.strip()), dest_input_split))
-    if None in dest_str_toks: return
+    if None in dest_str_toks: return None, None
     # Check if any are just whitespace, e.g. if input was {" pier",} then this might have accidentally created whitespace
 
     tokenizer = dict_to_store_less["tokenizer"]
@@ -360,7 +365,7 @@ def display_histograms(
         _s = s if not s.startswith(" ") else "Ġ" + s[1:]
         if _s not in tokenizer.vocab:
             with error_box: st.error(error_msg.format(s=s, msg=msg))
-            return
+            return None, None
 
     hist_QK = plot_full_matrix_histogram(
         dict_to_store_less,
@@ -372,7 +377,7 @@ def display_histograms(
         head="10.7",
         flip=(focus_on=="source"),
     )
-    if hist_QK is None: return
+    if hist_QK is None: return None, None
 
     hist_OV = plot_full_matrix_histogram(
         dict_to_store_less,
@@ -384,9 +389,7 @@ def display_histograms(
         head="10.7",
         flip=(focus_on=="destination")
     )
-
-    st.session_state["QK"] = hist_QK
-    st.session_state["OV"] = hist_OV
+    return hist_QK, hist_OV
 
 
 # Function to tell the Streamlit page that the histograms should be displayed, with params that will be defined below.
@@ -414,17 +417,10 @@ st.markdown("<br>", unsafe_allow_html=True)
 cols2 = st.columns(2)
 if st.session_state.get("waiting_to_display", False):
     st.session_state["waiting_to_display"] = False
-    display_histograms(
-        src_input = st.session_state["src_input"],
-        dest_input = st.session_state["dest_input"],
-        k = st.session_state["k"], 
-        focus_on = st.session_state["focus_on"],
-    )
-    if "QK" in st.session_state:
-        QK = st.session_state.pop("QK")
-        OV = st.session_state.pop("OV")
-        with cols2[0]: st.plotly_chart(QK, use_container_width=True)
-        with cols2[1]: st.plotly_chart(OV, use_container_width=True)
+    hist_QK, hist_OV = create_histograms(st.session_state.src_input, st.session_state.dest_input, st.session_state.k, st.session_state.focus_on)
+    if hist_QK is not None:
+        with cols2[0]: st.plotly_chart(hist_QK, use_container_width=True)
+        with cols2[1]: st.plotly_chart(hist_OV, use_container_width=True)
 
 st.markdown(
 r"""
