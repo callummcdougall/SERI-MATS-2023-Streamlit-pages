@@ -51,7 +51,10 @@ except ModuleNotFoundError:
 import gc
 import transformer_lens
 from transformer_lens import *
-from transformer_lens.utils import *
+
+# pytest annoyingly picks up on test_prompt so import all *other* things in utils manually
+from transformer_lens.utils import select_compatible_kwargs, download_file_from_hf, clear_huggingface_cache, print_gpu_mem, get_corner, to_numpy, lm_cross_entropy_loss, lm_accuracy, gelu_new, gelu_fast, solu, keep_single_column, tokenize_and_concatenate, sample_logits, get_act_name, remove_batch_dim, transpose, composition_scores, get_dataset, is_square, is_lower_triangular, check_structure
+
 from transformer_lens.hook_points import HookPoint
 
 def to_tensor(

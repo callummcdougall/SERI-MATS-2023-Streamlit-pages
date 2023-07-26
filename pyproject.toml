@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "transformer-lens"
 version = "0.0.0" # This is automatically set by the CD pipeline on release
-description = "An implementation of transformers tailored for mechanistic interpretability."
+description = "An implementation of transformers tailored for mechanistic interpretability. Maybe we can add pip install git+https://github.com/vacancy/einshape@6842ff1971b5b48b5b1928b5f756265b6d8f97c9 to this pyproject file?"
 authors = ["Neel Nanda <77788841+neelnanda-io@users.noreply.github.com>"]
 license = "MIT"
 readme = "README.md"

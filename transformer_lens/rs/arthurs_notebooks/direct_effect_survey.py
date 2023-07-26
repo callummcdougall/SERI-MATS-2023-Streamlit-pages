@@ -27,7 +27,7 @@ BATCH_SIZE = 25 # seems to be about the limit of what this box can handle
 NUM_THINGS = 300
 USE_RANDOM_SAMPLE = False
 INDIRECT = True # disable for orig funcitonality
-USE_GPT2XL = True
+USE_GPT2XL = False
 
 # %%
 
@@ -80,6 +80,7 @@ if USE_GPT2XL:
 
 NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX = NEG_HEADS[model.cfg.model_name]
 END_STATE_HOOK = f"blocks.{model.cfg.n_layers-1}.hook_resid_post"
+final_ln_scale_hook_name = "ln_final.hook_scale"
 names_filter1 = (
     lambda name: name == END_STATE_HOOK
     or name.endswith("hook_result")
@@ -87,6 +88,8 @@ names_filter1 = (
     or name == get_act_name("resid_mid", NEGATIVE_LAYER_IDX)
     or name == get_act_name("resid_pre", NEGATIVE_LAYER_IDX+1)
     or name == get_act_name("resid_mid", NEGATIVE_LAYER_IDX+1)
+    or name == final_ln_scale_hook_name
+    or "hook_scale" in name
 )
 
 model = model.to("cuda:0")
@@ -110,32 +113,26 @@ my_loss = get_metric_from_end_state(model, end_state.to(DEVICE), mytargets).cpu(
 
 # %%
 
+# see also the full test in arthur_utils file
 their_loss = model(
     mybatch.to(DEVICE),
     return_type="loss",
     loss_per_token=True,
 ).cpu()
-
-# %%
-
 assert list(their_loss.shape) == [
     my_loss.shape[0],
     my_loss.shape[1] - 1,
 ], f"their_loss.shape: {their_loss.shape}, my_loss.shape: {my_loss.shape}"
-
 torch.testing.assert_close(
     their_loss,
     my_loss[:, :-1],
     atol=1e-2,
     rtol=1e-2,
-)  # yey
+)
 
 # %%
 
 results_log = {}
-
-# %%
-
 tl_path = Path(__file__)
 assert "/TransformerLens/" in str(tl_path), "This is a hacky way to get the path"
 
@@ -150,9 +147,9 @@ def setter_hook(z, hook, setting_value, setter_head_idx=None):
 
     else: 
         if len(z.shape) == 3:
-            assert list(z.shape) == [BATCH_SIZE, max_seq_len, model.cfg.d_model] == list(setting_value.shape), f"z.shape: {z.shape}, setting_value.shape: {setting_value.shape}, {[BATCH_SIZE, max_seq_len, model.cfg.d_model]}"
+            assert len(z.shape) == 3 == len(setting_value.shape)
+            assert list(z.shape[:2]) == [BATCH_SIZE, max_seq_len] == list(setting_value.shape[:2]), f"z.shape: {z.shape}, setting_value.shape: {setting_value.shape}, {[BATCH_SIZE, max_seq_len]}"
         elif len(z.shape) == 4: # blegh annoying hack
-            assert "attn_in" in hook.name
             if len(setting_value.shape) == 3:
                 setting_value = einops.repeat(setting_value, "a b c -> a b n c", n=model.cfg.n_heads)
             assert list(z.shape) == list(setting_value.shape), f"z.shape: {z.shape}, setting_value.shape: {setting_value.shape}"
@@ -166,14 +163,12 @@ def resetter_hook(z, hook, reset_value):
     z += reset_value
     return z
 
-if (tl_path / "results_log_NO_MANUAL.pt").exists():
-    results_log = torch.load(tl_path / "results_log.pt")
+FREEZE_LN_ON_INTERMEDIATES = True
+all_losses = {}
 
-else:
-    results_log={}
-    for layer_idx, head_idx in [(NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX)] + list(itertools.product(
-        range(model.cfg.n_layers - 1, -1, -1), range(model.cfg.n_heads))
-    ):
+for FREEZE_LN in [False, True]:
+    results_log = {}
+    for layer_idx, head_idx in [(NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX)]:
         head_output_hook = f"blocks.{layer_idx}.attn.hook_result"
         head_output = cache[head_output_hook][
             :, :, head_idx
@@ -188,6 +183,7 @@ else:
             end_state=(end_state.cpu() - head_output + mean_output[None, None]).to(DEVICE),
             targets=mytargets,
             return_logits=True,
+            frozen_ln_scale=cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
         )
         mean_ablation_loss = mean_ablation_loss.cpu()
         mean_ablation_log_probs = torch.nn.functional.log_softmax(mean_ablation_logits, dim=-1)
@@ -208,6 +204,7 @@ else:
                 mode="kl",
                 log_probs_reference=log_xl_probs,
                 device="cuda",
+                frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
             )
 
             mean_ablation_kl = get_metric_from_end_state(
@@ -218,6 +215,7 @@ else:
                 mode="kl",
                 log_probs_reference=log_xl_probs,
                 device="cuda",
+                frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
             )
 
         if INDIRECT:
@@ -226,24 +224,72 @@ else:
             model.reset_hooks()
             model.add_hook(
                 head_output_hook,
-                partial(setter_hook, setting_value=mean_output, setter_head_idx=head_idx),
+                partial(setter_hook, setting_value=mean_output.to(DEVICE), setter_head_idx=head_idx),
             )
             _, indirect_cache = model.run_with_cache(
-                mybatch.to("cuda:0"),
+                mybatch.cuda(),
                 names_filter=lambda name: name == END_STATE_HOOK,
-                device="cpu",
             )
+            model.reset_hooks()
+
             mean_ablated_total_loss = get_metric_from_end_state(
                 model=model,
                 end_state=indirect_cache[END_STATE_HOOK].to(DEVICE),
                 targets=mytargets,
                 return_logits=False,
+                frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
             ).cpu()
+
+            if FREEZE_LN:
+                old_mean_ablated_indirect_loss = mean_ablated_indirect_loss.clone()
+
             mean_ablated_indirect_loss = get_metric_from_end_state(
                 model=model,
                 end_state=(indirect_cache[END_STATE_HOOK].cpu() + head_output - mean_output[None, None]).to(DEVICE),
                 targets=mytargets,
                 return_logits=False,
+                frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
+                compare_ln_scales = FREEZE_LN,
+            )
+            if FREEZE_LN:
+                mean_ablated_indirect_loss, new_scales = mean_ablated_indirect_loss
+
+            if FREEZE_LN:
+                hist(
+                    [cache[final_ln_scale_hook_name].cpu().flatten(), new_scales.cpu().flatten()],
+                    names = ["Frozen", "Recomputed"],
+                    width=1600,
+                    height=600,
+                    opacity=0.7,
+                    marginal="box",
+                    template="simple_white",
+                )
+
+            # Also freeze intermediate LNs
+            # Empirically this does basically nothing lol though!
+            model.reset_hooks()
+            model.add_hook(
+                head_output_hook,
+                partial(setter_hook, setting_value=mean_output, setter_head_idx=head_idx),
+            )
+            for hook_name in [f"blocks.{layer_idx}.ln2.hook_scale" for layer_idx in range(NEGATIVE_LAYER_IDX, model.cfg.n_layers)] + [f"blocks.{layer_idx}.ln1.hook_scale" for layer_idx in range(NEGATIVE_LAYER_IDX+1, model.cfg.n_layers)]: # add freezing LN on the input hooks to the downstream MLPs and attention heads. We deal with the final LN in the get_metric function.
+                model.add_hook(
+                    hook_name,
+                    partial(setter_hook, setting_value=cache[hook_name].to(DEVICE), setter_head_idx=None),
+                )
+            
+            _, indirect_freeze_intermediate_cache = model.run_with_cache(
+                mybatch.to("cuda:0"),
+                names_filter=lambda name: name == END_STATE_HOOK,
+            )
+            model.reset_hooks()
+
+            mean_ablated_indirect_freeze_intermediate_loss = get_metric_from_end_state(
+                model=model,
+                end_state=(indirect_freeze_intermediate_cache[END_STATE_HOOK].cpu() + head_output - mean_output[None, None]).to(DEVICE),
+                targets=mytargets,
+                return_logits=False,
+                frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
             )
 
             if (NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX) == (layer_idx, head_idx) == (10, 7):
@@ -262,13 +308,13 @@ else:
                 _, controlled_indirect_cache = model.run_with_cache(
                     mybatch.to("cuda:0"),
                     names_filter=lambda name: name == END_STATE_HOOK,
-                    device="cpu",
                 )
                 controlled_indirect_loss = get_metric_from_end_state(
                     model=model,
-                    end_state=controlled_indirect_cache[END_STATE_HOOK].to(DEVICE),
+                    end_state=controlled_indirect_cache[END_STATE_HOOK],
                     targets=mytargets,
                     return_logits=False,
+                    frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
                 ).cpu()
 
                 # Add the total version, except 11.10 sees normal stuff
@@ -286,14 +332,14 @@ else:
                 _, total_control_11 = model.run_with_cache(
                     mybatch.to("cuda:0"),
                     names_filter=lambda name: name == END_STATE_HOOK,
-                    device="cpu",
                 )
 
                 total_control_11_loss = get_metric_from_end_state(
                     model=model,
-                    end_state=total_control_11[END_STATE_HOOK].to(DEVICE), # + head_output.to(DEVICE) - mean_output.to(DEVICE),
+                    end_state=total_control_11[END_STATE_HOOK], # + head_output.to(DEVICE) - mean_output.to(DEVICE),
                     targets=mytargets,
                     return_logits=False,
+                    frozen_ln_scale=cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
                 ).cpu()
 
         loss_changes = (mean_ablation_loss - my_loss).cpu()
@@ -305,62 +351,136 @@ else:
             assert INDIRECT
 
             all_losses = {
-                "loss": my_loss,
-                "mean_ablation_direct_loss": mean_ablation_loss,
-                "mean_ablated_total_loss": mean_ablated_total_loss,
-                "mean_ablated_indirect_loss": mean_ablated_indirect_loss,
+                **all_losses,
+                "clean": my_loss,
+                "mean_ablate_direct_effect" + ("_freeze" if FREEZE_LN else "") : mean_ablation_loss,
+                "mean_ablate_all_effects"+ ("_freeze" if FREEZE_LN else ""): mean_ablated_total_loss,
+                "mean_ablate_indirect_effects"+ ("_freeze" if FREEZE_LN else ""): mean_ablated_indirect_loss,
+                "mean_ablated_indirect_freeze_intermediate_loss"+ ("_freeze" if FREEZE_LN else ""): mean_ablated_indirect_freeze_intermediate_loss,
             }
 
             if (NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX) == (layer_idx, head_idx) == (10, 7):
-                all_losses["total_control_11_loss"]=total_control_11_loss
-                all_losses["controlled_indirect_loss"]=controlled_indirect_loss
+                all_losses["total_control_11_loss"+ ("_freeze" if FREEZE_LN else "")]=total_control_11_loss
+                all_losses["controlled_indirect_loss"+ ("_freeze" if FREEZE_LN else "")]=controlled_indirect_loss
 
             if USE_GPT2XL:
-                all_losses["gpt2xl_kl"] = gpt2xl_kl
-                all_losses["mean_ablation_kl"] = mean_ablation_kl
+                all_losses["gpt2xl_kl"+ ("_freeze" if FREEZE_LN else "")] = gpt2xl_kl
+                all_losses["mean_ablation_kl"+ ("_freeze" if FREEZE_LN else "")] = mean_ablation_kl
 
-            all_losses_keys = list(all_losses.keys())
-            for key in all_losses_keys:
-                all_losses[key] = einops.rearrange(
-                    all_losses[key], "batch seq_len -> (batch seq_len)"
-                )
-                print(key, all_losses[key].mean())
-
-            # sort all losses by mean
-            all_losses = dict(sorted(all_losses.items(), key=lambda x: x[1].mean()))
-
-            # actually I prefer a bar chart
-            px.bar(
-                x=[str(x) for x in list(all_losses.keys())],
-                y=[y.mean().item() for y in all_losses.values()],
-                color = ["blue" for _ in range(len(all_losses)-2)] + ["red", "blue"],
-                labels={
-                    "x": "10.7 Ablation Type",
-                    "y": "Average OWT Loss",
-                },
-                # error_y=[y.std().item()/np.sqrt(len(y)) for y in all_losses.values()], # TODO find a way to sample tons of points to drive down std
-            ).show()
-            normal_loss = all_losses.pop("loss")
-            # assert False
-
-        results_log[(layer_idx, head_idx)] = {
-            "mean_change_in_loss": flattened_loss_changes.mean().item(),
-            "std": flattened_loss_changes.std().item(),
-            "abs_mean": flattened_loss_changes.abs().mean().item(),
-            "flattened_loss_changes": flattened_loss_changes.cpu(),
-            "loss_changes": loss_changes.cpu(),
-            "mean_ablation_loss": mean_ablation_loss.cpu(),
-        }
-
-        if USE_GPT2XL:
-            results_log[(layer_idx, head_idx)]["gpt2xl_kl"] = gpt2xl_kl.cpu()
-            results_log[(layer_idx, head_idx)]["mean_ablation_kl"] = mean_ablation_kl.cpu()
-            results_log[(layer_idx, head_idx)]["gpt2xl_kl_change"] = (mean_ablation_kl - gpt2xl_kl).cpu()
-
-        print(list(results_log.items())[-1])
-        break
+all_losses_keys = list(all_losses.keys())
+for key in all_losses_keys:
+    all_losses[key] = einops.rearrange(
+        all_losses[key], "batch seq_len -> (batch seq_len)"
+    )
+    print(key, all_losses[key].mean())
 
 #%%
+
+# nice figure that is about how there's correlation between the two interventions
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        # x = (mean_ablated_indirect_loss.cpu()-my_loss.cpu()).flatten(),
+        # y = (old_mean_ablated_indirect_loss.cpu()-my_loss.cpu()).flatten(),
+        x = cache[final_ln_scale_hook_name].cpu().numpy().flatten(),
+        y = new_scales.cpu().numpy().flatten(),
+        mode = "markers",
+        # text = [f"{ii:.4f} {jj:.4f} {kk:.4f}" for ii, jj, kk in zip(mean_ablated_indirect_loss.cpu().flatten(), my_loss.cpu().flatten(), old_mean_ablated_indirect_loss.cpu().flatten(), strict=True)],
+        text = [f"{ii:.4f} {jj:.4f}" for ii, jj in zip(cache[final_ln_scale_hook_name].cpu().numpy().flatten(), new_scales.cpu().numpy().flatten(), strict=True)],
+        name = "Change in loss in individual example",
+    )
+)
+
+fig.update_layout(
+    xaxis_title = "Change in loss when we mean ablate indirect effects, and recompute LN",
+    yaxis_title = "Change in loss when we mean ablate indirect effects, and freeze LN",
+    height = 750,
+)
+
+# add y = x line
+fig.add_trace(
+    go.Scatter(
+        x = [-2, 2],
+        y = [-2, 2],
+        mode = "lines",
+        name = "y=x",
+    )
+)
+fig.show()
+
+#%%
+
+if SHOW_PLOT:
+    filtered_all_losses = {key: all_losses[key] for key in all_losses_keys if any([key.startswith(thing) for thing in ["clean", "mean_ablate_indirect_effects", "mean_ablate_direct_effect"]])}
+    # filtered_all_losses = deepcopy(all_losses)
+
+    sorted_losses = dict(sorted(filtered_all_losses.items(), key=lambda x: x[1].mean()))
+
+    # actually I prefer a bar chart
+    yvalues=[y.mean().item() for y in sorted_losses.values()]
+    fig = px.bar(
+        x=[str(x) for x in list(sorted_losses.keys())],
+        y=yvalues,
+        color = ["blue" for _ in range(len(sorted_losses)-1)] + ["red"],
+        labels={
+            "x": "10.7 Intervention",
+            "y": "Average OWT Loss",
+        },
+        # error_y=[y.std().item()/np.sqrt(len(y)) for y in sorted_losses.values()], # TODO find a way to sample tons of points to drive down std
+    )
+    maxy = max(yvalues)
+    miny = min(yvalues)
+    fig.update_layout(
+        yaxis_range=[miny - 0.1 * (maxy - miny), maxy + 0.1 * (maxy - miny)]
+    )
+
+    for inc in [0.001, 0.01]: # add line inc greater than clean loss, labellled inc increase
+        fig.add_shape(
+            type="line",
+            x0=-0.5,
+            y0=all_losses["clean"].mean().item() + inc,
+            x1=len(sorted_losses) - 0.5,
+            y1=all_losses["clean"].mean().item() + inc,
+            line=dict(
+                color="black",
+                width=4,
+                dash="dash",
+            ),
+        )
+        fig.add_annotation(
+            x=0,
+            y=all_losses["clean"].mean().item() + inc,
+            text=f"{inc} increase in loss",
+            showarrow=True,
+            arrowhead=1,
+            ax=0,
+            ay=-30,
+        )
+    
+    fig.show()
+    normal_loss = all_losses["clean"]
+
+results_log[(layer_idx, head_idx)] = {
+    "mean_change_in_loss": flattened_loss_changes.mean().item(),
+    "std": flattened_loss_changes.std().item(),
+    "abs_mean": flattened_loss_changes.abs().mean().item(),
+    "flattened_loss_changes": flattened_loss_changes.cpu(),
+    "loss_changes": loss_changes.cpu(),
+    "mean_ablation_loss": mean_ablation_loss.cpu(),
+}
+
+if USE_GPT2XL:
+    results_log[(layer_idx, head_idx)]["gpt2xl_kl"] = gpt2xl_kl.cpu()
+    results_log[(layer_idx, head_idx)]["mean_ablation_kl"] = mean_ablation_kl.cpu()
+    results_log[(layer_idx, head_idx)]["gpt2xl_kl_change"] = (mean_ablation_kl - gpt2xl_kl).cpu()
+
+print(list(results_log.items())[-1])
+
+#%%
+
+if not USE_GPT2XL:
+    warnings.warn("There may be a crash here, but it is intended as below here the file is only GPT2-XL KL Divergence experiments")
+    sys.exit(0) # rest of this file is for GPT2-XL...!
 
 all_kls = (gpt2xl_kl).flatten()[:20000]
 all_losses = (mean_ablation_loss - my_loss).flatten()[:20000]
@@ -375,6 +495,7 @@ px.scatter(
         "y": "Change in GPT-2 Small loss when mean ablating 10.7",
     }
 ).show()
+
 
 #%%
 

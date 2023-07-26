@@ -98,6 +98,7 @@ batched_tokens_loss = get_metric_from_end_state(
 
 head_output = cache[get_act_name("result", NEGATIVE_LAYER_IDX)][:, :, NEGATIVE_HEAD_IDX]
 assert head_output.shape == (BATCH_SIZE, MAX_SEQ_LEN, model.cfg.d_model)
+normalized_head_output = head_output / (head_output.var(dim=-1, keepdim=True) + model.cfg.eps)
 
 #%%
 
@@ -121,6 +122,7 @@ if ipython is not None and DO_LOGIT_LENS:
 #%%
 
 mean_head_output = einops.reduce(head_output, "b s d -> d", reduction="mean")
+normalized_mean_head_output = mean_head_output / (mean_head_output.var(dim=-1, keepdim=True) + model.cfg.eps)
 
 #%%
 
@@ -171,7 +173,7 @@ if ipython is not None and DO_LOGIT_LENS:
 top5p_tokens = batched_tokens[top5p_batch_indices]
 top5p_targets = torch.LongTensor([targets[top5p_batch_idx, top5p_seq_idx] for top5p_batch_idx, top5p_seq_idx in zip(top5p_batch_indices, top5p_seq_indices)])
 top5p_end_states = original_end_state[top5p_batch_indices, top5p_seq_indices]
-top5p_head_outputs = head_output[top5p_batch_indices, top5p_seq_indices]
+head_output = head_output[top5p_batch_indices, top5p_seq_indices]
 top5p_mean_ablated_loss = mean_ablated_loss[top5p_batch_indices, top5p_seq_indices]
 
 #%%
@@ -193,6 +195,7 @@ W_O = model.W_O.clone()[LAYER_IDX, HEAD_IDX] # d_head d_model
 
 resid_pre = cache[get_act_name("resid_pre", LAYER_IDX)]
 head_pre = model.blocks[LAYER_IDX].ln1(resid_pre)
+head_pre_normalized = head_pre / (head_pre.var(dim=-1, keepdim=True) + model.cfg.eps)
 head_v = cache[get_act_name("v", LAYER_IDX)][:, :, HEAD_IDX, :]
 head_pattern = cache[get_act_name("pattern", LAYER_IDX)][:, HEAD_IDX, :, :]
 
@@ -230,6 +233,7 @@ top_unembeds_per_position = einops.einsum(
     d_model d_vocab -> \
     batch key_pos d_vocab",
 )
+print(top_unembeds_per_position.norm())
 
 #%%
 
@@ -238,13 +242,57 @@ total_unembed = einops.reduce(
     "batch key_pos d_vocab -> batch d_vocab",
     reduction="sum",
 )
+print(total_unembed.norm())
 
 #%%
 
 average_unembed = einops.einsum(
-    mean_head_output,
+    normalized_mean_head_output,
     W_U,
     "d_model, d_model d_vocab -> d_vocab",
+)
+print(average_unembed.norm())
+
+#%%
+
+logit_lens_pre_ten = einops.einsum(
+    head_pre_normalized,
+    W_U,
+    "batch pos d_model, \
+    d_model d_vocab -> \
+    batch pos d_vocab",
+)
+print(logit_lens_pre_ten.norm())
+
+#%%
+
+logit_lens_pre_ten_probs = logit_lens_pre_ten.softmax(dim=-1)
+logit_lens_pre_ten_probs_cpu = logit_lens_pre_ten_probs.cpu()
+
+#%%
+
+logit_lens_top_pre_ten_probs = list(zip(*list(torch.topk(
+    logit_lens_pre_ten_probs_cpu,
+    dim = -1, 
+    k = 10,
+))))
+
+#%%
+
+logit_lens_of_head = einops.einsum(
+    normalized_head_output,
+    W_U,
+    "batch pos d_model, \
+    d_model d_vocab -> \
+    batch pos d_vocab",
+)
+
+#%%
+
+logit_lens_head_bottom_ten = torch.topk(
+    -logit_lens_of_head.cpu(),
+    k=10,
+    dim=-1,
 )
 
 #%%
@@ -256,9 +304,21 @@ def to_string(toks):
     s = s.replace("\n", "\\n")
     return s
 
+#%%
+
+cpu_probs = logits.softmax(dim=-1).cpu()
+top_probs = list(zip(*list(torch.topk(
+    cpu_probs,
+    dim = -1, 
+    k = 10,
+))))
+
+#%%
+
 for batch_idx in range(len(top_unembeds_per_position)):
+    assert top5p_seq_indices[batch_idx]+2 <= top_unembeds_per_position.shape[1], (top5p_seq_indices[batch_idx], top_unembeds_per_position.shape[1])
     the_logits = -top_unembeds_per_position[batch_idx][1:top5p_seq_indices[batch_idx]+2]
-    if ABS_MODE: 
+    if ABS_MODE:  # WAT
         the_logits = torch.abs(the_logits)
     max_logits = the_logits[:, 1:-1].max().item()
     my_obj = cv.logits.token_log_probs( # I am using this in a very cursed way: 
@@ -268,10 +328,35 @@ for batch_idx in range(len(top_unembeds_per_position)):
     )
 
     print("True completion:"+model.to_string(top5p_tokens[batch_idx][top5p_seq_indices[batch_idx]+1]))
-    print("Top negs:")
-    print(model.to_str_tokens(torch.topk(-total_unembed[batch_idx]+average_unembed, dim=-1, k=10).indices))
-    print("Top negs:", torch.topk(-total_unembed[batch_idx]+average_unembed, dim=-1, k=10).values)
-    print("Top poss:", torch.topk(total_unembed[batch_idx]-average_unembed, dim=-1, k=10).values)
+
+    print(
+        "\n10.7 Attentions\n", # TODO deal with ? char crap
+        sorted(list(zip(head_pattern[top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx], :top5p_seq_indices[batch_idx]+1].tolist(), model.to_str_tokens(top5p_tokens[batch_idx][:top5p_seq_indices[batch_idx]+1]), strict=True)), reverse=True)[:10],
+    )
+
+        # ugh why bugged
+        # my_att_obj = cv.attention.attention_patterns(
+        #     attention = head_pattern[top5p_batch_indices[batch_idx]:top5p_batch_indices[batch_idx]+1, :top5p_seq_indices[batch_idx]+1, :top5p_seq_indices[batch_idx]+1],
+        #     tokens = top5p_tokens[batch_idx][:top5p_seq_indices[batch_idx]+1], 
+        #     # data_str_toks_parsed[batch_idx], # list of length seqQ
+        #     # attention_head_names = ["0"],
+        # )
+
+    print("\nTop model predictions before 10.7:")
+    cur_ten_probs = logit_lens_top_pre_ten_probs[top5p_batch_indices[batch_idx]]
+    print(
+        list(zip(cur_ten_probs[0][top5p_seq_indices[batch_idx]].tolist(), model.to_str_tokens(cur_ten_probs[1][top5p_seq_indices[batch_idx]]), cur_ten_probs[1][top5p_seq_indices[batch_idx]].tolist(), strict=True))
+    )
+
+    print("\nTop negative logit changes from 10.7:\n", model.to_str_tokens(logit_lens_head_bottom_ten.indices[top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx]])) # TODO make this show logits too?
+
+    print("\nModel's top probs:")
+    cur_top_probs = top_probs[top5p_batch_indices[batch_idx]]
+
+    print(
+        list(zip(cur_top_probs[0][top5p_seq_indices[batch_idx]].tolist(), model.to_str_tokens(cur_top_probs[1][top5p_seq_indices[batch_idx]]), cur_top_probs[1][top5p_seq_indices[batch_idx]].tolist(), strict=True))
+    )
+
     display(my_obj)
 
 #%%

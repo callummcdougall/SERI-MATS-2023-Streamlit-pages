@@ -6,7 +6,7 @@ direct effect of NMS
 """
 
 from transformer_lens.cautils.notebook import *
-from transformer_lens.rs.callum.research_sprint.keys_fixed import project, get_effective_embedding_2
+from transformer_lens.rs.callum.keys_fixed import project, get_effective_embedding_2
 from transformer_lens.rs.arthurs_notebooks.arthur_utils import *
 import argparse
 
@@ -24,7 +24,7 @@ model.set_use_attn_result(True)
 # %%
 
 MAX_SEQ_LEN = 512
-BATCH_SIZE = 50
+BATCH_SIZE = 30
 batched_tokens, targets = get_filtered_webtext(model, batch_size=BATCH_SIZE, seed=1717, device="cuda", max_seq_len=MAX_SEQ_LEN)
 effective_embeddings = get_effective_embedding_2(model)
 
@@ -88,7 +88,6 @@ if ipython is not None:
         k=10,
         dim=-1,
     ).indices
-
 
 #%%
 
