@@ -42,7 +42,6 @@ def imshow(tensor, renderer=None, **kwargs):
     facet_labels = kwargs_pre.pop("facet_labels", None)
     facet_label_size = kwargs_pre.pop("facet_label_size", None)
     animation_labels = kwargs_pre.pop("animation_labels", None)
-    border = kwargs_pre.pop("border", False)
     if "color_continuous_scale" not in kwargs_pre:
         kwargs_pre["color_continuous_scale"] = "RdBu"
     if "margin" in kwargs_post and isinstance(kwargs_post["margin"], int):
@@ -64,9 +63,6 @@ def imshow(tensor, renderer=None, **kwargs):
         fig.layout.sliders[0]["currentvalue"]["prefix"] = ""
         for i, label in enumerate(animation_labels):
             fig.layout.sliders[0].steps[i].label = label
-    if border:
-        fig.update_xaxes(showline=True, linewidth=1, linecolor='black', mirror=True)
-        fig.update_yaxes(showline=True, linewidth=1, linecolor='black', mirror=True)
     # things like `xaxis_tickmode` should be applied to all subplots. This is super janky lol but I'm under time pressure
     for setting in ["tickangle"]:
       if f"xaxis_{setting}" in kwargs_post:

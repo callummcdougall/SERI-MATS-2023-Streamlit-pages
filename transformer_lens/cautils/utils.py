@@ -15,6 +15,7 @@ import wandb
 import pickle
 import sys
 import time
+import gzip
 from datasets import load_dataset
 from copy import deepcopy
 from jaxtyping import Float, Int, Bool, jaxtyped

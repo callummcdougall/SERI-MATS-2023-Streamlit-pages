@@ -782,7 +782,15 @@ def _ioi_metric_noising(
 
 
 def generate_data_and_caches(
-    N: int, model: HookedTransformer, verbose: bool = False, seed: int = 42, prepend_bos: bool = False, only_ioi: bool = False, symmetric: bool = False, return_cache: bool = True,
+    N: int,
+    model: HookedTransformer,
+    verbose: bool = False,
+    seed: int = 42,
+    prepend_bos: bool = False,
+    only_ioi: bool = False,
+    symmetric: bool = False,
+    return_cache: bool = True,
+    names_filter: Optional[Callable] = None,
 ) -> Tuple[IOIDataset, IOIDataset, ActivationCache, ActivationCache, Callable]:
 
     ioi_dataset = IOIDataset(
@@ -802,7 +810,10 @@ def generate_data_and_caches(
 
     model.reset_hooks(including_permanent=True)
 
-    ioi_logits_original, ioi_cache = model.run_with_cache(ioi_dataset.toks)
+    if names_filter is None:
+        ioi_logits_original, ioi_cache = model.run_with_cache(ioi_dataset.toks)
+    else:
+        ioi_logits_original, ioi_cache = model.run_with_cache(ioi_dataset.toks, names_filter=names_filter)
 
     if only_ioi:
         return ioi_dataset, ioi_cache
