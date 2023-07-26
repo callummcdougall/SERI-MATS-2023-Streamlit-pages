@@ -2,8 +2,8 @@
 import sys, os
 for root_dir in [
     os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts", # For Arthur's branch
-    "/app/seri_mats_23_streamlit_pages/explore_prompts", # For Streamlit page (public)
-    os.getcwd().split("seri_mats_23_streamlit_pages")[0] + "seri_mats_23_streamlit_pages/explore_prompts", # For Arthur's branch
+    "/app/seri-mats-2023-streamlit-pages/explore_prompts", # For Streamlit page (public)
+    os.getcwd().split("seri-mats-2023-streamlit-pages")[0] + "seri-mats-2023-streamlit-pages/explore_prompts", # For Arthur's branch
 ]:
     if os.path.exists(root_dir):
         break
@@ -29,7 +29,7 @@ import platform
 is_local = (platform.processor() != "")
 if not is_local:
     st.error(r"""
-This page can't be run publicly, because of memory consumption issues. To run the page locally, clone the [GitHub repo](https://github.com/callummcdougall/seri_mats_23_streamlit_pages), navigate to `explore_prompts`, run `pip install -r requirements.txt` to install everything in the requirements file, and then run `streamlit run Home.py` to open the page in your browser.
+This page can't be run publicly, because of memory consumption issues. To run the page locally, clone the [GitHub repo](https://github.com/callummcdougall/seri-mats-2023-streamlit-pages), navigate to `explore_prompts`, run `pip install -r requirements.txt` to install everything in the requirements file, and then run `streamlit run Home.py` to open the page in your browser.
 """)
     st.stop()
 
