@@ -50,7 +50,8 @@ model.set_use_attn_result(True)
 
 MAX_SEQ_LEN = 512
 BATCH_SIZE = 25
-batched_tokens, targets = get_filtered_webtext(model, batch_size=BATCH_SIZE, seed=1717, device="cuda", max_seq_len=MAX_SEQ_LEN)
+SEE = 1717
+batched_tokens, targets = get_filtered_webtext(model, batch_size=BATCH_SIZE, seed=SEED, device="cuda", max_seq_len=MAX_SEQ_LEN)
 effective_embeddings = get_effective_embedding_2(model)
 JSON_FNAME = "../arthur/json_data"
 TOTAL_EFFECT_MIDS = True
@@ -205,10 +206,16 @@ max_importance_examples = sorted(
 all_top_5_percent = max_importance_examples[: len(max_importance_examples)//20]
 
 np.random.seed(799)
-# warnings.warn("No shuffle!!!")
-np.random.shuffle(all_top_5_percent)
-top_5_percent = all_top_5_percent[: BATCH_SIZE]
+warnings.warn("No shuffle!!! Instead sort by near coming")
+# np.random.shuffle(all_top_5_percent)
 
+all_top_5_percent = sorted(
+    all_top_5_percent,
+    key=lambda x: x[1],
+    reverse=False,
+)
+
+top_5_percent = all_top_5_percent[: BATCH_SIZE]
 top5p_batch_indices = [x[0] for x in top_5_percent]
 top5p_seq_indices = [x[1] for x in top_5_percent]
 
@@ -376,7 +383,7 @@ for batch_idx in range(len(top_unembeds_per_position)):
         to_string = to_string
     )
 
-    print("True completion:"+model.to_string(top5p_tokens[batch_idx][top5p_seq_indices[batch_idx]+1]))
+    print(f"True completion for {SEED=} {top5p_batch_indices[batch_idx]=} {top5p_seq_indices[batch_idx]=}:"+model.to_string(top5p_tokens[batch_idx][top5p_seq_indices[batch_idx]+1]))
 
     print(
         "\n10.7 Attentions\n", # TODO deal with ? char crap
