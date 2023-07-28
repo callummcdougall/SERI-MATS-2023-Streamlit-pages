@@ -49,10 +49,11 @@ model.set_use_attn_result(True)
 # %%
 
 MAX_SEQ_LEN = 512
-BATCH_SIZE = 50
+BATCH_SIZE = 25
 batched_tokens, targets = get_filtered_webtext(model, batch_size=BATCH_SIZE, seed=1717, device="cuda", max_seq_len=MAX_SEQ_LEN)
 effective_embeddings = get_effective_embedding_2(model)
 JSON_FNAME = "../arthur/json_data"
+TOTAL_EFFECT_MIDS = True
 
 # %%
 
@@ -61,13 +62,13 @@ JSON_FNAME = "../arthur/json_data"
 # See change in loss
 
 NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX = NEG_HEADS[model.cfg.model_name]
-# for NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX in [(10, 0), (10, 7), (9, 9), (11, 10)] + list(itertools.product(range(11, -1, -1), range(12))):
-
 LAYER_IDX, HEAD_IDX = NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX
 
 END_STATE_HOOK = f"blocks.{model.cfg.n_layers-1}.hook_resid_post"
+
 # warnings.warn("Changed to scores for a diff comparison")
 # attention_pattern_hook_name = get_act_name("attn_scores", NEGATIVE_LAYER_IDX)
+ln_final_name = "ln_final.hook_scale"
 attention_pattern_hook_name = get_act_name("pattern", NEGATIVE_LAYER_IDX)
 names_filter1 = (
     lambda name: name == END_STATE_HOOK
@@ -76,6 +77,7 @@ names_filter1 = (
     or name==f"blocks.{NEGATIVE_LAYER_IDX}.attn.hook_result"
     or name==attention_pattern_hook_name
     or name==get_act_name("v", LAYER_IDX)
+    or name==ln_final_name
 )
 logits, cache = model.run_with_cache(
     batched_tokens,
@@ -133,14 +135,61 @@ mean_ablated_loss = get_metric_from_end_state(
     targets=targets,
 )
 
+#%%
+
+def setter_hook(z, hook, setting_value, setter_head_idx=None):
+
+    if setter_head_idx is not None:
+        assert list(z.shape) == [BATCH_SIZE, MAX_SEQ_LEN, model.cfg.n_heads, model.cfg.d_model]
+        z[:, :, setter_head_idx] = setting_value
+
+    else: 
+        if len(z.shape) == 3:
+            assert len(z.shape) == 3 == len(setting_value.shape)
+            assert list(z.shape[:2]) == [BATCH_SIZE, MAX_SEQ_LEN] == list(setting_value.shape[:2]), f"z.shape: {z.shape}, setting_value.shape: {setting_value.shape}, {[BATCH_SIZE, MAX_SEQ_LEN]}"
+        elif len(z.shape) == 4: # blegh annoying hack
+            if len(setting_value.shape) == 3:
+                setting_value = einops.repeat(setting_value, "a b c -> a b n c", n=model.cfg.n_heads)
+            assert list(z.shape) == list(setting_value.shape), f"z.shape: {z.shape}, setting_value.shape: {setting_value.shape}"
+
+        z[:] = setting_value
+
+    return z
+
 # %%
+
+if TOTAL_EFFECT_MIDS:
+    
+    # Get some different calculations of loss that come from just ablating the direct effect
+    
+    model.reset_hooks()
+    model.add_hook(
+        "blocks.10.attn.hook_result",
+        partial(setter_hook, setting_value=einops.repeat(mean_head_output, "d -> batch seq d", seq=MAX_SEQ_LEN, batch=BATCH_SIZE).clone(), setter_head_idx=NEGATIVE_HEAD_IDX), 
+    )
+    total_effect_end_state = model.run_with_cache(
+        batched_tokens,
+        names_filter=lambda name: name == END_STATE_HOOK,
+    )[1][END_STATE_HOOK]
+    model.reset_hooks()
+
+    total_effect_end_loss = get_metric_from_end_state(
+        model=model,
+        end_state=total_effect_end_state,
+        targets=targets,
+        frozen_ln_scale=cache[ln_final_name],
+    )
+
+#%%
+
+loss_to_use = total_effect_end_loss if TOTAL_EFFECT_MIDS else mean_ablated_loss
 
 max_importance_examples = sorted(
     [
         (
             batch_idx,
             seq_idx,
-            (mean_ablated_loss-batched_tokens_loss)[batch_idx, seq_idx].item(),
+            (loss_to_use-batched_tokens_loss)[batch_idx, seq_idx].item(),
         )
         for batch_idx, seq_idx in itertools.product(
             range(BATCH_SIZE), range(MAX_SEQ_LEN)
@@ -174,7 +223,7 @@ top5p_tokens = batched_tokens[top5p_batch_indices]
 top5p_targets = torch.LongTensor([targets[top5p_batch_idx, top5p_seq_idx] for top5p_batch_idx, top5p_seq_idx in zip(top5p_batch_indices, top5p_seq_indices)])
 top5p_end_states = original_end_state[top5p_batch_indices, top5p_seq_indices]
 head_output = head_output[top5p_batch_indices, top5p_seq_indices]
-top5p_mean_ablated_loss = mean_ablated_loss[top5p_batch_indices, top5p_seq_indices]
+top5p_loss_to_use = loss_to_use[top5p_batch_indices, top5p_seq_indices]
 
 #%%
 
@@ -417,7 +466,7 @@ print(new_loss.mean())
 #%%
 
 print( # scrubbed loss
-    (top5p_mean_ablated_loss - new_loss).mean() / (top5p_mean_ablated_loss - top5p_losses).mean()
+    (top5p_loss_to_use - new_loss).mean() / (top5p_loss_to_use - top5p_losses).mean()
 )
 
 #%%

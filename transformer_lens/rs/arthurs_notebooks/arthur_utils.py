@@ -265,4 +265,3 @@ def test_get_metric_from_end_state(freeze_ln):
         atol=1e-2,
         rtol=1e-2,
     ) # yey
-

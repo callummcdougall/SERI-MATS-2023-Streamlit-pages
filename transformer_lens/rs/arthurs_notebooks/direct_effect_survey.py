@@ -10,7 +10,7 @@ from transformer_lens.rs.callum.keys_fixed import project
 from transformer_lens.rs.arthurs_notebooks.arthur_utils import get_metric_from_end_state
 import argparse
 
-model = HookedTransformer.from_pretrained(
+model: HookedTransformer = HookedTransformer.from_pretrained(
     "gpt2-small",
     center_unembed=True,
     center_writing_weights=True,
@@ -23,7 +23,7 @@ model.set_use_attn_in(True)
 DEVICE = "cuda"
 SHOW_PLOT = True
 DATASET_SIZE = 500
-BATCH_SIZE = 25 # seems to be about the limit of what this box can handle
+BATCH_SIZE = 20 # seems to be about the limit of what this box can handle
 NUM_THINGS = 300
 USE_RANDOM_SAMPLE = False
 INDIRECT = True # disable for orig funcitonality
@@ -31,7 +31,7 @@ USE_GPT2XL = False
 
 # %%
 
-dataset = get_webtext(seed=17299)
+dataset = get_webtext(seed=17279)
 max_seq_len = model.tokenizer.model_max_length
 
 # %%
@@ -133,30 +133,11 @@ torch.testing.assert_close(
 # %%
 
 results_log = {}
+
 tl_path = Path(__file__)
 assert "/TransformerLens/" in str(tl_path), "This is a hacky way to get the path"
-
 while tl_path.stem!="TransformerLens" and str(tl_path.parent)!=str(tl_path):
     tl_path = tl_path.parent
-
-def setter_hook(z, hook, setting_value, setter_head_idx=None):
-
-    if setter_head_idx is not None:
-        assert list(z.shape) == [BATCH_SIZE, max_seq_len, model.cfg.n_heads, model.cfg.d_model]
-        z[:, :, setter_head_idx] = setting_value
-
-    else: 
-        if len(z.shape) == 3:
-            assert len(z.shape) == 3 == len(setting_value.shape)
-            assert list(z.shape[:2]) == [BATCH_SIZE, max_seq_len] == list(setting_value.shape[:2]), f"z.shape: {z.shape}, setting_value.shape: {setting_value.shape}, {[BATCH_SIZE, max_seq_len]}"
-        elif len(z.shape) == 4: # blegh annoying hack
-            if len(setting_value.shape) == 3:
-                setting_value = einops.repeat(setting_value, "a b c -> a b n c", n=model.cfg.n_heads)
-            assert list(z.shape) == list(setting_value.shape), f"z.shape: {z.shape}, setting_value.shape: {setting_value.shape}"
-
-        z[:] = setting_value
-
-    return z
 
 def resetter_hook(z, hook, reset_value):
     assert list(z.shape) == [BATCH_SIZE, max_seq_len, model.cfg.d_model]
