@@ -50,7 +50,7 @@ model.set_use_attn_result(True)
 
 MAX_SEQ_LEN = 512
 BATCH_SIZE = 25
-SEE = 1717
+SEED = 1
 batched_tokens, targets = get_filtered_webtext(model, batch_size=BATCH_SIZE, seed=SEED, device="cuda", max_seq_len=MAX_SEQ_LEN)
 effective_embeddings = get_effective_embedding_2(model)
 JSON_FNAME = "../arthur/json_data"
@@ -358,7 +358,7 @@ ABS_MODE = True
 def to_string(toks):
     s = model.to_string(toks)
     s = s.replace("\n", "\\n")
-    return s
+    return "|" + s
 
 #%%
 
@@ -371,7 +371,7 @@ top_probs = list(zip(*list(torch.topk(
 
 #%%
 
-for batch_idx in range(len(top_unembeds_per_position)):
+for batch_idx in range(11): #range(len(top_unembeds_per_position)):
     assert top5p_seq_indices[batch_idx]+2 <= top_unembeds_per_position.shape[1], (top5p_seq_indices[batch_idx], top_unembeds_per_position.shape[1])
     the_logits = -top_unembeds_per_position[batch_idx][1:top5p_seq_indices[batch_idx]+2]
     if ABS_MODE:  # WAT
