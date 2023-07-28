@@ -43,7 +43,7 @@ ioi_dataset = IOIDataset(
     N=N,
     tokenizer=model.tokenizer,
     prepend_bos=True,
-    seed=35795,
+    seed=32,
     device="cuda",
 )
 
@@ -77,7 +77,7 @@ ln_final_name = f"ln_final.hook_scale"
 model.set_use_attn_result(True)
 logits, cache = model.run_with_cache(
     ioi_dataset.toks,
-    names_filter = lambda name: name in [hook_pre_name] +  [f"blocks.{layer_idx}.attn.hook_result" for layer_idx in range(9, 12)] + [f"blocks.{layer_idx}.hook_resid_pre" for layer_idx in range(9, 12)] + ["blocks.10.attn.hook_result"] + [ln_pre10_name, ln_pre11_name, ln_final_name],
+    names_filter = lambda name: name in [hook_pre_name] +  [f"blocks.{layer_idx}.attn.hook_result" for layer_idx in range(8, 12)] + [f"blocks.{layer_idx}.hook_resid_pre" for layer_idx in range(9, 12)] + ["blocks.10.attn.hook_result"] + [ln_pre10_name, ln_pre11_name, ln_final_name],
 )
 
 pre_neg_resid = cache[hook_pre_name][torch.arange(N), ioi_dataset.word_idx["end"]]
@@ -99,7 +99,7 @@ logit_diff_directions = model.W_U.T[ioi_dataset.io_tokenIDs] - model.W_U.T[ioi_d
 
 logit_diffs_per_head = torch.zeros(12, 12)
 
-for layer_idx in range(9, 12):
+for layer_idx in range(8, 12):
     for head_idx in range(12):
         # Get the logit difference for this head alone
 
@@ -121,27 +121,37 @@ imshow(
 
 #%%
 
-name_mover_head_outputs = torch.zeros(12, 100, model.cfg.d_model).cuda()
+name_mover_head_outputs = torch.zeros(12, 12, 100, model.cfg.d_model).cuda()
 
-for NMH in [
-    (9, 6),
+NMHs = [
+    # (8, 0), 
+    # (8, 6), 
+    # (8, 10),
+    # (8, 11),
+    (9, 6), # Tons of extra NMHs
     (9, 9),
-    (10, 0),
+    # (9, 7), 
+    # (9, 0),
+    # (10, 0),
     (10, 7),
-]:
-    name_mover_head_outputs[NMH[0]] += cache[f"blocks.{NMH[0]}.attn.hook_result"][torch.arange(N), ioi_dataset.word_idx["end"], NMH[1]]
+    # (10, 2), 
+    # (10, 7),
+    # (10, 6),
+]
 
-parallel_component, perp_component = torch.zeros((12, 100, model.cfg.d_model)).cuda(), torch.zeros((12, 100, model.cfg.d_model)).cuda()
+parallel_component, perp_component = torch.zeros((12, 12, 100, model.cfg.d_model)).cuda(), torch.zeros((12, 12, 100, model.cfg.d_model)).cuda()
 
-for layer_idx in [9, 10]:
+for layer_idx, head_idx in NMHs:
+    NMH = (layer_idx, head_idx)
+    name_mover_head_outputs[NMH[0], NMH[1]] += cache[f"blocks.{NMH[0]}.attn.hook_result"][torch.arange(N), ioi_dataset.word_idx["end"], NMH[1]]
+
     cur_parallel_component, cur_perp_component = project(
-        name_mover_head_outputs[layer_idx],
+        name_mover_head_outputs[layer_idx, head_idx],
         model.W_U[:, ioi_dataset.io_tokenIDs].T,
     )
-    parallel_component[layer_idx] += cur_parallel_component
-    perp_component[layer_idx] += cur_perp_component
+    parallel_component[layer_idx, head_idx] = cur_parallel_component
+    perp_component[layer_idx, head_idx] = cur_perp_component
     print(cur_parallel_component.norm(dim=-1).mean().item(), cur_perp_component.norm(dim=-1).mean().item())
-
 
 # %%
 
@@ -151,20 +161,24 @@ MODES = ["parallel", "perp"]
 head_logit_diffs = {
     mode: torch.zeros((12, 12)) for mode in MODES
 }
+PERSON_MODE: Literal["Cody", "Arthur"] = "Arthur"
 
 for mode in MODES:
     for layer_idx, head_idx in tqdm(list(itertools.product(range(10, 12), range(12)))):
-
-        thing_to_remove = (perp_component if mode == "parallel" else parallel_component).clone()
-        thing_to_remove = thing_to_remove[:layer_idx].sum(dim=0)
-        
-        thing_to_remove /= (pre_scales[layer_idx] if FREEZE_INPUT_LAYER_NORM else 1.0)
-
         model.reset_hooks()
-        model.add_hook(
-            f"blocks.{layer_idx}.hook_q_{'normalized_' if FREEZE_INPUT_LAYER_NORM else ''}input",
-            partial(editor_hook, new_value=-thing_to_remove, replace=False, head_idx=head_idx),
-        )
+        if PERSON_MODE == "Arthur":
+            thing_to_remove = (perp_component if mode == "parallel" else parallel_component).clone()
+            thing_to_remove = thing_to_remove[:layer_idx].sum(dim=(0, 1))
+            thing_to_remove /= (pre_scales[layer_idx] if FREEZE_INPUT_LAYER_NORM else 1.0)
+            model.add_hook(
+                f"blocks.{layer_idx}.hook_q_{'normalized_' if FREEZE_INPUT_LAYER_NORM else ''}input",
+                partial(editor_hook, new_value=-thing_to_remove, replace=False, head_idx=head_idx),
+            )
+        elif PERSON_MODE == "Cody":
+            pass
+        else:
+            raise ValueError(f"Unknown person mode {PERSON_MODE}")
+
         model.add_hook(
             ln_final_name,
             partial(editor_hook, new_value=end_scale, replace=True, head_idx=None),
@@ -178,18 +192,6 @@ for mode in MODES:
             "batch d_model, batch d_model -> batch",
         )
         head_logit_diffs[mode][layer_idx, head_idx] = new_head_logit_diff.mean().item()
-
-#%%
-
-imshow(
-    head_logit_diffs["perp"],
-)
-
-#%%
-
-imshow(
-    head_logit_diffs["parallel"],
-)
 
 # %%
 
