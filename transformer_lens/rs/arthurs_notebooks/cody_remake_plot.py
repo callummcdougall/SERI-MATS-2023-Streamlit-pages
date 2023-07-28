@@ -132,10 +132,9 @@ NMHs = [
     (9, 9),
     # (9, 7), 
     # (9, 0),
-    # (10, 0),
+    (10, 0),
     (10, 7),
     # (10, 2), 
-    # (10, 7),
     # (10, 6),
 ]
 
@@ -147,7 +146,7 @@ for layer_idx, head_idx in NMHs:
 
     cur_parallel_component, cur_perp_component = project(
         name_mover_head_outputs[layer_idx, head_idx],
-        model.W_U[:, ioi_dataset.io_tokenIDs].T,
+        model.W_U[:, ioi_dataset.io_tokenIDs].T, # - model.W_U[:, ioi_dataset.s_tokenIDs].T,
     )
     parallel_component[layer_idx, head_idx] = cur_parallel_component
     perp_component[layer_idx, head_idx] = cur_perp_component
@@ -175,7 +174,16 @@ for mode in MODES:
                 partial(editor_hook, new_value=-thing_to_remove, replace=False, head_idx=head_idx),
             )
         elif PERSON_MODE == "Cody":
-            pass
+            for nmh_layer_idx, nmh_head_idx in NMHs:
+                
+                if (layer_idx, head_idx) == (nmh_layer_idx, nmh_head_idx):
+                    continue
+
+                thing_to_keep = (perp_component if mode == "perp" else parallel_component).clone()[nmh_layer_idx, nmh_head_idx]
+                model.add_hook(
+                    f"blocks.{nmh_layer_idx}.attn.hook_result",
+                    partial(editor_hook, new_value=thing_to_keep, head_idx=nmh_head_idx, replace=True),
+                )
         else:
             raise ValueError(f"Unknown person mode {PERSON_MODE}")
 
@@ -193,7 +201,7 @@ for mode in MODES:
         )
         head_logit_diffs[mode][layer_idx, head_idx] = new_head_logit_diff.mean().item()
 
-# %%
+#%%
 
 fig = go.Figure()
 
@@ -201,44 +209,64 @@ colors = {
     "parallel": "red",
     "perp": "blue",
 }
-# symbols = 
 
 layer_heads = {
-    10: [0, 2, 10, 6, 7],
+    10: [2, 10, 6, 7],
     11: [10, 2],
 }
 
+# Initialize empty lists to collect data for each mode
+x_data = {mode: [] for mode in MODES}
+y_data = {mode: [] for mode in MODES}
+text_data = {mode: [] for mode in MODES}
+
 for mode in MODES:
     for layer_idx in range(10, 12):
-        fig.add_trace(
-            go.Scatter(
-                x=logit_diffs_per_head[layer_idx][layer_heads[layer_idx]].tolist(),
-                y=head_logit_diffs[mode][layer_idx][layer_heads[layer_idx]].tolist(),
-                mode="markers" + ("+text" if mode == "parallel" else ""),
-                name=f"Only include NM IO-{mode} component input",
-                text=[f"{layer_idx}.{head_idx}" for head_idx in layer_heads[layer_idx]],
-                marker=dict(
-                    color=colors[mode],
-                ),
-            )
-        )
+        x_data[mode].extend(logit_diffs_per_head[layer_idx][layer_heads[layer_idx]].tolist())
+        y_data[mode].extend(head_logit_diffs[mode][layer_idx][layer_heads[layer_idx]].tolist())
+        text_data[mode].extend([f"{layer_idx}.{head_idx}" for head_idx in layer_heads[layer_idx]])
 
-# add y=x line
-fig.add_trace(
-    go.Scatter(
-        x=[-2, 2],
-        y=[-2, 2],
-        mode="lines",
-        name="y=x",
+# Increase font size
+fig.update_layout(
+    font=dict(
+        size=14,
     )
 )
-fig.update_traces(textposition='top center')
-    
+
+# Add the traces for each mode
+for mode in MODES:
+    fig.add_trace(
+        go.Scatter(
+            x=x_data[mode],
+            y=y_data[mode],
+            mode="markers" + ("+text" if mode == "parallel" else ""),
+            name=f"Only include Name Moving Heads' IO-{mode} directions in the query",
+            text=text_data[mode],
+            marker=dict(
+                color=colors[mode],
+            ),
+        )
+    )
+
+# Add y=x line
+fig.add_trace(
+    go.Scatter(
+        x=[-3, 3],
+        y=[-3, 3],
+        mode="lines",
+        name="y=x",
+        marker=dict(
+            color="black",
+        )
+    )
+)
+
+fig.update_traces(textposition='top left')
 
 fig.update_layout(
-    title="Logit diff with and without NM IO-perp component input",
-    xaxis_title="Logit difference of component on a clean run",
-    yaxis_title="Logit difference of of component with query intervention",
+    title="Self-repairing attention heads under query interventions",
+    xaxis_title="Clean logit difference",
+    yaxis_title="Post-intervention logit difference",
 )
 
 fig.show()
