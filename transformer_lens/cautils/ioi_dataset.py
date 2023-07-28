@@ -764,8 +764,6 @@ def _logits_to_ave_logit_diff(logits: Float[t.Tensor, "batch seq d_vocab"], ioi_
     answer_logit_diff = io_logits - s_logits
     return answer_logit_diff if per_prompt else answer_logit_diff.mean()
 
-
-
 def _ioi_metric_noising(
         logits: Float[t.Tensor, "batch seq d_vocab"],
         clean_logit_diff: float,
