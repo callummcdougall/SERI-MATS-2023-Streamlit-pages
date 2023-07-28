@@ -127,6 +127,7 @@ for NMH in [
     (9, 6),
     (9, 9),
     (10, 0),
+    (10, 7),
 ]:
     name_mover_head_outputs[NMH[0]] += cache[f"blocks.{NMH[0]}.attn.hook_result"][torch.arange(N), ioi_dataset.word_idx["end"], NMH[1]]
 
@@ -202,7 +203,7 @@ colors = {
 
 layer_heads = {
     10: [0, 2, 10, 6, 7],
-    11: [10],
+    11: [10, 2],
 }
 
 for mode in MODES:
