@@ -20,6 +20,9 @@ def get_metric_from_end_state(
     from the end state of the residual stream of a model
     """
 
+    # if targets is None:
+    #     warnings.warn("Don't have targets so I'm trimming the last sequence element")
+
     assert (mode == "loss") != (log_probs_reference is not None), "Must specify kl_reference if mode is kl"
     assert (mode == "loss") == (targets is not None), "Must specify targets if mode is loss"
     if frozen_ln_scale is not None:

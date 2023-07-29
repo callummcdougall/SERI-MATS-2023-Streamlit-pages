@@ -178,7 +178,6 @@ for batch_idx, seq_idx in tqdm(list(itertools.product(range(BATCH_SIZE), range(M
 #%%
 
 # We might not actually use some queryside approximation, but let's compute it anyway
-
 queryside_vectors = t.zeros((BATCH_SIZE, model.cfg.d_model)).cuda()
 
 # Just do this part for the individual queries that we need

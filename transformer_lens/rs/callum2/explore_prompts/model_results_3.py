@@ -1,7 +1,7 @@
 # This file contains functions to get results from my model. I use them to generate the visualisations found on the Streamlit pages.
 
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
-import sys, os
+import sys, os, gc
 for root_dir in [
     os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts", # For Arthur's branch
     "/app/seri-mats-2023-streamlit-pages/explore_prompts", # For Streamlit page (public)
@@ -413,6 +413,7 @@ def get_effective_embedding(model: HookedTransformer) -> Float[Tensor, "d_vocab 
 
     resid_pre = W_E.unsqueeze(0)
     pre_attention = model.blocks[0].ln1(resid_pre)
+    print(pre_attention.device, model.W_Q.device, model.W_K.device, model.W_V.device, model.W_O.device)
     attn_out = einops.einsum(
         pre_attention, 
         model.W_V[0],
@@ -449,7 +450,7 @@ def get_model_results(
     cspa: bool = True,
 ) -> ModelResults:
     '''
-    Short explpanation of the copy-suppression preserving ablation (hereby CSPA):
+    Short explanation of the copy-suppression preserving ablation (hereby CSPA):
 
         (1) For each destination token D, look at all the possible source tokens S. For each one, pick the
             top K_semantic tokens which attend to S via the full QK matrix. Call these pairs (S, Q).
@@ -541,6 +542,11 @@ def get_model_results(
         model.add_hook(utils.get_act_name("v", layer), partial(cache_head_v, head=head))
         model.add_hook(utils.get_act_name("z", layer), partial(cache_head_z, head=head))
         model.add_hook(utils.get_act_name("pattern", layer), partial(cache_head_pattern, head=head))
+
+    if (11, 10) not in negative_heads: # Arthur hacking around
+        model.add_hook(utils.get_act_name("z", 11), partial(cache_head_z, head=10))
+
+
     # We also need some things at the very end of the model
     model.add_hook(utils.get_act_name("resid_post", model.cfg.n_layers-1), partial(cache_resid_post, key="orig"))
     model.add_hook(utils.get_act_name("scale"), cache_scale)
@@ -591,8 +597,9 @@ def get_model_results(
             logits_for_E_sq: Float[Tensor, "batch seqQ seqK K_semantic"] = logit_lens[b, sQ, E_sq_repeated]
             assert logits_for_E_sq.shape == (batch_size, seq_len, seq_len, K_semantic)
             # We then want to make sure that the causal mask has been applied, because no pair (S, Q) for destination token D should have S < D
-            sQ = einops.repeat(t.arange(seq_len), "sQ -> b sQ sK K_sem", b=batch_size, sK=seq_len, K_sem=K_semantic)
-            sK = einops.repeat(t.arange(seq_len), "sK -> b sQ sK K_sem", b=batch_size, sQ=seq_len, K_sem=K_semantic)
+            sQ = einops.repeat(t.arange(seq_len), "sQ -> b sQ sK K_sem", b=batch_size, sK=seq_len, K_sem=K_semantic).to(current_device)
+            sK = einops.repeat(t.arange(seq_len), "sK -> b sQ sK K_sem", b=batch_size, sQ=seq_len, K_sem=K_semantic).to(current_device)
+            print("Debugging", sQ.device, sK.device, logits_for_E_sq.device)
             logits_for_E_sq = t.where(sQ >= sK, logits_for_E_sq, t.full_like(logits_for_E_sq, -1e9))
             
             # Now we find the top K_unembed logit values of pairs (S, Q) for each destination token D
@@ -617,6 +624,10 @@ def get_model_results(
             unembeddings_for_projection[b, sQ, sK, Ku, :] = unembeddings
             # Do G-S orthonormalization (note that we need to tranpose to get the `nums` dimension (which is K_unembed) at the end, then we transpose back)
             model_results.unembedding_projection_dirs[layer, head] = gram_schmidt(unembeddings_for_projection.transpose(-2, -1))
+
+            gc.collect()
+            t.cuda.empty_cache()
+
 
 
     if verbose:
@@ -830,9 +841,19 @@ def get_model_results(
                     loss_ablated = model.loss_fn(logits, toks, per_token=True)
                     model_results.loss_diffs[(effect, ln_mode, ablation_type)][layer, head] = loss_ablated - model_results.loss_orig
 
-                    if cspa:
+                    if (
+                        cspa
+                        and effect != f"indirect (excluding {later_layer}.{later_head})" # we don't actually log cspa stuff in this case
+                    ):
                         # Get the logits for CS-preserving ablation, compute and store the corresponding loss
-                        logits_CS = model_results.logits[(effect, ln_mode, ablation_type, "CS")][layer, head]
+
+
+                        try:
+                            logits_CS = model_results.logits[(effect, ln_mode, ablation_type, "CS")][layer, head]
+                        except Exception:
+                            print("There's still an exception")
+                            return model_results
+
                         loss_CS = model.loss_fn(logits_CS, toks, per_token=True)
                         model_results.loss_diffs[(effect, ln_mode, ablation_type, "CS")][layer, head] = loss_CS - model_results.loss_orig
 
