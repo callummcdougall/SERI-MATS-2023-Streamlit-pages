@@ -847,13 +847,8 @@ def get_model_results(
                     ):
                         # Get the logits for CS-preserving ablation, compute and store the corresponding loss
 
-
-                        try:
-                            logits_CS = model_results.logits[(effect, ln_mode, ablation_type, "CS")][layer, head]
-                        except Exception:
-                            print("There's still an exception")
-                            return model_results
-
+                        logits_CS = model_results.logits[(effect, ln_mode, ablation_type, "CS")][layer, head]
+                        
                         loss_CS = model.loss_fn(logits_CS, toks, per_token=True)
                         model_results.loss_diffs[(effect, ln_mode, ablation_type, "CS")][layer, head] = loss_CS - model_results.loss_orig
 
