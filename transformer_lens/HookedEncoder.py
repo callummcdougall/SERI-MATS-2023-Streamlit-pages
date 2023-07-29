@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
 from typing import Dict, Optional, Tuple, Union, cast, overload
 
 import torch
@@ -283,7 +282,6 @@ class HookedEncoder(HookedRootModule):
 
     @property
     @typeguard_ignore
-    @lru_cache(maxsize=None)
     def W_K(self) -> Float[torch.Tensor, "n_layers n_heads d_model d_head"]:
         """Stacks the key weights across all layers"""
         return torch.stack(
@@ -292,7 +290,6 @@ class HookedEncoder(HookedRootModule):
 
     @property
     @typeguard_ignore
-    @lru_cache(maxsize=None)
     def W_Q(self) -> Float[torch.Tensor, "n_layers n_heads d_model d_head"]:
         """Stacks the query weights across all layers"""
         return torch.stack(
@@ -301,7 +298,6 @@ class HookedEncoder(HookedRootModule):
 
     @property
     @typeguard_ignore
-    @lru_cache(maxsize=None)
     def W_V(self) -> Float[torch.Tensor, "n_layers n_heads d_model d_head"]:
         """Stacks the value weights across all layers"""
         return torch.stack(
@@ -310,7 +306,6 @@ class HookedEncoder(HookedRootModule):
 
     @property
     @typeguard_ignore
-    @lru_cache(maxsize=None)
     def W_O(self) -> Float[torch.Tensor, "n_layers n_heads d_head d_model"]:
         """Stacks the attn output weights across all layers"""
         return torch.stack(
@@ -319,7 +314,6 @@ class HookedEncoder(HookedRootModule):
 
     @property
     @typeguard_ignore
-    @lru_cache(maxsize=None)
     def W_in(self) -> Float[torch.Tensor, "n_layers d_model d_mlp"]:
         """Stacks the MLP input weights across all layers"""
         return torch.stack(
@@ -328,7 +322,6 @@ class HookedEncoder(HookedRootModule):
 
     @property
     @typeguard_ignore
-    @lru_cache(maxsize=None)
     def W_out(self) -> Float[torch.Tensor, "n_layers d_mlp d_model"]:
         """Stacks the MLP output weights across all layers"""
         return torch.stack(
@@ -337,7 +330,6 @@ class HookedEncoder(HookedRootModule):
 
     @property
     @typeguard_ignore
-    @lru_cache(maxsize=None)
     def b_K(self) -> Float[torch.Tensor, "n_layers n_heads d_head"]:
         """Stacks the key biases across all layers"""
         return torch.stack(
@@ -346,7 +338,6 @@ class HookedEncoder(HookedRootModule):
 
     @property
     @typeguard_ignore
-    @lru_cache(maxsize=None)
     def b_Q(self) -> Float[torch.Tensor, "n_layers n_heads d_head"]:
         """Stacks the query biases across all layers"""
         return torch.stack(
@@ -355,7 +346,6 @@ class HookedEncoder(HookedRootModule):
 
     @property
     @typeguard_ignore
-    @lru_cache(maxsize=None)
     def b_V(self) -> Float[torch.Tensor, "n_layers n_heads d_head"]:
         """Stacks the value biases across all layers"""
         return torch.stack(
@@ -364,7 +354,6 @@ class HookedEncoder(HookedRootModule):
 
     @property
     @typeguard_ignore
-    @lru_cache(maxsize=None)
     def b_O(self) -> Float[torch.Tensor, "n_layers d_model"]:
         """Stacks the attn output biases across all layers"""
         return torch.stack(
@@ -373,7 +362,6 @@ class HookedEncoder(HookedRootModule):
 
     @property
     @typeguard_ignore
-    @lru_cache(maxsize=None)
     def b_in(self) -> Float[torch.Tensor, "n_layers d_mlp"]:
         """Stacks the MLP input biases across all layers"""
         return torch.stack(
@@ -382,7 +370,6 @@ class HookedEncoder(HookedRootModule):
 
     @property
     @typeguard_ignore
-    @lru_cache(maxsize=None)
     def b_out(self) -> Float[torch.Tensor, "n_layers d_model"]:
         """Stacks the MLP output biases across all layers"""
         return torch.stack(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import List, Tuple, Union
 
 import torch
@@ -102,7 +101,6 @@ class FactoredMatrix:
     def T(self) -> FactoredMatrix:
         return FactoredMatrix(self.B.transpose(-2, -1), self.A.transpose(-2, -1))
 
-    @lru_cache(maxsize=None)
     def svd(
         self,
     ) -> Tuple[
