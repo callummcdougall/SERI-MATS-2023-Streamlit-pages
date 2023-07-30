@@ -262,7 +262,10 @@ class ModelResults:
 
         # This is the "prediction-attention" part, and it's how we perform copy-suppression preserving ablation
         self.logit_lens: LayerResults = LayerResults()
+        
         self.E_sq: HeadResults = HeadResults()
+        self.E_sq_QK: HeadResults = HeadResults()
+
         self.unembedding_projection_dirs: HeadResults = HeadResults()
 
         # This is to store random crap!
@@ -413,7 +416,6 @@ def get_effective_embedding(model: HookedTransformer) -> Float[Tensor, "d_vocab 
 
     resid_pre = W_E.unsqueeze(0)
     pre_attention = model.blocks[0].ln1(resid_pre)
-    print(pre_attention.device, model.W_Q.device, model.W_K.device, model.W_V.device, model.W_O.device)
     attn_out = einops.einsum(
         pre_attention, 
         model.W_V[0],
@@ -448,6 +450,7 @@ def get_model_results(
     K_unembed: int = 10,
     effective_embedding: str = "W_E (including MLPs)",
     cspa: bool = True,
+    include_qk: bool = False,
 ) -> ModelResults:
     '''
     Short explanation of the copy-suppression preserving ablation (hereby CSPA):
@@ -576,9 +579,7 @@ def get_model_results(
             # E(s,q) are the tokens s.t. W_EE[s] is negatively copied to -W_U[q]
             # i.e. E_sq[b, sK, :] are the token IDs of all such q, for the source token s at position sK
             W_EE_toks: Float[Tensor, "batch seqK d_model"] = W_EE[toks]
-            # W_QK = model.W_Q[layer, head] @ model.W_K[layer, head].T / (model.cfg.d_head ** 0.5)
-            # submatrix_of_full_QK_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks @ W_QK.T @ W_U
-            # E_sq: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_QK_matrix.topk(K_semantic, dim=-1).indices
+
             W_OV = model.W_V[layer, head] @ model.W_O[layer, head]
             submatrix_of_full_OV_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks @ W_OV @ W_U
             E_sq: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_OV_matrix.topk(K_semantic, dim=-1, largest=False).indices
@@ -587,6 +588,15 @@ def get_model_results(
             E_sq_contains_self: Bool[Tensor, "batch seqK"] = (E_sq == toks[:, :, None]).any(-1)
             E_sq[..., -1] = t.where(E_sq_contains_self, E_sq[..., -1], toks)
             model_results.E_sq[layer, head] = E_sq
+
+            if include_qk: 
+                W_QK = model.W_Q[layer, head] @ model.W_K[layer, head].T / (model.cfg.d_head ** 0.5)
+                submatrix_of_full_QK_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks @ W_QK.T @ W_U
+                E_sq_QK: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_QK_matrix.topk(K_semantic, dim=-1).indices
+
+                E_sq_QK_contains_self: Bool[Tensor, "batch seqK"] = (E_sq_QK == toks[:, :, None]).any(-1)
+                E_sq_QK[..., -1] = t.where(E_sq_QK_contains_self, E_sq_QK[..., -1], toks)
+                model_results.E_sq_QK[layer, head] = E_sq_QK
 
             # Now, for each (batch, seqQ), we want the logits for all the tokens in E_sq[batch, :, :], so we can pick the best K_unembed of those
             # i.e. logits_for_E_sq[b, sQ, sK, K_sem] = logit_lens[b, sQ, E_sq[b, sK, K_sem]]
@@ -599,9 +609,26 @@ def get_model_results(
             # We then want to make sure that the causal mask has been applied, because no pair (S, Q) for destination token D should have S < D
             sQ = einops.repeat(t.arange(seq_len), "sQ -> b sQ sK K_sem", b=batch_size, sK=seq_len, K_sem=K_semantic).to(current_device)
             sK = einops.repeat(t.arange(seq_len), "sK -> b sQ sK K_sem", b=batch_size, sQ=seq_len, K_sem=K_semantic).to(current_device)
-            print("Debugging", sQ.device, sK.device, logits_for_E_sq.device)
             logits_for_E_sq = t.where(sQ >= sK, logits_for_E_sq, t.full_like(logits_for_E_sq, -1e9))
-            
+
+            if include_qk:
+                # TODO Arthur check that this is reasonable
+                # I think that logit lens here is correct but far from certain
+
+                # Now we do the same thing for E_sq_QK
+                E_sq_QK_repeated = einops.repeat(E_sq_QK, "b sK K_sem -> b sQ sK K_sem", sQ=seq_len)
+
+                logits_for_E_sq_QK: Float[Tensor, "batch seqQ seqK K_semantic"] = logit_lens[b, sQ, E_sq_QK_repeated]
+                assert logits_for_E_sq_QK.shape == (batch_size, seq_len, seq_len, K_semantic)
+
+                logits_for_E_sq_QK = t.where(sQ >= sK, logits_for_E_sq_QK, t.full_like(logits_for_E_sq_QK, -1e9))
+                
+                # I also want to access these logits
+                model_results.misc["logits_for_E_sq_QK"] = logits_for_E_sq_QK
+
+                # This is not QK related but Arthur added and did not want to break back compat
+                model_results.misc["logits_for_E_sq"] = logits_for_E_sq
+
             # Now we find the top K_unembed logit values of pairs (S, Q) for each destination token D
             # (we get the values so that we can create a boolean mask from them)
             top_logits_for_E_sq: Float[Tensor, "batch seqQ K_unembed"] = logits_for_E_sq.flatten(-2, -1).topk(dim=-1, k=K_unembed).values
