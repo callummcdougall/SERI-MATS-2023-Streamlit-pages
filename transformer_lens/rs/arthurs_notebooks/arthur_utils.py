@@ -170,8 +170,6 @@ def dot_with_query(
     iterator = tqdm(iterator) if use_tqdm else iterator
     for index_tuple in iterator: # TODO easy to batch, mate...
         q_vector, k_vector = queries[index_tuple], keys[index_tuple]
-        gc.collect()
-        torch.cuda.empty_cache()
 
         query_side_vectors = einops.einsum(
             q_vector,
