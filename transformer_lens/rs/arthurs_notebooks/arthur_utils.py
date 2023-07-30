@@ -123,8 +123,13 @@ def set_to_value(
     seq_indices=None,
 ):
     if seq_indices is None:
-        assert z[:, :, head_idx].shape == new_value.shape
-        z[:, :, head_idx] = new_value
+        if hook.name.endswith(("scores", "pattern")):
+            assert z[:, head_idx].shape == new_value.shape
+            z[:, head_idx] = new_value
+
+        else:
+            assert z[:, :, head_idx].shape == new_value.shape
+            z[:, :, head_idx] = new_value
     else:
         assert len(seq_indices)==len(z)
         assert new_value.shape == (len(z), z.shape[-1])
