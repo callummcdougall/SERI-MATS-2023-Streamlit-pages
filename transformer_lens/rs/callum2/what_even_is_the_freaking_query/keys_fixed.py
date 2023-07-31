@@ -45,6 +45,7 @@ def attn_scores_as_linear_func_of_queries(
     ioi_cache: ActivationCache,
     ioi_dataset: IOIDataset,
     subtract_S1_attn_scores: bool = False,
+    only_effective_embeddings: Optional[str] = None,
 ) -> Float[Tensor, "d_model"]:
     '''
     If you hold keys fixed, then attention scores are a linear function of the queries.
@@ -60,12 +61,23 @@ def attn_scores_as_linear_func_of_queries(
     if batch_idx is None:
         batch_idx = range(len(ioi_cache["q", 0]))
 
-    keys_all = ioi_cache["k", layer][:, :, head_idx] # shape (all_batch, seq_K, d_head)
-    if subtract_S1_attn_scores:
-        keys = keys_all[batch_idx, ioi_dataset.word_idx["IO"][batch_idx]] - keys_all[batch_idx, ioi_dataset.word_idx["S1"][batch_idx]]
+    # We either get keys directly from the actual key values pre-layer 10, or we get them from the very start (MLP0)
+    if only_effective_embeddings is None:
+        keys_all = ioi_cache["k", layer][:, :, head_idx] # shape (all_batch, seq_K, d_head)
+        keys_IO = keys_all[batch_idx, ioi_dataset.word_idx["IO"][batch_idx]]
+        keys_S1 = keys_all[batch_idx, ioi_dataset.word_idx["S1"][batch_idx]]
     else:
-        keys = keys_all[batch_idx, ioi_dataset.word_idx["IO"][batch_idx]]
-    
+        assert only_effective_embeddings in ["W_E (no MLPs)", "W_E (including MLPs)", "W_E (only MLPs)"]
+        effective_embeddings = get_effective_embedding_2(model)[only_effective_embeddings] # shape (d_vocab, d_model)
+        keys_IO = effective_embeddings[ioi_dataset.io_tokenIDs][batch_idx]
+        keys_S1 = effective_embeddings[ioi_dataset.s_tokenIDs][batch_idx]
+        keys_IO = (keys_IO / keys_IO.std(dim=-1, keepdim=True)) @ model.W_K[layer, head_idx] + model.b_K[layer, head_idx] # shape (all_batch, d_head)
+        keys_S1 = keys_S1 / keys_S1.std(dim=-1, keepdim=True) @ model.W_K[layer, head_idx] + model.b_K[layer, head_idx] # shape (all_batch, d_head)
+        # mlp0_out = ioi_cache["mlp_out", 0] # shape (all_batch, seq_K, d_model)
+        # mlp0_out_scaled = mlp0_out / ioi_cache["scale", layer, "ln1"][:, :, head_idx] # same shape
+        # keys_all = einops.einsum(mlp0_out_scaled, model.W_K[layer, head_idx], "batch seq_K d_model, d_model d_head -> batch seq_K d_head") + model.b_K[layer, head_idx]
+    keys = keys_IO if not(subtract_S1_attn_scores) else keys_IO - keys_S1
+
     W_Q = model.W_Q[layer, head_idx].clone() # shape (d_model, d_head)
     b_Q = model.b_Q[layer, head_idx].clone() # shape (d_head,)
 
@@ -136,30 +148,43 @@ def get_attn_scores_as_linear_func_of_queries_for_histogram(
     model: HookedTransformer,
     name_tokens: List[int],
     subtract_S1_attn_scores: bool = False,
+    only_effective_embeddings: bool = False,
 ):
-    names = ["W_U[IO]", "NMH 9.9 output", "NMH 9.9, ⟂ W_U[IO]", "W_U[S]", "W_U[random name]", "W_U[random]", "No patching"]
+    names = ["W_U[IO]", "NMH 9.9 output", "NMH 9.9, ⟂ W_U[IO]", "NMH 9.9, ⟂ W_U[all six]", "W_U[S]", "W_U[random name]", "W_U[random]", "No patching"]
 
     attn_scores = {k: t.empty((0,)).to(device) for k in names}
     attn_probs = {k: t.empty((0,)).to(device) for k in names}
 
     for seed in tqdm(range(num_batches)):
 
-        ioi_dataset, ioi_cache = generate_data_and_caches(batch_size, model=model, seed=seed, only_ioi=True)
+        ioi_dataset, ioi_cache = generate_data_and_caches(batch_size, model=model, seed=seed, only_ioi=True, symmetric=True)
 
-        linear_map, bias_term = attn_scores_as_linear_func_of_queries(batch_idx=None, head=NNMH, model=model, ioi_cache=ioi_cache, ioi_dataset=ioi_dataset, subtract_S1_attn_scores=subtract_S1_attn_scores)
+        linear_map, bias_term = attn_scores_as_linear_func_of_queries(batch_idx=None, head=NNMH, model=model, ioi_cache=ioi_cache, ioi_dataset=ioi_dataset, subtract_S1_attn_scores=subtract_S1_attn_scores, only_effective_embeddings=only_effective_embeddings)
         assert linear_map.shape == (batch_size, model.cfg.d_model)
 
         # Has to be manual, because apparently `apply_ln_to_stack` doesn't allow it to be applied at different sequence positions
         nmh_99_output = einops.einsum(ioi_cache["z", 9][range(batch_size), ioi_dataset.word_idx["end"], 9], model.W_O[9, 9], "batch d_head, d_head d_model -> batch d_model")
-        W_U_IO = model.W_U.T[t.tensor(ioi_dataset.io_tokenIDs)]
-        nmh_99_par, nmh_99_perp = project(nmh_99_output, W_U_IO, return_type="projections")
+
+        name_tokens_list = [
+            ioi_dataset.io_tokenIDs,
+            get_nonspace_name_tokenIDs(model, ioi_dataset.io_tokenIDs),
+            get_lowercase_name_tokenIDs(model, ioi_dataset.io_tokenIDs),
+            ioi_dataset.s_tokenIDs,
+            get_nonspace_name_tokenIDs(model, ioi_dataset.s_tokenIDs),
+            get_lowercase_name_tokenIDs(model, ioi_dataset.s_tokenIDs),
+        ]
+        W_U_all = [model.W_U.T[name_tokens] for name_tokens in name_tokens_list]
+
+        nmh_99_par, nmh_99_perp = project(nmh_99_output, W_U_all[0], return_type="projections")
+        nmh_99_par_all, nmh_99_perp_all = project(nmh_99_output, W_U_all, return_type="projections")
         resid_vectors = {
-            "W_U[IO]": W_U_IO,
-            "W_U[S]": model.W_U.T[t.tensor(ioi_dataset.s_tokenIDs)],
+            "W_U[IO]": model.W_U.T[name_tokens_list[0]],
+            "W_U[S]": model.W_U.T[name_tokens_list[3]],
             "W_U[random]": model.W_U.T[t.randint(size=(batch_size,), low=0, high=model.cfg.d_vocab)],
             "W_U[random name]": model.W_U.T[np.random.choice(name_tokens, size=(batch_size,))],
             "NMH 9.9 output": nmh_99_output,
             "NMH 9.9, ⟂ W_U[IO]": nmh_99_perp,
+            "NMH 9.9, ⟂ W_U[all six]": nmh_99_perp_all,
             "No patching": ioi_cache["resid_pre", NNMH[0]][range(batch_size), ioi_dataset.word_idx["end"]]
         }
 
@@ -748,7 +773,7 @@ def plot_contribution_to_attn_scores(
 def project(
     x: Float[Tensor, "... dim"],
     dir: Union[List[Float[Tensor, "... dim"]], Float[Tensor, "... dim"]],
-    test: bool = True,
+    test: bool = False,
     return_type: Literal["projections", "coeffs", "both"] = "projections",
 ):
     '''
