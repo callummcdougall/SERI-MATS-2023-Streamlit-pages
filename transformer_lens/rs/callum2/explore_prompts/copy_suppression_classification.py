@@ -23,6 +23,9 @@ from explore_prompts_utils import create_title_and_subtitles
 def generate_scatter(
     ICS: Dict[str, Tensor], # the thing we get from MODEL_RESULTS.is_copy_suppression
     DATA_STR_TOKS_PARSED: List[List[str]],
+    subtext_to_cspa: List[str] = ["i.e. ablate everything", "except the pure copy-", "suppression mechanism"],
+    cspa_y_axis_title: str = "CSPA",
+    show_key_results: bool = True,
 ):
     # Get results
     l_orig = ICS["L_ORIG"]
@@ -107,7 +110,7 @@ def generate_scatter(
         )
 
     fig.add_annotation(
-        text="CSPA",
+        text=cspa_y_axis_title,
         # text="<br>".join(["CS-preserving", "ablation"]),
         xref="paper", yref="paper",
         x=-0.05, y=0.55, # 0.57
@@ -117,7 +120,7 @@ def generate_scatter(
         align="right",
     )
     fig.add_annotation(
-        text="<br>".join(["i.e. ablate everything", "except the pure copy-", "suppression mechanism"]),
+        text="<br>".join(subtext_to_cspa),
         xref="paper", yref="paper",
         x=-0.05, y=0.48,
         font_size=12,
@@ -140,23 +143,24 @@ def generate_scatter(
         yaxis = dict(scaleanchor="x", scaleratio=1),
     )
     fig2 = copy(fig)
-    fig2.add_annotation(
-        text="<br>".join([
-            "Key results:",
-            "",
-            "1. CS-preserving ablation explains most of head's effect on loss<br>    (std dev is much smaller on y-axis)",
-            "",
-            "2. CS-preserving ablation performs as well as original model<br>    (mean is nearly zero on y-axis)",
-        ]),
-        xref="paper", yref="paper",
-        x=0.55, y=1.00,
-        showarrow=False,
-        font_size=13,
-        xanchor="left",
-        align="left",
-        bordercolor="black",
-        borderpad=10,
-    )
+    if show_key_results:
+        fig2.add_annotation(
+            text="<br>".join([
+                "Key results:",
+                "",
+                "1. CS-preserving ablation explains most of head's effect on loss<br>    (std dev is much smaller on y-axis)",
+                "",
+                "2. CS-preserving ablation performs as well as original model<br>    (mean is nearly zero on y-axis)",
+            ]),
+            xref="paper", yref="paper",
+            x=0.55, y=1.00,
+            showarrow=False,
+            font_size=13,
+            xanchor="left",
+            align="left",
+            bordercolor="black",
+            borderpad=10,
+        )
     fig2.show()
     return fig, results, df
 
