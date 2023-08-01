@@ -147,7 +147,7 @@ def dot_with_query(
     add_query_bias: bool = True,
     normalize_keys: bool = True,
     normalize_queries: bool = True,
-    use_tqdm: bool = True,
+    use_tqdm: bool = False,
 ) -> Float[torch.Tensor, "..."]:
 
     warnings.warn("Please test this refactored version on the notebooks where you already used it")

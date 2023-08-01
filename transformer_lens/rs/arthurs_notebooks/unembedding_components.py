@@ -44,7 +44,7 @@ update_word_lists = {
     " train": " The train was late. The passengers were annoyed because the train was delayed by an hour",
 }
 
-if USE_NAME_MOVER or True:
+if USE_NAME_MOVER or False: # removing IOI
     N = 200
     warnings.warn("Auto IOI")
     ioi_dataset = IOIDataset(
