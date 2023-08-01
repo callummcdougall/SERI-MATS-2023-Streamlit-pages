@@ -74,7 +74,7 @@ ys2 = []
 for batch_idx in tqdm(range(BATCH_SIZE)):
     warnings.warn("Trimming to size 30")
     for seq_idx in range(30):
-        denom = torch.exp(attn_score[batch_idx, seq_idx, :seq_idx+1]).sum()
+        denom = torch.exp(attn_score[batch_idx, seq_idx, :seq_idx+1]).sum().log()
         cur_seq_idx = 0
         for cur_seq_idx in range(seq_idx):
 
