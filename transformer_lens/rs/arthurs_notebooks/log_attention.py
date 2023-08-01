@@ -37,6 +37,7 @@ DEVICE = "cuda"
 SHOW_PLOT = True
 DATASET_SIZE = 500
 BATCH_SIZE = 30 
+MODE = "query"
 
 #%%
 
@@ -80,12 +81,36 @@ logit_lens = einops.einsum(
     scaled_resid_pre.to(DEVICE),
     model.W_U,
     "batch seq_len d_model, d_model d_vocab -> batch seq_len d_vocab",
-)
-logit_lens_topk = logit_lens.topk(5, dim=-1).indices
+).cpu()
+
+#%%
+
+logit_lens_topk = logit_lens.topk(5, dim=-1).indices.cuda()
 
 #%%
 
 W_EE = get_effective_embedding(model)['W_E (including MLPs)']
+
+#%%
+
+my_random_tokens = model.to_tokens("The")[0]
+my_embeddings = t.zeros(BATCH_SIZE, max_seq_len-1, model.cfg.d_model)
+
+print("Making the embeddings...")
+for batch_idx in tqdm(range(BATCH_SIZE)):
+    current_prompt = t.cat([
+        einops.repeat(my_random_tokens, "random_seq_len -> cur_seq_len random_seq_len", cur_seq_len=max_seq_len-1).clone().cpu(),
+        mybatch[batch_idx, :-1].unsqueeze(-1).clone().cpu(),
+    ],dim=1)
+    
+    gc.collect()
+    t.cuda.empty_cache()
+
+    current_embeddings = model.run_with_cache(
+        current_prompt.to(DEVICE),
+        names_filter = lambda name: name==get_act_name("resid_pre", 10),
+    )[1][get_act_name("resid_pre", 10)][torch.arange(max_seq_len-1), -1].cpu()
+    my_embeddings[batch_idx] = current_embeddings
 
 # %%
 
@@ -98,13 +123,6 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
         head_output = cache[f"blocks.{LAYER_IDX}.attn.hook_result"][:, :, HEAD_IDX].to(DEVICE)
         resid_post = cache["blocks.11.hook_resid_post"].to(DEVICE)
 
-        W_OV = model.W_V[LAYER_IDX, HEAD_IDX].cpu() @ model.W_O[LAYER_IDX, HEAD_IDX].cpu()
-        submatrix_of_full_OV_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks.cpu() @ W_OV.cpu() @ model.W_U.cpu()
-        
-        # Include self-embedding
-        E_sq: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_OV_matrix.cpu().topk(5, dim=-1, largest=False).indices 
-        E_sq_contains_self: Bool[Tensor, "batch seqK"] = (E_sq == mybatch[:, :, None]).any(-1)
-        E_sq[..., -1] = t.where(E_sq_contains_self, E_sq[..., -1], mybatch)
 
         gc.collect()
         t.cuda.empty_cache()
@@ -142,11 +160,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
 
         xs = []
         ys = []
-        attn_scores = []
-        denoms = []
-        biases = []
-
-        warnings.warn("Chaos things")
+        bias_scores = []
 
         for batch_idx in tqdm(range(BATCH_SIZE)):
             for seq_idx in range(1, 200): # max_seq_len): # skip BOS
@@ -154,100 +168,145 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 if (batch_idx, seq_idx) not in loss_to_use:
                     continue
 
-                # if seq_idx % 20 != 0: # Maybe random sample stops Simpson's paradox?
-                #     continue
+                denom = torch.exp(attn_score[batch_idx, seq_idx, :seq_idx+1]).sum()
 
-                denom = torch.exp(attn_score[batch_idx, seq_idx, :seq_idx+1]).sum().log()
+                unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE)
+                normalized_keys = unnormalized_keys / (unnormalized_keys.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5) 
 
                 outputs = dot_with_query(
-                    unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE),
+                    unnormalized_keys = normalized_keys,
                     unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
                     model=model,
                     layer_idx=LAYER_IDX,
                     head_idx=HEAD_IDX,
                     add_key_bias = True, 
                     add_query_bias = True,
-                    normalize_keys = True,
+                    normalize_keys = False,
                     normalize_queries = False,
                     use_tqdm=False,
                 )
+                
+                if MODE == "key":
+                    pass
 
-                query = normalized_query[batch_idx, seq_idx]
-                wut_indices = E_sq[batch_idx, 1:seq_idx+1].to(DEVICE).transpose(0, 1)
+                elif MODE == "query":
+                    query = normalized_query[batch_idx, seq_idx]
+                    base_parallel, base_perp = project(
+                        query, # einops.repeat(query, "d -> s d", s=seq_idx),
+                        list(model.W_U.T[logit_lens_topk[batch_idx, seq_idx]]),
+                        # list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
+                    )
+                    parallel = einops.repeat(base_parallel, "d -> s d", s=seq_idx)
+                    perp = einops.repeat(base_perp, "d -> s d", s=seq_idx)
 
-                # print("Sentence looks like", model.to_string(mybatch[batch_idx, :seq_idx+1].cpu().tolist()), "with indices", [(model.to_string(mybatch[batch_idx, 1+s]), model.to_str_tokens(wut_indices[:, s])) for s in range(seq_idx)][:10])
-                # Seemed reasonable
+                    para_score = dot_with_query(
+                        unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE),
+                        unnormalized_queries = parallel,
+                        model=model,
+                        layer_idx=LAYER_IDX,
+                        head_idx=HEAD_IDX,
+                        add_key_bias = True, 
+                        add_query_bias = False,
+                        normalize_keys = True,
+                        normalize_queries = False,
+                        use_tqdm=False,
+                    )
+                    perp_score = dot_with_query(
+                        unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE),
+                        unnormalized_queries = perp,
+                        model=model,
+                        layer_idx=LAYER_IDX,
+                        head_idx=HEAD_IDX,
+                        add_key_bias = True, 
+                        add_query_bias = False,
+                        normalize_keys = True,
+                        normalize_queries = False,
+                        use_tqdm=False,
+                    )
+                    bias_score = dot_with_query(
+                        unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE),
+                        unnormalized_queries = 0.0*perp,
+                        model=model,
+                        layer_idx=LAYER_IDX,
+                        head_idx=HEAD_IDX,
+                        add_key_bias = True, 
+                        add_query_bias = True,
+                        normalize_keys = True,
+                        normalize_queries = False,
+                        use_tqdm=False,
+                    )
+                    t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
 
-                base_parallel, base_perp = project(
-                    query, # einops.repeat(query, "d -> s d", s=seq_idx),
-                    list(model.W_U.T[logit_lens_topk[batch_idx, seq_idx]]),
-                    # list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
+                    indices = outputs.argsort(descending=True)[:3].tolist()
+                    # indices.extend(torch.randperm(seq_idx)[:5].tolist())
+
+                    # xs.extend((torch.exp(para_score) / denom.item()).tolist())
+                    xs.extend((para_score - denom.log().item())[indices].tolist())
+
+                    # ys.extend((torch.exp(perp_score) / denom.item()).tolist())
+                    ys.extend((perp_score-denom.log().item())[indices].tolist())
+
+                    # bias?
+                    
+                    if max(ys[-len(perp_score):]) > 5.0:
+                        print("Max index", ys[-len(perp_score):].index(max(ys[-len(perp_score):])))
+                        print("Sentence looks like", model.to_string(mybatch[batch_idx, :seq_idx+1].cpu().tolist()), "with indices",  model.to_str_tokens(logit_lens_topk[batch_idx, seq_idx]), [(s, perp_score[s-1].item(), model.to_string(mybatch[batch_idx, s])) for s in range(1, seq_idx+1)])
+                        # Seemed reasonable
+
+                    bias_scores.extend((torch.exp(bias_score) / denom.item()).tolist())
+                    # (bias_score-denom.item())[indices].tolist())
+                    # denoms.extend([denom.item() for _ in range(len(indices))])
+                    # attn_scores.append(outputs.item())
+                
+
+        if False: # These correlation plots do not work
+            r2 = np.corrcoef(xs, ys)[0, 1] ** 2
+
+            # get best fit line 
+            m, b = np.polyfit(xs, ys, 1)
+
+            fig = px.scatter(
+                x=xs,
+                y=ys,
+            )
+
+            # add best fit line from min x to max x
+            fig.add_trace(
+                go.Scatter(
+                    x=[min(xs), max(xs)],
+                    y=[m * min(xs) + b, m * max(xs) + b],
+                    mode="lines",
+                    name=f"r^2 = {r2:.3f}",
                 )
+            )
 
-                parallel = einops.repeat(base_parallel, "d -> s d", s=seq_idx)
-                perp = einops.repeat(base_perp, "d -> s d", s=seq_idx)
+            # add y = mx + c label
+            fig.add_annotation(
+                x=0.1,
+                y=0.1,
+                text=f"y = {m:.3f}x + {b:.3f}",
+                showarrow=False,
+            )
 
-                para_score = dot_with_query(
-                    unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE),
-                    unnormalized_queries = parallel,
-                    model=model,
-                    layer_idx=LAYER_IDX,
-                    head_idx=HEAD_IDX,
-                    add_key_bias = True, 
-                    add_query_bias = False,
-                    normalize_keys = True,
-                    normalize_queries = False,
-                    use_tqdm=False,
-                )
-                perp_score = dot_with_query(
-                    unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE),
-                    unnormalized_queries = perp,
-                    model=model,
-                    layer_idx=LAYER_IDX,
-                    head_idx=HEAD_IDX,
-                    add_key_bias = True, 
-                    add_query_bias = False,
-                    normalize_keys = True,
-                    normalize_queries = False,
-                    use_tqdm=False,
-                )
-                bias_score = dot_with_query(
-                    unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE),
-                    unnormalized_queries = 0.0*perp,
-                    model=model,
-                    layer_idx=LAYER_IDX,
-                    head_idx=HEAD_IDX,
-                    add_key_bias = True, 
-                    add_query_bias = True,
-                    normalize_keys = True,
-                    normalize_queries = False,
-                    use_tqdm=False,
-                )
-                t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
+            fig.update_layout(
+                title = f"Comparison of attention scores from parallel and perpendicular projections for Head {LAYER_IDX}.{HEAD_IDX}",
+                xaxis_title="Log attention score from unembedding parallel projection",
+                yaxis_title="Log attention score from unembedding perpendicular projection",
+            )
 
-                indices = outputs.argsort(descending=True)[:5].tolist()
-                indices.extend(torch.randperm(seq_idx)[:5].tolist())
-
-                xs.extend((para_score-denom.item())[indices].tolist())
-                # ys.append(perp_score.item() - denom.item())
-                ys.extend((perp_score-denom.item())[indices].tolist())
-                biases.extend((bias_score-denom.item())[indices].tolist())
-                denoms.extend([denom.item() for _ in range(len(indices))])
-                # attn_scores.append(outputs.item())
-                attn_scores.extend((outputs-denom.item())[indices].tolist())
-        
-        fig = hist(
-            [xs, ys],
-            # labels={"variable": "Version", "value": "Attn diff (positive ⇒ more attn paid to IO than S1)"},
-            title=f"Attention scores for {LAYER_IDX}.{HEAD_IDX}",
-            names=["Log attention score from unembedding parallel projection", "Log attention score from unembedding perpendicular projection"],
-            width=800,
-            height=600,
-            opacity=0.7,
-            marginal="box",
-            template="simple_white",
-            return_fig=True,
-        )
+        else:        
+            fig = hist(
+                [xs, ys],
+                # labels={"variable": "Version", "value": "Attn diff (positive ⇒ more attn paid to IO than S1)"},
+                title=f"Attention scores for {LAYER_IDX}.{HEAD_IDX}",
+                names=["Attention probability contribution from unembedding parallel projection", "Attention probability contribution from unembedding perpendicular projection"],
+                width=800,
+                height=600,
+                opacity=0.7,
+                marginal="box",
+                template="simple_white",
+                return_fig=True,
+            )
 
         fig.show()
 
