@@ -31,13 +31,15 @@ MODE = "query"
 
 #%%
 
-dataset = get_webtext(seed=17279)
+dataset = get_webtext(seed=6)
 max_seq_len = model.tokenizer.model_max_length
 
 # %%
 
 filtered_tokens = []
 targets = []  # targets for prediction
+
+new_batch_to_old_batch = {}
 
 print("Not rapid, but not THAT slow :-) ")
 _idx = -1
@@ -47,6 +49,7 @@ while len(filtered_tokens) < DATASET_SIZE:
     if (
         len(cur_tokens) > max_seq_len
     ):  # so we're not biasing towards early sequence positions...
+        new_batch_to_old_batch[len(filtered_tokens)] = _idx
         filtered_tokens.append(cur_tokens[:max_seq_len])
         targets.append(cur_tokens[1 : max_seq_len + 1])
 
@@ -200,6 +203,10 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
 
     xs = []
     ys = []
+
+    used_batch_indices = []
+    used_seq_indices = []
+
     bias_scores = []
 
     for batch_idx in tqdm(range(BATCH_SIZE)):
@@ -275,15 +282,23 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 ys.extend((torch.exp(the_perp_score) / denom.item())) #   - attn_pattern[batch_idx, seq_idx, 0].item() )[indices].tolist())
                 bias_scores.extend((torch.exp(the_key_bias_score) / denom.item())[indices].tolist())
 
+                used_batch_indices.extend([batch_idx for _ in range(len(indices))])
+                used_seq_indices.extend([seq_idx for _ in range(len(indices))])
+
             elif MODE == "query":
                 query = normalized_query[batch_idx, seq_idx]
+                warnings.warn("Projecting onto the literal token")
                 base_parallel, base_perp = project(
-                    query, # einops.repeat(query, "d -> s d", s=seq_idx),
-                    list(model.W_U.T[logit_lens_topk[batch_idx, seq_idx]]),
+                    einops.repeat(query, "d -> s d", s=seq_idx),
+                    # list(model.W_U.T[logit_lens_topk[batch_idx, seq_idx]]),
                     # list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
+                    model.W_U.T[mybatch[batch_idx, 1:1+seq_idx]],
                 )
-                parallel = einops.repeat(base_parallel, "d -> s d", s=seq_idx)
-                perp = einops.repeat(base_perp, "d -> s d", s=seq_idx)
+                # parallel = einops.repeat(base_parallel, "d -> s d", s=seq_idx)
+                # perp = einops.repeat(base_perp, "d -> s d", s=seq_idx)
+
+                parallel = base_parallel
+                perp = base_perp
 
                 para_score = dot_with_query(
                     unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE),
@@ -326,18 +341,21 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 indices = outputs.argsort(descending=True)[:3].tolist()
                 # indices.extend(torch.randperm(seq_idx)[:5].tolist())
 
-                xs.extend((torch.exp(para_score) / denom.item()).tolist())
+                xs.extend((torch.exp(para_score) / denom.item())[indices].tolist())
                 # xs.extend((para_score - denom.log().item())[indices].tolist())
 
-                ys.extend((torch.exp(perp_score) / denom.item()).tolist())
+                ys.extend((torch.exp(perp_score) / denom.item())[indices].tolist())
                 # ys.extend((perp_score - denom.log().item())[indices].tolist())
+
+                used_batch_indices.extend([batch_idx for _ in range(len(indices))])
+                used_seq_indices.extend([seq_idx for _ in range(len(indices))])
 
                 # bias?
                 
-                if max(ys[-len(perp_score):]) > 5.0:
-                    print("Max index", ys[-len(perp_score):].index(max(ys[-len(perp_score):])))
-                    print("Sentence looks like", model.to_string(mybatch[batch_idx, :seq_idx+1].cpu().tolist()), "with indices",  model.to_str_tokens(logit_lens_topk[batch_idx, seq_idx]), [(s, perp_score[s-1].item(), model.to_string(mybatch[batch_idx, s])) for s in range(1, seq_idx+1)])
-                    # Seemed reasonable
+                # if max(ys[-len(perp_score):]) > 5.0: # This was a set of extreme values at some point
+                #     print("Max index", ys[-len(perp_score):].index(max(ys[-len(perp_score):])))
+                #     print("Sentence looks like", model.to_string(mybatch[batch_idx, :seq_idx+1].cpu().tolist()), "with indices",  model.to_str_tokens(logit_lens_topk[batch_idx, seq_idx]), [(s, perp_score[s-1].item(), model.to_string(mybatch[batch_idx, s])) for s in range(1, seq_idx+1)])
+                #     # Seemed reasonable # 
 
                 bias_scores.extend((torch.exp(bias_score) / denom.item()).tolist())
                 # (bias_score-denom.item())[indices].tolist())
@@ -345,15 +363,25 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 # attn_scores.append(outputs.item())
             
 
-    if False: # These correlation plots do not work
+    if True: # These correlation plots do not work
         r2 = np.corrcoef(xs, ys)[0, 1] ** 2
 
         # get best fit line 
         m, b = np.polyfit(xs, ys, 1)
 
+        df = pd.DataFrame({
+        'xs': xs,
+        'ys': ys,
+        'text': [(str(model.to_string(mybatch[used_batch_idx, :used_seq_idx+1].cpu().tolist()))[-20:], 
+                 "with completion", 
+                 model.to_string(mytargets[used_batch_idx, used_seq_idx:used_seq_idx+1]), new_batch_to_old_batch[used_batch_idx], used_seq_idx) for used_batch_idx, used_seq_idx in zip(used_batch_indices, used_seq_indices)]
+        })
+
         fig = px.scatter(
-            x=xs,
-            y=ys,
+            df,
+            x='xs',
+            y='ys',
+            hover_data=['text']
         )
 
         # add best fit line from min x to max x
@@ -361,6 +389,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
             go.Scatter(
                 x=[min(xs), max(xs)],
                 y=[m * min(xs) + b, m * max(xs) + b],
+                # text = 
                 mode="lines",
                 name=f"r^2 = {r2:.3f}",
             )
@@ -379,6 +408,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
             xaxis_title="Log attention score from unembedding parallel projection",
             yaxis_title="Log attention score from unembedding perpendicular projection",
         )
+        fig.show()
 
     else:        
         fig = hist(
@@ -393,8 +423,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
             template="simple_white",
             return_fig=True,
         )
-
-    fig.show()
+        fig.show()
 
     old_xs = deepcopy(xs)
     old_ys = deepcopy(ys)
