@@ -89,7 +89,11 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
 
         W_OV = model.W_V[LAYER_IDX, HEAD_IDX].cpu() @ model.W_O[LAYER_IDX, HEAD_IDX].cpu()
         submatrix_of_full_OV_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks.cpu() @ W_OV.cpu() @ model.W_U.cpu()
-        E_sq: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_OV_matrix.cpu().topk(10, dim=-1, largest=False).indices
+        
+        # Include self-embedding
+        E_sq: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_OV_matrix.cpu().topk(5, dim=-1, largest=False).indices 
+        E_sq_contains_self: Bool[Tensor, "batch seqK"] = (E_sq == mybatch[:, :, None]).any(-1)
+        E_sq[..., -1] = t.where(E_sq_contains_self, E_sq[..., -1], mybatch)
 
         gc.collect()
         t.cuda.empty_cache()
@@ -158,9 +162,14 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 )
 
                 query = normalized_query[batch_idx, seq_idx]
+                wut_indices = E_sq[batch_idx, 1:seq_idx+1].to(DEVICE).transpose(0, 1)
+
+                # print("Sentence looks like", model.to_string(mybatch[batch_idx, :seq_idx+1].cpu().tolist()), "with indices", [(model.to_string(mybatch[batch_idx, 1+s]), model.to_str_tokens(wut_indices[:, s])) for s in range(seq_idx)][:10])
+                # Seemed reasonable
+
                 parallel, perp = project(
                     einops.repeat(query, "d -> s d", s=seq_idx),
-                    list(model.W_U.T[E_sq[batch_idx, 1:seq_idx+1].to(DEVICE)].transpose(0,1)), # Project onto semantically similar tokens
+                    list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
                 )
 
                 para_score = dot_with_query(
