@@ -7,7 +7,7 @@ Copy of direct effect survey
 from transformer_lens.cautils.notebook import *
 from transformer_lens.rs.callum.keys_fixed import project
 from transformer_lens.rs.arthurs_notebooks.arthur_utils import get_metric_from_end_state, dot_with_query
-import argparse
+from transformer_lens.rs.callum2.explore_prompts.model_results_3 import get_effective_embedding
 
 model: HookedTransformer = HookedTransformer.from_pretrained(
     "gpt2-small",
@@ -38,7 +38,7 @@ SHOW_PLOT = True
 DATASET_SIZE = 500
 BATCH_SIZE = 30 
 
-# %%
+#%%
 
 dataset = get_webtext(seed=17279)
 max_seq_len = model.tokenizer.model_max_length
@@ -74,14 +74,25 @@ model.to("cuda")
 
 #%%
 
-for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), range(12))):     
+W_EE = get_effective_embedding(model)['W_E (including MLPs)']
+
+# %%
+
+W_EE_toks: Float[Tensor, "batch seqK d_model"] = W_EE[mybatch]
+
+#%%
+
+for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), range(12))):
         attn_score = cache[f"blocks.{LAYER_IDX}.attn.hook_attn_scores"][:, HEAD_IDX].to(DEVICE)
         head_output = cache[f"blocks.{LAYER_IDX}.attn.hook_result"][:, :, HEAD_IDX].to(DEVICE)
         resid_post = cache["blocks.11.hook_resid_post"].to(DEVICE)
 
+        W_OV = model.W_V[LAYER_IDX, HEAD_IDX].cpu() @ model.W_O[LAYER_IDX, HEAD_IDX].cpu()
+        submatrix_of_full_OV_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks.cpu() @ W_OV.cpu() @ model.W_U.cpu()
+        E_sq: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_OV_matrix.cpu().topk(10, dim=-1, largest=False).indices
+
         gc.collect()
         t.cuda.empty_cache()
-
 
         loss = get_metric_from_end_state(
             end_state= resid_post,
@@ -149,7 +160,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 query = normalized_query[batch_idx, seq_idx]
                 parallel, perp = project(
                     einops.repeat(query, "d -> s d", s=seq_idx),
-                    model.W_U.T[mybatch[batch_idx, 1:seq_idx+1]],
+                    list(model.W_U.T[E_sq[batch_idx, 1:seq_idx+1].to(DEVICE)].transpose(0,1)), # Project onto semantically similar tokens
                 )
 
                 para_score = dot_with_query(
@@ -239,4 +250,3 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
         fig.show()
 
 # %%
-
