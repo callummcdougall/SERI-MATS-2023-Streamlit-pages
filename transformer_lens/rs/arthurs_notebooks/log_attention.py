@@ -190,8 +190,8 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 )
                 t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
 
-                # indices = outputs.argsort(descending=True)[:5]
-                indices = torch.arange(seq_idx)
+                indices = outputs.argsort(descending=True)[:5].tolist()
+                indices.extend(torch.randperm(seq_idx)[:5].tolist())
 
                 xs.extend((para_score-denom.item())[indices].tolist())
                 # ys.append(perp_score.item() - denom.item())
