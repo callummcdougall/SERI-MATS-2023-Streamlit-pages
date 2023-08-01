@@ -70,7 +70,18 @@ logits, cache = model.run_with_cache(
     names_filter = lambda name: name.endswith(("hook_attn_scores", "hook_result", "hook_resid_pre", ".11.hook_resid_post")),
     device="cpu",
 )
-model.to("cuda")
+
+#%%
+
+resid_pre = cache["blocks.10.hook_resid_pre"]
+scaled_resid_pre = resid_pre / (resid_pre.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
+
+logit_lens = einops.einsum(
+    scaled_resid_pre.to(DEVICE),
+    model.W_U,
+    "batch seq_len d_model, d_model d_vocab -> batch seq_len d_vocab",
+)
+logit_lens_topk = logit_lens.topk(5, dim=-1).indices
 
 #%%
 
@@ -167,10 +178,14 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 # print("Sentence looks like", model.to_string(mybatch[batch_idx, :seq_idx+1].cpu().tolist()), "with indices", [(model.to_string(mybatch[batch_idx, 1+s]), model.to_str_tokens(wut_indices[:, s])) for s in range(seq_idx)][:10])
                 # Seemed reasonable
 
-                parallel, perp = project(
-                    einops.repeat(query, "d -> s d", s=seq_idx),
-                    list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
+                base_parallel, base_perp = project(
+                    query, # einops.repeat(query, "d -> s d", s=seq_idx),
+                    list(model.W_U.T[logit_lens_topk[batch_idx, seq_idx]]),
+                    # list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
                 )
+
+                parallel = einops.repeat(base_parallel, "d -> s d", s=seq_idx)
+                perp = einops.repeat(base_perp, "d -> s d", s=seq_idx)
 
                 para_score = dot_with_query(
                     unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE),
@@ -220,40 +235,18 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 denoms.extend([denom.item() for _ in range(len(indices))])
                 # attn_scores.append(outputs.item())
                 attn_scores.extend((outputs-denom.item())[indices].tolist())
-
-        # get correlation
-        r2 = np.corrcoef(xs, ys)[0, 1] ** 2
-
-        # get best fit line 
-        m, b = np.polyfit(xs, ys, 1)
-
-        fig = px.scatter(
-            x=xs,
-            y=ys,
-        )
-
-        # add best fit line from min x to max x
-        fig.add_trace(
-            go.Scatter(
-                x=[min(xs), max(xs)],
-                y=[m * min(xs) + b, m * max(xs) + b],
-                mode="lines",
-                name=f"r^2 = {r2:.3f}",
-            )
-        )
-
-        # add y = mx + c label
-        fig.add_annotation(
-            x=0.1,
-            y=0.1,
-            text=f"y = {m:.3f}x + {b:.3f}",
-            showarrow=False,
-        )
-
-        fig.update_layout(
-            title = f"Comparison of attention scores from parallel and perpendicular projections for Head {LAYER_IDX}.{HEAD_IDX}",
-            xaxis_title="Log attention score from unembedding parallel projection",
-            yaxis_title="Log attention score from unembedding perpendicular projection",
+        
+        fig = hist(
+            [xs, ys],
+            # labels={"variable": "Version", "value": "Attn diff (positive ⇒ more attn paid to IO than S1)"},
+            title=f"Attention scores for {LAYER_IDX}.{HEAD_IDX}",
+            names=["Log attention score from unembedding parallel projection", "Log attention score from unembedding perpendicular projection"],
+            width=800,
+            height=600,
+            opacity=0.7,
+            marginal="box",
+            template="simple_white",
+            return_fig=True,
         )
 
         fig.show()
