@@ -27,7 +27,7 @@ DEVICE = "cuda"
 SHOW_PLOT = True
 DATASET_SIZE = 500
 BATCH_SIZE = 30 
-MODE = "key"
+MODE = "query"
 
 #%%
 
@@ -123,14 +123,21 @@ if MODE == "key":
 
         model.reset_hooks()
         for layer_idx in range(LAYER_IDX):
-            model.add_hook(
-                f"blocks.{layer_idx}.attn.hook_attn_scores",
-                lambda z, hook: z + score_mask[None, None], # kill all but BOS and current token
-            )
-            model.add_hook(
+            
+            # model.add_hook(
+            #     f"blocks.{layer_idx}.attn.hook_attn_scores",
+            #     lambda z, hook: z + score_mask[None, None], # kill all but BOS and current token
+            # )
+
+            # model.add_hook( 
+            #     f"blocks.{layer_idx}.attn.hook_pattern",
+            #     lambda z, hook: (z * mask[None, None].cuda()) / (0.5 * mask[None, None].cpu()*cache[f"blocks.{hook.layer()}.attn.hook_pattern"]).sum(dim=-1, keepdim=True).mean(dim=0, keepdim=True).cuda(), # scale so that the total attention paid is the average attention paid across the batch (20); could also try batch and seq...
+            #     level=1,
+            # )
+
+            model.add_hook( # # This is the only thing that works; other rescalings suggest that the perpendicular component is more important
                 f"blocks.{layer_idx}.attn.hook_pattern",
-                lambda z, hook: (z * mask[None, None].cuda()) / (mask[None, None].cpu()*cache[f"blocks.{hook.layer()}.attn.hook_pattern"]).sum(dim=-1, keepdim=True).mean(dim=0, keepdim=True).cuda(), # scale so that the total attention paid is the average attention paid across the batch (20); could also try batch and seq...
-                level=1,
+                lambda z, hook: (z * mask[None, None].cuda()),
             )
 
         cached_hook_resid_pre = model.run_with_cache(
@@ -262,10 +269,10 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 t.testing.assert_close(outputs, the_para_score + the_perp_score + the_key_bias_score, atol=1e-3, rtol=1e-3)
 
                 indices = outputs.argsort(descending=True)[:3].tolist()
-                indices.extend(torch.randperm(seq_idx)[:3].tolist())
+                # indices.extend(torch.randperm(seq_idx)[:3].tolist())
 
-                xs.extend((torch.exp(the_para_score) / denom.item() - attn_pattern[batch_idx, seq_idx, 0].item())[indices].tolist())
-                ys.extend((torch.exp(the_perp_score) / denom.item()  - attn_pattern[batch_idx, seq_idx, 0].item() )[indices].tolist())
+                xs.extend((torch.exp(the_para_score) / denom.item()))
+                ys.extend((torch.exp(the_perp_score) / denom.item())) #   - attn_pattern[batch_idx, seq_idx, 0].item() )[indices].tolist())
                 bias_scores.extend((torch.exp(the_key_bias_score) / denom.item())[indices].tolist())
 
             elif MODE == "query":
@@ -319,11 +326,11 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 indices = outputs.argsort(descending=True)[:3].tolist()
                 # indices.extend(torch.randperm(seq_idx)[:5].tolist())
 
-                # xs.extend((torch.exp(para_score) / denom.item()).tolist())
-                xs.extend((para_score - denom.log().item())[indices].tolist())
+                xs.extend((torch.exp(para_score) / denom.item()).tolist())
+                # xs.extend((para_score - denom.log().item())[indices].tolist())
 
-                # ys.extend((torch.exp(perp_score) / denom.item()).tolist())
-                ys.extend((perp_score-denom.log().item())[indices].tolist())
+                ys.extend((torch.exp(perp_score) / denom.item()).tolist())
+                # ys.extend((perp_score - denom.log().item())[indices].tolist())
 
                 # bias?
                 
