@@ -123,10 +123,10 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
         warnings.warn("Chaos things")
 
         for batch_idx in tqdm(range(BATCH_SIZE)):
-            for seq_idx in range(1, 20): # max_seq_len): # skip BOS
+            for seq_idx in range(1, 200): # max_seq_len): # skip BOS
 
-                # if (batch_idx, seq_idx) not in loss_to_use:
-                #     continue
+                if (batch_idx, seq_idx) not in loss_to_use:
+                    continue
 
                 # if seq_idx % 20 != 0: # Maybe random sample stops Simpson's paradox?
                 #     continue
