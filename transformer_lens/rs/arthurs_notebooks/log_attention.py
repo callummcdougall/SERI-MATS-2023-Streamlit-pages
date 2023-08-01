@@ -289,7 +289,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 K_semantic = 10
                 W_QK = model.W_Q[LAYER_IDX, HEAD_IDX] @ model.W_K[LAYER_IDX, HEAD_IDX].T / (model.cfg.d_head ** 0.5)
                 submatrix_of_full_QK_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks @ W_QK.T @ model.W_U
-                E_sq_QK: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_QK_matrix.topk(K_semantic, dim=-1).indices
+                E_sq_QK: Int[Tensor, "batch seqK K_semantic"] = submatrix_of_full_QK_matrix.topk(K_semantic, dim=-1).indices.cpu()
                 E_sq_QK_rearranged = einops.rearrange(E_sq_QK, "batch seqK K_semantic -> K_semantic batch seqK") # K_semantic first is easier for projection
 
                 E_sq_QK_contains_self: Bool[Tensor, "batch seqK"] = (E_sq_QK == mybatch[:, :, None]).any(-1)
@@ -299,7 +299,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 warnings.warn("Projecting onto the literal token")
                 base_parallel, base_perp = project(
                     einops.repeat(query, "d -> s d", s=seq_idx),
-                    list(E_sq_QK_rearranged[:, batch_idx, 1:1+seq_idx]),
+                    list(model.W_U.cpu.T[E_sq_QK_rearranged[:, batch_idx, 1:1+seq_idx].cuda()]),
                     # list(model.W_U.T[logit_lens_topk[batch_idx, seq_idx]]),
                     # list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
                     # model.W_U.T[mybatch[batch_idx, 1:1+seq_idx]],
