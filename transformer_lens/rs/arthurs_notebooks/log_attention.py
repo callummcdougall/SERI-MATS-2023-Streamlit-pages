@@ -17,18 +17,8 @@ model: HookedTransformer = HookedTransformer.from_pretrained(
     refactor_factored_attn_matrices=False,
 )
 
-if ipython is None and False: # 
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--layer-idx", type=int)
-    parser.add_argument("--head-idx", type=int)
-    args = parser.parse_args()
-    LAYER_IDX = args.layer_idx
-    HEAD_IDX = args.head_idx
-
-else:
-    LAYER_IDX = 10
-    HEAD_IDX = 7
+LAYER_IDX = 10
+HEAD_IDX = 7
 
 model.set_use_attn_result(True)
 model.set_use_hook_mlp_in(True)
@@ -37,7 +27,7 @@ DEVICE = "cuda"
 SHOW_PLOT = True
 DATASET_SIZE = 500
 BATCH_SIZE = 30 
-MODE = "query"
+MODE = "key"
 
 #%%
 
@@ -94,13 +84,13 @@ W_EE = get_effective_embedding(model)['W_E (including MLPs)']
 #%%
 
 my_random_tokens = model.to_tokens("The")[0]
-my_embeddings = t.zeros(BATCH_SIZE, max_seq_len-1, model.cfg.d_model)
+my_embeddings = t.zeros(BATCH_SIZE, max_seq_len, model.cfg.d_model)
 
 print("Making the embeddings...")
 for batch_idx in tqdm(range(BATCH_SIZE)):
     current_prompt = t.cat([
-        einops.repeat(my_random_tokens, "random_seq_len -> cur_seq_len random_seq_len", cur_seq_len=max_seq_len-1).clone().cpu(),
-        mybatch[batch_idx, :-1].unsqueeze(-1).clone().cpu(),
+        einops.repeat(my_random_tokens, "random_seq_len -> cur_seq_len random_seq_len", cur_seq_len=max_seq_len).clone().cpu(),
+        mybatch[batch_idx].unsqueeze(-1).clone().cpu(),
     ],dim=1)
     
     gc.collect()
@@ -109,7 +99,7 @@ for batch_idx in tqdm(range(BATCH_SIZE)):
     current_embeddings = model.run_with_cache(
         current_prompt.to(DEVICE),
         names_filter = lambda name: name==get_act_name("resid_pre", 10),
-    )[1][get_act_name("resid_pre", 10)][torch.arange(max_seq_len-1), -1].cpu()
+    )[1][get_act_name("resid_pre", 10)][torch.arange(max_seq_len), -1].cpu()
     my_embeddings[batch_idx] = current_embeddings
 
 # %%
@@ -155,8 +145,8 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
         for i in range((BATCH_SIZE*max_seq_len) // 20):
             loss_to_use.add((loss_sorted[i][0], loss_sorted[i][1]))
 
-        normalized_query = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"].to(DEVICE)
-        normalized_query /= (normalized_query.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
+        unnormalized_query = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"].to(DEVICE)
+        normalized_query = unnormalized_query / (unnormalized_query.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
 
         xs = []
         ys = []
@@ -187,7 +177,54 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 )
                 
                 if MODE == "key":
-                    pass
+                    para_keys, perp_keys = project(
+                        normalized_keys,
+                        current_embeddings[batch_idx, 1:seq_idx+1],
+                        # list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
+                    )
+
+                    the_para_score = dot_with_query(
+                        unnormalized_keys=para_keys,
+                        unnormalized_queries = unnormalized_query,
+                        model=model,
+                        layer_idx=LAYER_IDX,
+                        head_idx = HEAD_IDX,
+                        add_key_bias = False,
+                        add_query_bias=True,
+                        normalize_keys = False,
+                        normalize_queries = True,
+                        use_tqdm=False,
+                    )
+                    the_perp_score = dot_with_query(
+                        unnormalized_keys=perp_keys,
+                        unnormalized_queries = unnormalized_query,
+                        model=model,
+                        layer_idx=LAYER_IDX,
+                        head_idx = HEAD_IDX,
+                        add_key_bias = False,
+                        add_query_bias=True,
+                        normalize_keys = False,
+                        normalize_queries = True,
+                        use_tqdm=False,
+                    )
+                    key_bias_score = dot_with_query(
+                        unnormalized_keys = 0.0*perp_keys,
+                        unnormalized_queries = unnormalized_query,
+                        model=model,
+                        layer_idx=LAYER_IDX,
+                        head_idx = HEAD_IDX,
+                        add_key_bias = True,
+                        add_query_bias=True,
+                        normalize_keys = False,
+                        normalize_queries = True,
+                        use_tqdm=False,
+                    )
+
+                    t.testing.assert_close(outputs, the_para_score + the_perp_score + key_bias_score, atol=1e-3, rtol=1e-3)
+                    xs.extend((torch.exp(the_para_score) / denom.item()).tolist())
+                    ys.extend((torch.exp(the_perp_score) / denom.item()).tolist())
+                    bias_scores.extend((torch.exp(key_bias_score) / denom.item()).tolist())
+
 
                 elif MODE == "query":
                     query = normalized_query[batch_idx, seq_idx]
