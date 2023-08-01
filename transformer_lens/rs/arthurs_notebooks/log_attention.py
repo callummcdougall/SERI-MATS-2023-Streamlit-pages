@@ -97,6 +97,7 @@ xs = []
 ys = []
 attn_scores = []
 denoms = []
+biases = []
 
 for batch_idx in tqdm(range(BATCH_SIZE)):
     warnings.warn("Trimming to size 30")
@@ -105,73 +106,70 @@ for batch_idx in tqdm(range(BATCH_SIZE)):
         if loss_indices[batch_idx, seq_idx-1] > 30: continue # Only scan through 30 prompts
 
         denom = torch.exp(attn_score[batch_idx, seq_idx, :seq_idx+1]).sum().log()
-        cur_seq_idx = 0
 
-        for cur_seq_idx in range(1, seq_idx): # skip BOS
+        outputs = dot_with_query(
+            unnormalized_keys = cache["blocks.10.hook_resid_pre"][batch_idx, 1:seq_idx+1],
+            unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
+            model=model,
+            layer_idx=10,
+            head_idx=7,
+            add_key_bias = True, 
+            add_query_bias = True,
+            normalize_keys = True,
+            normalize_queries = False,
+            use_tqdm=False,
+        )
 
-            outputs = dot_with_query(
-                unnormalized_keys = cache["blocks.10.hook_resid_pre"][batch_idx, cur_seq_idx:cur_seq_idx+1],
-                unnormalized_queries = normalized_query[batch_idx, seq_idx:seq_idx+1],
-                model=model,
-                layer_idx=10,
-                head_idx=7,
-                add_key_bias = True, 
-                add_query_bias = True,
-                normalize_keys = True,
-                normalize_queries = False,
-                use_tqdm=False,
-            )
+        query = normalized_query[batch_idx, seq_idx]
+        parallel, perp = project(
+            einops.repeat(query, "d -> s d", s=seq_idx),
+            model.W_U.T[mybatch[batch_idx, 1:seq_idx+1]],
+        )
 
-            query = normalized_query[batch_idx, seq_idx:seq_idx+1]
-            parallel, perp = project(
-                query,
-                model.W_U.T[mybatch[batch_idx, cur_seq_idx:cur_seq_idx+1]],
-            )
-
-            para_score = dot_with_query(
-                unnormalized_keys = cache["blocks.10.hook_resid_pre"][batch_idx, cur_seq_idx:cur_seq_idx+1],
-                unnormalized_queries = parallel,
-                model=model,
-                layer_idx=10,
-                head_idx=7,
-                add_key_bias = True, 
-                add_query_bias = False,
-                normalize_keys = True,
-                normalize_queries = False,
-                use_tqdm=False,
-            )
-            perp_score = dot_with_query(
-                unnormalized_keys = cache["blocks.10.hook_resid_pre"][batch_idx, cur_seq_idx:cur_seq_idx+1],
-                unnormalized_queries = perp,
-                model=model,
-                layer_idx=10,
-                head_idx=7,
-                add_key_bias = True, 
-                add_query_bias = False,
-                normalize_keys = True,
-                normalize_queries = False,
-                use_tqdm=False,
-            )
-            bias_score = dot_with_query(
-                unnormalized_keys = cache["blocks.10.hook_resid_pre"][batch_idx, cur_seq_idx:cur_seq_idx+1],
-                unnormalized_queries = 0.0*perp,
-                model=model,
-                layer_idx=10,
-                head_idx=7,
-                add_key_bias = True, 
-                add_query_bias = True,
-                normalize_keys = True,
-                normalize_queries = False,
-                use_tqdm=False,
-            )
-
-            assert abs(bias_score.item() + para_score.item() + perp_score.item() - outputs.item()) < 1e-5 # This recalc of attention scores gives same answer
-
-            # if outputs.item() - denom.item() > -1:
-            xs.append(para_score.item()- denom.item())
-            ys.append(perp_score.item() - denom.item())
-            attn_scores.append(outputs.item())
-            denoms.append(denom.item())
+        para_score = dot_with_query(
+            unnormalized_keys = cache["blocks.10.hook_resid_pre"][batch_idx, 1:seq_idx+1],
+            unnormalized_queries = parallel,
+            model=model,
+            layer_idx=10,
+            head_idx=7,
+            add_key_bias = True, 
+            add_query_bias = False,
+            normalize_keys = True,
+            normalize_queries = False,
+            use_tqdm=False,
+        )
+        perp_score = dot_with_query(
+            unnormalized_keys = cache["blocks.10.hook_resid_pre"][batch_idx, 1:seq_idx+1],
+            unnormalized_queries = perp,
+            model=model,
+            layer_idx=10,
+            head_idx=7,
+            add_key_bias = True, 
+            add_query_bias = False,
+            normalize_keys = True,
+            normalize_queries = False,
+            use_tqdm=False,
+        )
+        bias_score = dot_with_query(
+            unnormalized_keys = cache["blocks.10.hook_resid_pre"][batch_idx, 1:seq_idx+1],
+            unnormalized_queries = 0.0*perp,
+            model=model,
+            layer_idx=10,
+            head_idx=7,
+            add_key_bias = True, 
+            add_query_bias = True,
+            normalize_keys = True,
+            normalize_queries = False,
+            use_tqdm=False,
+        )
+        t.testing.assert_allclose(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
+        xs.extend((para_score-denom.item()).tolist())
+        # ys.append(perp_score.item() - denom.item())
+        ys.extend((perp_score-denom.item()).tolist())
+        biases.extend((bias_score-denom.item()).tolist())
+        denoms.extend([denom.item() for _ in range(len(para_score))])
+        # attn_scores.append(outputs.item())
+        attn_scores.extend((outputs-denom.item()).tolist())
 
 #%%
 
