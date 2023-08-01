@@ -56,9 +56,35 @@ mytargets = torch.LongTensor(targets[:BATCH_SIZE])
 
 logits, cache = model.run_with_cache(
     mybatch.to(DEVICE), 
-    names_filter = lambda name: name in ["blocks.10.hook_resid_pre", "blocks.10.attn.hook_attn_scores"],
+    names_filter = lambda name: name in ["blocks.10.hook_resid_pre", "blocks.10.attn.hook_attn_scores", "blocks.10.attn.hook_result", "blocks.11.hook_resid_post"],
 )
 attn_score = cache["blocks.10.attn.hook_attn_scores"][:, 7]
+head_output = cache["blocks.10.attn.hook_result"][:, :, 7]
+resid_post = cache["blocks.11.hook_resid_post"]
+
+#%%
+
+loss = get_metric_from_end_state(
+    end_state= resid_post,
+    model=model,
+    targets=mytargets.to(DEVICE),
+)
+
+#%%
+
+mean_head_output = head_output.mean(dim=(0, 1))
+
+#%%
+
+mean_ablated_loss = get_metric_from_end_state(
+    end_state = resid_post - head_output + mean_head_output[None, None],
+    model=model,
+    targets=mytargets.to(DEVICE),
+)
+
+#%%
+
+loss_indices = (mean_ablated_loss-loss).argsort(descending=True)
 
 #%%
 
@@ -69,14 +95,19 @@ normalized_query /= (normalized_query.var(dim=-1, keepdim=True) + model.cfg.eps)
 
 xs = []
 ys = []
-ys2 = []
+attn_scores = []
+denoms = []
 
 for batch_idx in tqdm(range(BATCH_SIZE)):
     warnings.warn("Trimming to size 30")
-    for seq_idx in range(30):
+    for seq_idx in range(1, max_seq_len): # skip BOS
+
+        if loss_indices[batch_idx, seq_idx-1] > 30: continue # Only scan through 30 prompts
+
         denom = torch.exp(attn_score[batch_idx, seq_idx, :seq_idx+1]).sum().log()
         cur_seq_idx = 0
-        for cur_seq_idx in range(seq_idx):
+
+        for cur_seq_idx in range(1, seq_idx): # skip BOS
 
             outputs = dot_with_query(
                 unnormalized_keys = cache["blocks.10.hook_resid_pre"][batch_idx, cur_seq_idx:cur_seq_idx+1],
@@ -104,7 +135,7 @@ for batch_idx in tqdm(range(BATCH_SIZE)):
                 layer_idx=10,
                 head_idx=7,
                 add_key_bias = True, 
-                add_query_bias = True,
+                add_query_bias = False,
                 normalize_keys = True,
                 normalize_queries = False,
                 use_tqdm=False,
@@ -116,22 +147,36 @@ for batch_idx in tqdm(range(BATCH_SIZE)):
                 layer_idx=10,
                 head_idx=7,
                 add_key_bias = True, 
+                add_query_bias = False,
+                normalize_keys = True,
+                normalize_queries = False,
+                use_tqdm=False,
+            )
+            bias_score = dot_with_query(
+                unnormalized_keys = cache["blocks.10.hook_resid_pre"][batch_idx, cur_seq_idx:cur_seq_idx+1],
+                unnormalized_queries = 0.0*perp,
+                model=model,
+                layer_idx=10,
+                head_idx=7,
+                add_key_bias = True, 
                 add_query_bias = True,
                 normalize_keys = True,
                 normalize_queries = False,
                 use_tqdm=False,
             )
 
+            assert abs(bias_score.item() + para_score.item() + perp_score.item() - outputs.item()) < 1e-5 # This recalc of attention scores gives same answer
+
+            # if outputs.item() - denom.item() > -1:
             xs.append(para_score.item()- denom.item())
             ys.append(perp_score.item() - denom.item())
-            ys2.append((outputs.item(), denom))
-# 
-        # print(ys2)
-        # if cur_seq_idx > 30:
-        #     assert False
+            attn_scores.append(outputs.item())
+            denoms.append(denom.item())
+
+#%%
 
 fig = px.scatter(
-    x=xs, 
+    x=xs,
     y=ys,
 )
 
@@ -141,5 +186,9 @@ fig.update_layout(
 )
 
 fig.show()
+
+# %%
+
+
 
 # %%
