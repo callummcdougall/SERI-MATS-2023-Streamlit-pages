@@ -10,7 +10,6 @@ import subprocess
 
 # "EleutherAI/gpt-neo-125M",
 
-for MODEL_NAME in ["gpt2-medium"] + [
-    model_name for model_name in MA.keys() if "gpt2" in model_name and ("small" in model_name or "medium" in model_name)
-]:
-    subprocess.run(["python", "/root/TransformerLens/transformer_lens/rs/arthurs_notebooks/sweep_direct_effects.py", "--model-name", MODEL_NAME])
+for layer_idx in range(9, 12):
+    for head_idx in range(12):
+        subprocess.run(["python", "/root/TransformerLens/transformer_lens/rs/arthurs_notebooks/log_attention.py", "--layer-idx", str(layer_idx), "--head-idx", str(head_idx)])
