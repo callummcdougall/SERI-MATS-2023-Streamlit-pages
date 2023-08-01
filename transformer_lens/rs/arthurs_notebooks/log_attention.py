@@ -122,8 +122,8 @@ for batch_idx in tqdm(range(BATCH_SIZE)):
                 use_tqdm=False,
             )
 
-            xs.append(para_score.item()/denom.item())
-            ys.append(perp_score.item()/denom.item())
+            xs.append(para_score.item()- denom.item())
+            ys.append(perp_score.item() - denom.item())
             ys2.append((outputs.item(), denom))
 # 
         # print(ys2)
