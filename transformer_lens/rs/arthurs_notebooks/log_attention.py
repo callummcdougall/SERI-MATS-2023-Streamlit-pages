@@ -27,7 +27,7 @@ DEVICE = "cuda"
 SHOW_PLOT = True
 DATASET_SIZE = 500
 BATCH_SIZE = 30 
-MODE = "key"
+MODE = "Key"
 
 #%%
 
@@ -86,7 +86,7 @@ W_EE = get_effective_embedding(model)['W_E (including MLPs)']
 
 #%%
 
-if MODE == "key":
+if MODE == "Key":
     VERSION = "ee"
     my_random_tokens = model.to_tokens("The")[0]
     my_embeddings = t.zeros(BATCH_SIZE, max_seq_len, model.cfg.d_model)
@@ -235,13 +235,13 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 use_tqdm=False,
             )
             
-            if MODE == "key":
+            if MODE == "Key":
                 para_keys, perp_keys = project(
                     normalized_keys,
                     my_embeddings[batch_idx, 1:seq_idx+1].to(DEVICE),
                 )
 
-                the_para_score = dot_with_query(
+                para_score = dot_with_query(
                     unnormalized_keys = para_keys,
                     unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
                     model=model,
@@ -252,7 +252,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                     normalize_keys = False,
                     normalize_queries = True,
                 )
-                the_perp_score = dot_with_query(
+                perp_score = dot_with_query(
                     unnormalized_keys = perp_keys,
                     unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
                     model=model,
@@ -263,7 +263,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                     normalize_keys = False,
                     normalize_queries = True,
                 )
-                the_key_bias_score = dot_with_query(
+                bias_score = dot_with_query(
                     unnormalized_keys = 0.0*perp_keys,
                     unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
                     model=model,
@@ -275,19 +275,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                     normalize_queries = True,
                 )
 
-                t.testing.assert_close(outputs, the_para_score + the_perp_score + the_key_bias_score, atol=1e-3, rtol=1e-3)
-
-                indices = outputs.argsort(descending=True)[:3].tolist()
-                # indices.extend(torch.randperm(seq_idx)[:3].tolist())
-
-                xs.extend((torch.exp(the_para_score) / denom.item()))
-                ys.extend((torch.exp(the_perp_score) / denom.item())) #   - attn_pattern[batch_idx, seq_idx, 0].item() )[indices].tolist())
-                bias_scores.extend((torch.exp(the_key_bias_score) / denom.item())[indices].tolist())
-
-                used_batch_indices.extend([batch_idx for _ in range(len(indices))])
-                used_seq_indices.extend([seq_idx for _ in range(len(indices))])
-
-            elif MODE == "query":
+            elif MODE == "Query":
                 K_semantic = 10
                 W_QK = model.W_Q[LAYER_IDX, HEAD_IDX].cpu() @ model.W_K[LAYER_IDX, HEAD_IDX].T.cpu() / (model.cfg.d_head ** 0.5)
                 
@@ -358,30 +346,22 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 )
                 t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
 
-                indices = outputs.argsort(descending=True)[:2].tolist()
-                # indices.extend(torch.randperm(seq_idx)[:5].tolist())
+            indices = outputs.argsort(descending=True)[:2].tolist()
+            # indices.extend(torch.randperm(seq_idx)[:5].tolist())
 
-                xs.extend((torch.exp(para_score) / denom.item())[indices].tolist())
-                # xs.extend((para_score - denom.log().item())[indices].tolist())
+            xs.extend((torch.exp(para_score) / denom.item())[indices].tolist())
+            # xs.extend((para_score - denom.log().item())[indices].tolist())
 
-                ys.extend((torch.exp(perp_score) / denom.item())[indices].tolist())
-                # ys.extend((perp_score - denom.log().item())[indices].tolist())
+            ys.extend((torch.exp(perp_score) / denom.item())[indices].tolist())
+            # ys.extend((perp_score - denom.log().item())[indices].tolist())
 
-                used_batch_indices.extend([batch_idx for _ in range(len(indices))])
-                used_seq_indices.extend([seq_idx for _ in range(len(indices))])
+            used_batch_indices.extend([batch_idx for _ in range(len(indices))])
+            used_seq_indices.extend([seq_idx for _ in range(len(indices))])
 
-                # bias?
-                
-                # if max(ys[-len(perp_score):]) > 5.0: # This was a set of extreme values at some point
-                #     print("Max index", ys[-len(perp_score):].index(max(ys[-len(perp_score):])))
-                #     print("Sentence looks like", model.to_string(mybatch[batch_idx, :seq_idx+1].cpu().tolist()), "with indices",  model.to_str_tokens(logit_lens_topk[batch_idx, seq_idx]), [(s, perp_score[s-1].item(), model.to_string(mybatch[batch_idx, s])) for s in range(1, seq_idx+1)])
-                #     # Seemed reasonable # 
-
-                bias_scores.extend((torch.exp(bias_score) / denom.item()).tolist())
-                # (bias_score-denom.item())[indices].tolist())
-                # denoms.extend([denom.item() for _ in range(len(indices))])
-                # attn_scores.append(outputs.item())
-            
+            t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
+            bias_scores.extend((torch.exp(bias_score) / denom.item())[indices].tolist())
+            used_batch_indices.extend([batch_idx for _ in range(len(indices))])
+            used_seq_indices.extend([seq_idx for _ in range(len(indices))])
 
     if True: # These correlation plots do not work
         r2 = np.corrcoef(xs, ys)[0, 1] ** 2
@@ -426,17 +406,17 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
 
         fig.update_layout(
             title = f"Comparison of attention scores from parallel and perpendicular projections for Head {LAYER_IDX}.{HEAD_IDX}",
-            xaxis_title="Log attention score from unembedding parallel projection",
-            yaxis_title="Log attention score from unembedding perpendicular projection",
+            xaxis_title="Attention score from unembedding parallel projection",
+            yaxis_title="Attention score from unembedding perpendicular projection",
         )
         fig.show()
 
     else:        
         fig = hist(
             [xs, ys],
-            # labels={"variable": "Version", "value": "Attn diff (positive ⇒ more attn paid to IO than S1)"},
-            title=f"Attention scores for {LAYER_IDX}.{HEAD_IDX}",
-            names=["Attention probability contribution from unembedding parallel projection", "Attention probability contribution from unembedding perpendicular projection"] if MODE == "query" else ["Para", "perp"],
+            labels={"variable": MODE + " input component", "value": "Attention"},
+            title=f"{LAYER_IDX}.{HEAD_IDX} attention probabilities under {MODE.lower()} interventions",
+            names=["Attention probability contribution from unembedding parallel projection", "Attention probability contribution from unembedding perpendicular projection"] if MODE == "Query" else ["Parallel", "Perpendicular"],
             width=800,
             height=600,
             opacity=0.7,
@@ -444,7 +424,22 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
             template="simple_white",
             return_fig=True,
         )
+
+        # Computing the histograms for xs and ys
+        counts_xs, _ = np.histogram(xs)
+        counts_ys, _ = np.histogram(ys)
+
+        # Getting the maximum count
+        max_count = max(max(counts_xs), max(counts_ys))
+
+        # Update x-axis
+        fig.update_xaxes(range=[-0.0, 0.5])  # Set the x-axis zoom level
+
+        # Update y-axis
+        # fig.update_yaxes(range=[-0.1, 2*max_count]) # Set the y-axis zoom level
+
         fig.show()
+
 
     old_xs = deepcopy(xs)
     old_ys = deepcopy(ys)
