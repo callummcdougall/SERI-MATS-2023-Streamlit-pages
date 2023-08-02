@@ -1,6 +1,6 @@
 This repo serves two purposes: 
 
-1) An editing version of [TransformerLens](https://github.com/neelnanda-io/TransformerLens) with a couple of extra features (see below).
+1) An edited version of [TransformerLens](https://github.com/neelnanda-io/TransformerLens) with a couple of extra features (see below).
 2) Hosting streamlit pages from https://github.com/callummcdougall/SERI-MATS-2023-Streamlit-pages/blob/main/transformer_lens/rs/callum2/st_page/Home.py
 
 See `transformer_lens/rs/arthurs_notebooks/example_notebook.py` for example usage.
