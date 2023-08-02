@@ -1,4 +1,7 @@
-Fork of the TransformerLens repo for Callum and Arthur's research sprint.
+This repo serves two purposes: 
+
+1) An editing version of [TransformerLens](https://github.com/neelnanda-io/TransformerLens) with a couple of extra features (see below).
+2) Hosting streamlit pages from https://github.com/callummcdougall/SERI-MATS-2023-Streamlit-pages/blob/main/transformer_lens/rs/callum2/st_page/Home.py
 
 See `transformer_lens/rs/arthurs_notebooks/example_notebook.py` for example usage.
 
@@ -6,11 +9,18 @@ See `transformer_lens/rs/arthurs_notebooks/example_notebook.py` for example usag
 
 This setup relies on using an SSH key to access Github. See [here](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account) and the associated links on that page (if you don't have an SSH key to begin with)
 
+```bash
+$ git clone git@github.com:ArthurConmy/TransformerLens.git
+$ cd TransformerLens
+$ pip install -e . # poetry install also should work
 ```
-git clone git@github.com:ArthurConmy/TransformerLens.git
-cd TransformerLens
-git checkout researchsprint
-pip install -e .
+
+if you want to launch streamlit pages, run 
+
+```python
+pip install streamlit
+cd transformer_lens/rs/callum2/st_page
+streamlit run Home.py
 ```
 
 ## Difference from [the main branch of TransformerLens](https://github.com/neelnanda-io/TransformerLens)
