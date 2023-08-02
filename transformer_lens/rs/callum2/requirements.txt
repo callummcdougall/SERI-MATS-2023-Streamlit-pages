@@ -9,4 +9,3 @@ jaxtyping
 streamlit-chat
 openai
 git+https://github.com/callummcdougall/SERI-MATS-2023-Streamlit-pages.git
-git+https://github.com/callummcdougall/CircuitsVis.git#subdirectory=python
