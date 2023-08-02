@@ -107,7 +107,7 @@ def get_EE_QK_circuit(
     if ten_x:
         W_E_Q_normed *= 10
 
-    EE_QK_circuit = FactoredMatrix.FactoredMatrix(W_E_Q_normed @ W_Q_head, W_K_head.T @ W_E_K_normed.T)
+    EE_QK_circuit = FactoredMatrix(W_E_Q_normed @ W_Q_head, W_K_head.T @ W_E_K_normed.T)
     EE_QK_circuit_result = t.zeros((num_samples, num_samples))
 
     for random_seed in range(random_seeds):
