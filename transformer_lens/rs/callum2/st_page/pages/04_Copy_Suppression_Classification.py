@@ -7,8 +7,8 @@ st.set_page_config(layout="wide")
 import pickle
 import gzip
 
-from streamlit_styling import styling # type: ignore
-from explore_prompts_utils import ST_HTML_PATH # type: ignore
+from transformer_lens.rs.callum2.st_page.streamlit_styling import styling # type: ignore
+from transformer_lens.rs.callum2.st_page.explore_prompts_utils import ST_HTML_PATH # type: ignore
 
 import torch as t
 t.set_grad_enabled(False)

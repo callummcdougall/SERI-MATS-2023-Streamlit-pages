@@ -19,11 +19,11 @@ import numpy as np
 import time
 import itertools
 
-from explore_prompts_utils import (  # type: ignore
+from transformer_lens.rs.callum2.st_page.explore_prompts_utils import (  # type: ignore
     ST_HTML_PATH,
     NEGATIVE_HEADS
 )
-from model_results_3 import (  # type: ignore
+from transformer_lens.rs.callum2.st_page.model_results_3 import (  # type: ignore
     ModelResults,
     get_model_results
 )

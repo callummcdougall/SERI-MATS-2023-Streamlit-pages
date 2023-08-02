@@ -2,7 +2,6 @@ import sys, os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 import streamlit as st
-st.write(os.getcwd())
 import gzip
 import pickle
 from pathlib import Path
@@ -218,7 +217,7 @@ def plot_full_matrix_histogram(
     )
     return fig
 
-ST_HTML_PATH = Path("/media")
+ST_HTML_PATH = Path("transformer_lens/rs/callum2/st_page/media")
 
 @st.cache_data(show_spinner=False, max_entries=1)
 def get_dict_to_store_less():

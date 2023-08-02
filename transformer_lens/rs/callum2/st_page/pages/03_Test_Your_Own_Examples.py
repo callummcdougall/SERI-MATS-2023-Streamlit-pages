@@ -8,10 +8,9 @@ from streamlit.components.v1 import html
 from transformer_lens import HookedTransformer
 from collections import defaultdict
 
-from streamlit_styling import styling # type: ignore
-from generate_html import CSS # type: ignore
-from explore_prompts_utils import parse_str_tok_for_printing # type: ignore
-from generate_html import generate_4_html_plots # type: ignore
+from transformer_lens.rs.callum2.st_page.streamlit_styling import styling # type: ignore
+from transformer_lens.rs.callum2.st_page.explore_prompts_utils import parse_str_tok_for_printing # type: ignore
+from transformer_lens.rs.callum2.st_page.generate_html import CSS, generate_4_html_plots # type: ignore
 
 import torch as t
 t.set_grad_enabled(False)

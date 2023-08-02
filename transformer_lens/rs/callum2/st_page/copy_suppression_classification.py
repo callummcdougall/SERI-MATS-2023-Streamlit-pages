@@ -7,7 +7,8 @@ import plotly.express as px
 from copy import copy
 from transformer_lens import utils, ActivationCache, HookedTransformer
 import pandas as pd
-from explore_prompts_utils import create_title_and_subtitles
+
+from transformer_lens.rs.callum2.st_page.explore_prompts_utils import create_title_and_subtitles
 
 def generate_scatter(
     ICS: Dict[str, Tensor], # the thing we get from MODEL_RESULTS.is_copy_suppression

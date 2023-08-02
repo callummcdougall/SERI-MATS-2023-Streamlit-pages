@@ -11,7 +11,7 @@ from transformer_lens import utils
 import numpy as np
 from pathlib import Path
 
-ST_HTML_PATH = Path("/media")
+ST_HTML_PATH = Path("transformer_lens/rs/callum2/st_page/media")
 
 Head = Tuple[int, int]
 
