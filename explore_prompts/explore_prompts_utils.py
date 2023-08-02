@@ -65,4 +65,3 @@ def create_title_and_subtitles(
 
 
 
-        
