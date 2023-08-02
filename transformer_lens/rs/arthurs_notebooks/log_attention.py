@@ -27,7 +27,7 @@ DEVICE = "cuda"
 SHOW_PLOT = True
 DATASET_SIZE = 500
 BATCH_SIZE = 30 
-MODE = "query"
+MODE = "key"
 
 #%%
 
@@ -87,11 +87,14 @@ W_EE = get_effective_embedding(model)['W_E (including MLPs)']
 #%%
 
 if MODE == "key":
-    VERSION = "callum"
+    VERSION = "ee"
     my_random_tokens = model.to_tokens("The")[0]
     my_embeddings = t.zeros(BATCH_SIZE, max_seq_len, model.cfg.d_model)
 
-    if VERSION == "the":
+    if VERSION == "ee":
+        my_embeddings[:] = W_EE.cpu()[mybatch]
+
+    elif VERSION == "the":
         print("Making the embeddings...")
         for batch_idx in tqdm(range(BATCH_SIZE)):
             current_prompt = t.cat([
@@ -389,16 +392,17 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
         df = pd.DataFrame({
         'xs': xs,
         'ys': ys,
-        'text': [(str(model.to_string(mybatch[used_batch_idx, :used_seq_idx+1].cpu().tolist()))[-20:], 
-                 "with completion", 
-                 model.to_string(mytargets[used_batch_idx, used_seq_idx:used_seq_idx+1]), new_batch_to_old_batch[used_batch_idx], used_seq_idx) for used_batch_idx, used_seq_idx in zip(used_batch_indices, used_seq_indices)]
+        # sad, below is so broken
+        # 'text': [(str(model.to_string(mybatch[used_batch_idx, :used_seq_idx+1].cpu().tolist()))[-20:], 
+        #          "with completion", 
+        #          model.to_string(mytargets[used_batch_idx, used_seq_idx:used_seq_idx+1]), new_batch_to_old_batch[used_batch_idx], used_seq_idx) for used_batch_idx, used_seq_idx in zip(used_batch_indices, used_seq_indices, strict=True)]
         })
 
         fig = px.scatter(
             df,
             x='xs',
             y='ys',
-            hover_data=['text']
+            # hover_data=['text'] # sad broken
         )
 
         # add best fit line from min x to max x
