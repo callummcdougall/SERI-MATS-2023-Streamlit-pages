@@ -1,8 +1,4 @@
 import streamlit as st
-import os
-st.write(os.getcwd())
-from pathlib import Path
-st.write(list(Path(".").iterdir()))
 
 st.markdown(
 r"""
