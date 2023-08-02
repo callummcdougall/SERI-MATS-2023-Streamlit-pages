@@ -217,9 +217,7 @@ def plot_full_matrix_histogram(
     )
     return fig
 
-
-
-ST_HTML_PATH = Path(root_dir) / "media"
+ST_HTML_PATH = Path("/media")
 
 @st.cache_data(show_spinner=False, max_entries=1)
 def get_dict_to_store_less():
