@@ -1,15 +1,5 @@
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
-
-for root_dir in [
-    os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts", # For Arthur's branch
-    "/app/seri-mats-2023-streamlit-pages/explore_prompts", # For Streamlit page (public)
-    os.getcwd().split("seri-mats-2023-streamlit-pages")[0] + "seri-mats-2023-streamlit-pages/explore_prompts", # For Arthur's branch
-]:
-    if os.path.exists(root_dir):
-        break
-os.chdir(root_dir)
-if root_dir not in sys.path: sys.path.append(root_dir)
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 import streamlit as st
