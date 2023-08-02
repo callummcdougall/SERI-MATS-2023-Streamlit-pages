@@ -1,4 +1,4 @@
-transformer_lens
+git+https://github.com/callummcdougall/SERI-MATS-2023-Streamlit-pages.git
 einops
 torch
 jaxtyping
