@@ -285,7 +285,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 used_seq_indices.extend([seq_idx for _ in range(len(indices))])
 
             elif MODE == "query":
-                K_semantic = 5
+                K_semantic = 10
                 W_QK = model.W_Q[LAYER_IDX, HEAD_IDX].cpu() @ model.W_K[LAYER_IDX, HEAD_IDX].T.cpu() / (model.cfg.d_head ** 0.5)
                 
                 current_ee = W_EE_toks[batch_idx, 1:seq_idx+1].cpu()
@@ -355,7 +355,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 )
                 t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
 
-                indices = outputs.argsort(descending=True)[:3].tolist()
+                indices = outputs.argsort(descending=True)[:2].tolist()
                 # indices.extend(torch.randperm(seq_idx)[:5].tolist())
 
                 xs.extend((torch.exp(para_score) / denom.item())[indices].tolist())
