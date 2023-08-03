@@ -27,7 +27,7 @@ DEVICE = "cuda"
 SHOW_PLOT = True
 DATASET_SIZE = 500
 BATCH_SIZE = 30 
-MODE = "Key"
+MODE = "Query"
 
 #%%
 
@@ -130,20 +130,20 @@ if MODE == "Key":
         model.reset_hooks()
         for layer_idx in range(LAYER_IDX):
             
-            model.add_hook(
-                f"blocks.{layer_idx}.attn.hook_attn_scores",
-                lambda z, hook: z + score_mask[None, None], # kill all but BOS and current token
-            )
+            # model.add_hook(
+            #     f"blocks.{layer_idx}.attn.hook_attn_scores",
+            #     lambda z, hook: z + score_mask[None, None], # kill all but BOS and current token
+            # )
 
             # model.add_hook( 
             #     f"blocks.{layer_idx}.attn.hook_pattern",
             #     lambda z, hook: (z * mask[None, None].cuda()) / (0.00001 + 0.5*mask[None, None].cpu()*cache[f"blocks.{hook.layer()}.attn.hook_pattern"]).mean(dim=0, keepdim=True).cuda(), # scale so that the total attention paid is the average attention paid across the batch (20); could also try batch and seq...
             # )
 
-            # model.add_hook( # This is the only thing that works; other rescalings suggest that the perpendicular component is more important. It also seems the other interventions just totally broke?
-            #     f"blocks.{layer_idx}.attn.hook_pattern",
-            #     lambda z, hook: (z * mask[None, None].cuda()),
-            # )
+            model.add_hook( # This is the only thing that works; other rescalings suggest that the perpendicular component is more important. It also seems the other interventions just totally broke?
+                f"blocks.{layer_idx}.attn.hook_pattern",
+                lambda z, hook: (z * mask[None, None].cuda()),
+            )
 
         cached_hook_resid_pre = model.run_with_cache(
             mybatch.to(DEVICE),
@@ -275,31 +275,38 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 )
 
             elif MODE == "Query":
-                K_semantic = 10
-                W_QK = model.W_Q[LAYER_IDX, HEAD_IDX].cpu() @ model.W_K[LAYER_IDX, HEAD_IDX].T.cpu() / (model.cfg.d_head ** 0.5)
-                
-                current_ee = W_EE_toks[batch_idx, 1:seq_idx+1].cpu()
-                normalized_current_ee = current_ee / (current_ee.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
 
-                times_by_qk = normalized_current_ee @ W_QK.T.cpu()
-                times_by_wu = times_by_qk @ model.W_U.cpu()
+                QUERY_MODE = "single_unembedding"
 
-                # submatrix_of_full_QK_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks.cpu() @ W_QK.T.cpu() @ model.W_U.cpu()
+                if QUERY_MODE == "semantically_similar":
+                    K_semantic = 10
+                    W_QK = model.W_Q[LAYER_IDX, HEAD_IDX].cpu() @ model.W_K[LAYER_IDX, HEAD_IDX].T.cpu() / (model.cfg.d_head ** 0.5)
+                    
+                    current_ee = W_EE_toks[batch_idx, 1:seq_idx+1].cpu()
+                    normalized_current_ee = current_ee / (current_ee.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
 
-                E_sq_QK: Int[Tensor, "seqK K_semantic"] = times_by_wu.topk(K_semantic, dim=-1).indices
+                    times_by_qk = normalized_current_ee @ W_QK.T.cpu()
+                    times_by_wu = times_by_qk @ model.W_U.cpu()
 
-                E_sq_QK_contains_self: Bool[Tensor, "seqK"] = (E_sq_QK == mybatch[batch_idx, 1:1+seq_idx, None]).any(-1)
-                E_sq_QK[..., -1] = t.where(E_sq_QK_contains_self, E_sq_QK[..., -1], mybatch[batch_idx, 1:1+seq_idx])
-                E_sq_QK_rearranged = einops.rearrange(E_sq_QK, "seqK K_semantic -> K_semantic seqK") # K_semantic first is easier for projection
+                    # submatrix_of_full_QK_matrix: Float[Tensor, "batch seqK d_vocab"] = W_EE_toks.cpu() @ W_QK.T.cpu() @ model.W_U.cpu()
+
+
+                    E_sq_QK: Int[Tensor, "seqK K_semantic"] = times_by_wu.topk(K_semantic, dim=-1).indices
+
+                    E_sq_QK_contains_self: Bool[Tensor, "seqK"] = (E_sq_QK == mybatch[batch_idx, 1:1+seq_idx, None]).any(-1)
+                    E_sq_QK[..., -1] = t.where(E_sq_QK_contains_self, E_sq_QK[..., -1], mybatch[batch_idx, 1:1+seq_idx])
+                    E_sq_QK_rearranged = einops.rearrange(E_sq_QK, "seqK K_semantic -> K_semantic seqK") # K_semantic first is easier for projection
+
+                else:
+                    assert QUERY_MODE == "single_unembedding"
 
                 query = normalized_query[batch_idx, seq_idx]
 
                 base_parallel, base_perp = project(
                     einops.repeat(query, "d -> s d", s=seq_idx),
-                    list(model.W_U.T[E_sq_QK_rearranged.cuda()]),
+                    model.W_U.T[mybatch[batch_idx, 1:1+seq_idx]] if QUERY_MODE != "semantically_similar" else list(model.W_U.T[E_sq_QK_rearranged.cuda()]),
                     # list(model.W_U.T[logit_lens_topk[batch_idx, seq_idx]]),
                     # list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
-                    # model.W_U.T[mybatch[batch_idx, 1:1+seq_idx]],
                 )
                 # parallel = einops.repeat(base_parallel, "d -> s d", s=seq_idx)
                 # perp = einops.repeat(base_perp, "d -> s d", s=seq_idx)
@@ -416,7 +423,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
             labels={"variable": MODE + " input component", "value": "Attention"},
             title=f"{LAYER_IDX}.{HEAD_IDX} attention probabilities under {MODE.lower()} interventions",
             names=["Attention probability contribution from unembedding parallel projection", "Attention probability contribution from unembedding perpendicular projection"] if MODE == "Query" else ["Parallel", "Perpendicular"],
-            width=800,
+            width=1200,
             height=600,
             opacity=0.7,
             marginal="box",
