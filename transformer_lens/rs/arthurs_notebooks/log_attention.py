@@ -87,7 +87,7 @@ W_EE = get_effective_embedding(model)['W_E (including MLPs)']
 #%%
 
 if MODE == "Key":
-    VERSION = "ee"
+    VERSION = "callum"
     my_random_tokens = model.to_tokens("The")[0]
     my_embeddings = t.zeros(BATCH_SIZE, max_seq_len, model.cfg.d_model)
 
@@ -130,21 +130,20 @@ if MODE == "Key":
         model.reset_hooks()
         for layer_idx in range(LAYER_IDX):
             
-            # model.add_hook(
-            #     f"blocks.{layer_idx}.attn.hook_attn_scores",
-            #     lambda z, hook: z + score_mask[None, None], # kill all but BOS and current token
-            # )
+            model.add_hook(
+                f"blocks.{layer_idx}.attn.hook_attn_scores",
+                lambda z, hook: z + score_mask[None, None], # kill all but BOS and current token
+            )
 
             # model.add_hook( 
             #     f"blocks.{layer_idx}.attn.hook_pattern",
-            #     lambda z, hook: (z * mask[None, None].cuda()) / (0.5 * mask[None, None].cpu()*cache[f"blocks.{hook.layer()}.attn.hook_pattern"]).sum(dim=-1, keepdim=True).mean(dim=0, keepdim=True).cuda(), # scale so that the total attention paid is the average attention paid across the batch (20); could also try batch and seq...
-            #     level=1,
+            #     lambda z, hook: (z * mask[None, None].cuda()) / (0.00001 + 0.5*mask[None, None].cpu()*cache[f"blocks.{hook.layer()}.attn.hook_pattern"]).mean(dim=0, keepdim=True).cuda(), # scale so that the total attention paid is the average attention paid across the batch (20); could also try batch and seq...
             # )
 
-            model.add_hook( # # This is the only thing that works; other rescalings suggest that the perpendicular component is more important
-                f"blocks.{layer_idx}.attn.hook_pattern",
-                lambda z, hook: (z * mask[None, None].cuda()),
-            )
+            # model.add_hook( # This is the only thing that works; other rescalings suggest that the perpendicular component is more important. It also seems the other interventions just totally broke?
+            #     f"blocks.{layer_idx}.attn.hook_pattern",
+            #     lambda z, hook: (z * mask[None, None].cuda()),
+            # )
 
         cached_hook_resid_pre = model.run_with_cache(
             mybatch.to(DEVICE),
@@ -363,7 +362,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
             used_batch_indices.extend([batch_idx for _ in range(len(indices))])
             used_seq_indices.extend([seq_idx for _ in range(len(indices))])
 
-    if True: # These correlation plots do not work
+    if False: # These correlation plots do not work
         r2 = np.corrcoef(xs, ys)[0, 1] ** 2
 
         # get best fit line 
