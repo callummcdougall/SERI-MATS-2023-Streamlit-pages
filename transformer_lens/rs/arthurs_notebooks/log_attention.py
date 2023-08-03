@@ -88,7 +88,7 @@ W_EE = get_effective_embedding(model)['W_E (including MLPs)']
 
 if MODE == "Key": # What you want to do here is set `my_embeddings` equal to some residual stream state
 
-    VERSION = "callum_no_pos_embed"
+    VERSION = "ee"
     my_random_tokens = model.to_tokens("The")[0]
     my_embeddings = t.zeros(BATCH_SIZE, max_seq_len, model.cfg.d_model)
 
@@ -373,7 +373,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 denom_items = einops.repeat(old_denom_items, "seq_len -> indices_length seq_len", indices_length=len(indices)).clone().cpu()
                 denom_items[torch.arange(len(indices)), indices] = score[indices]
                 new_denom = torch.exp(denom_items).sum(dim=-1, keepdim=False)
-                xs_or_ys.extend((torch.exp(score[indices]) / new_denom).tolist())
+                xs_or_ys.extend((torch.exp(score[indices]) / new_denom - attn_pattern[batch_idx, seq_idx, indices].cpu()).tolist())
 
             used_batch_indices.extend([batch_idx for _ in range(len(indices))])
             used_seq_indices.extend([seq_idx for _ in range(len(indices))])
@@ -395,9 +395,10 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
     df = pd.DataFrame({
     'xs': xs,
     'ys': ys,
-    'text': [(str(model.to_string(mybatch[used_batch_idx, :used_seq_idx+1].cpu().tolist()))[-20:], 
-             "with completion", 
-             model.to_string(mytargets[used_batch_idx, used_seq_idx:used_seq_idx+1]), new_batch_to_old_batch[used_batch_idx], used_seq_idx) for used_batch_idx, used_seq_idx in zip(used_batch_indices, used_seq_indices, strict=True)]
+    # #  very sad, broken
+    # 'text': [(str(model.to_string(mybatch[used_batch_idx, :used_seq_idx+1].cpu().tolist()))[-20:], 
+    #          "with completion", 
+    #          model.to_string(mytargets[used_batch_idx, used_seq_idx:used_seq_idx+1]), new_batch_to_old_batch[used_batch_idx], used_seq_idx) for used_batch_idx, used_seq_idx in zip(used_batch_indices, used_seq_indices, strict=True)]
     })
 
     fig = px.scatter(
@@ -427,9 +428,9 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
     )
 
     fig.update_layout(
-        title = f"Comparison of attention scores from parallel and perpendicular projections for Head {LAYER_IDX}.{HEAD_IDX}",
-        xaxis_title="Attention score from unembedding parallel projection",
-        yaxis_title="Attention score from unembedding perpendicular projection",
+        title = f"Change in attention probabilities when using parallel and perpendicular projections for Head {LAYER_IDX}.{HEAD_IDX}",
+        xaxis_title="Change in attention probability from unembedding parallel projection",
+        yaxis_title="Change in attention probability from unembedding perpendicular projection",
     )
     fig.show()
 
@@ -437,7 +438,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
         [xs, ys],
         labels={"variable": MODE + " input component", "value": "Attention"},
         title=f"{LAYER_IDX}.{HEAD_IDX} attention probabilities under {MODE.lower()} interventions",
-        names=["Attention probability contribution from unembedding parallel projection", "Attention probability contribution from unembedding perpendicular projection"] if MODE == "Query" else ["Parallel", "Perpendicular"],
+        names=["Change in attention probability when using unembedding parallel projection", "Change in attention probability when using unembedding perpendicular projection"] if MODE == "Query" else ["Parallel", "Perpendicular"],
         width=1200,
         height=600,
         opacity=0.7,
