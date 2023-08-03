@@ -152,11 +152,19 @@ def process_webtext(
 
 DATA_TOKS, DATA_STR_TOKS_PARSED = process_webtext(verbose=True) # indices=list(range(32, 40))
 BATCH_SIZE, SEQ_LEN = DATA_TOKS.shape
-
 NUM_MINIBATCHES = 1 # previouly 3
 
-KEYSIDE_PROJECTIONS: Optional[Literal["the", "callum", "callum_no_pos_embed"]] = "callum_no_pos_embed" # then test Callum
-PROJECT_MODE: Literal["unembeddings", "layer_9_heads", "maximal_movers", "off"] = None # layer_9_heads is Neel's idea
+# ! These are the important variables. They define the QK interventions that we will do. 
+# KEYSIDE_PROJECTION_OPTIONS:
+# `the` means use "The" embeddings. "callum" means zero ablate all source attention weights except current token and BOS. callum_no_pos_embed is the same but with the positional embeddings zeroed out`.
+# QUERYSIDE_PROJECTION_OPTIONS:
+# double unembeddings means for each source token take the top 10 QK-semantically similar tokens, project onto that subspace and then double the resultant component. unembeddings the same with no doubling. layer_9_heads is projecting onto layer 9 heads subspace. maximal_movers complicated and fucked, explained below. Also off option.
+# BOS_HANDLING:
+# bos handling control means that we set the attention score on BOS for every prompt specifically so that the attention weight is the same as it was in th oriignal prompt
+
+KEYSIDE_PROJECTION: Literal["the", "callum", "callum_no_pos_embed", "off"] = "callum"
+QUERYSIDE_PROJECTION: Literal["double_unembeddings", "unembeddings", "layer_9_heads", "maximal_movers", "off"] = "double_unembeddings"
+BOS_HANDLING: Literal["control", "none"] = "control"
 
 """
 Explanation of maximal movers so Arthur does not forget again
@@ -168,7 +176,7 @@ For each dest token:
 4) Take the top 10 model components that map most to this subspace
 5) Project queries onto this subspace
 
-(it didn't work very well though things are complicated so it could just be screwedd...)
+(it didn't work very well though things are complicated so it could just be screwed...)
 """
 
 DO_OV_INTERVENTION_TOO = True
@@ -269,7 +277,7 @@ attn_scores = cache[get_act_name("attn_scores", 10)][:, 7].clone()
 
 #%%
 
-if PROJECT_MODE == "maximal_movers":
+if QUERYSIDE_PROJECTION == "maximal_movers":
     all_residual_stream = {}
     for hook_name in (
         ["hook_embed", "hook_pos_embed"]
@@ -296,7 +304,7 @@ if PROJECT_MODE == "maximal_movers":
 
 #%%
 
-if PROJECT_MODE == "maximal_movers":
+if QUERYSIDE_PROJECTION == "maximal_movers":
 
     all_residual_stream_tensor: Float[torch.Tensor, "component batch seq d_model"] = t.stack(list(all_residual_stream.values()), dim=0)
 
@@ -369,7 +377,7 @@ model_loss = get_metric_from_end_state(
 
 #%%
 
-if PROJECT_MODE == "maximal_movers":
+if QUERYSIDE_PROJECTION == "maximal_movers":
     for j in range(50):
         loss = round((head_loss[2, j] - model_loss[2, j]).item(), 5)
 
@@ -424,7 +432,7 @@ my_random_tokens = model.to_tokens("The")[0]
 
 my_embeddings = t.zeros(BATCH_SIZE, SEQ_LEN-1, model.cfg.d_model).cuda()
 
-if KEYSIDE_PROJECTIONS == "the":
+if KEYSIDE_PROJECTION == "the":
     warnings.warn("Need to test")
     for batch_idx in range(BATCH_SIZE):
         current_prompt = t.cat([
@@ -437,7 +445,7 @@ if KEYSIDE_PROJECTIONS == "the":
         )[1][get_act_name("resid_pre", 10)][torch.arange(SEQ_LEN-1), -1]
         my_embeddings[batch_idx] = current_embeddings
 
-elif str(KEYSIDE_PROJECTIONS).startswith("callum"):
+elif KEYSIDE_PROJECTION.startswith("callum"):
 
     warnings.warn("Need to test")
     mask = torch.eye(SEQ_LEN).cuda()
@@ -453,7 +461,7 @@ elif str(KEYSIDE_PROJECTIONS).startswith("callum"):
 
     model.reset_hooks()
 
-    if KEYSIDE_PROJECTIONS == "callum_no_pos_embed":
+    if KEYSIDE_PROJECTION == "callum_no_pos_embed":
         model.add_hook(
             "hook_pos_embed",
             lambda z, hook: z * 0.0,
@@ -488,7 +496,7 @@ elif str(KEYSIDE_PROJECTIONS).startswith("callum"):
     t.cuda.empty_cache()
 
 else:
-    assert KEYSIDE_PROJECTIONS is None, "Invalid KEYSIDE_PROJECTIONS"
+    assert KEYSIDE_PROJECTION is None, "Invalid KEYSIDE_PROJECTIONS"
 
 #%%
 
@@ -496,7 +504,7 @@ else:
 keyside_projections = t.zeros((BATCH_SIZE, SEQ_LEN-1, model.cfg.d_model)).to(model.cfg.device)
 keyside_orthogonals = t.zeros((BATCH_SIZE, SEQ_LEN-1, model.cfg.d_model)).to(model.cfg.device)
 
-if KEYSIDE_PROJECTIONS is not None:
+if KEYSIDE_PROJECTION is not None:
     for batch_idx, seq_idx in tqdm(list(itertools.product(range(BATCH_SIZE), range(SEQ_LEN-1)))):
         
         project_onto = None
@@ -537,39 +545,39 @@ attention_score_projections[:] = -100_000
 for batch_idx, seq_idx in tqdm(list(itertools.product(range(BATCH_SIZE), range(1, SEQ_LEN-1)))):  # preserve BOS attention score
     model.reset_hooks()
 
-    if PROJECT_MODE != "off" and PROJECT_MODE != "unembeddings":
+    if QUERYSIDE_PROJECTION != "off" and QUERYSIDE_PROJECTION != "unembeddings":
         warnings.warn("We're using 2* lol")
 
     normalized_queries = einops.repeat(
-        (1 + int(PROJECT_MODE not in ["off", "unembeddings"])) * normalize(pre_state[batch_idx, seq_idx, :]) * np.sqrt(model.cfg.d_model),
+        (1 + int(QUERYSIDE_PROJECTION not in ["off", "unembeddings"])) * normalize(pre_state[batch_idx, seq_idx, :]) * np.sqrt(model.cfg.d_model),
         "d_model -> seq_len d_model",
         seq_len = seq_idx,
     )
 
-    if PROJECT_MODE == "unembeddings":
+    if QUERYSIDE_PROJECTION == "unembeddings":
         # project each onto the relevant unembedding
         normalized_queries, _ = original_project(
             normalized_queries,
             list(einops.rearrange(model.W_U.T[E_sq_QK[batch_idx, 1:seq_idx+1]], "seq_len ten d_model -> ten seq_len d_model")),
             test=False,
         )
-    elif PROJECT_MODE == "layer_9_heads":
+    elif QUERYSIDE_PROJECTION == "layer_9_heads":
         normalized_queries, _ = original_project(
             normalized_queries,
             list(einops.repeat(layer_nine_outs[:, :, layer_nine_layer_9_heads][batch_idx, seq_idx], "head d_model -> head seq d_model", seq=seq_idx)), # for now project onto all layer 9 heads
             test=False,
         )
-    elif PROJECT_MODE == "maximal_movers":
+    elif QUERYSIDE_PROJECTION == "maximal_movers":
         normalized_queries, _ = original_project(
             normalized_queries,
             list(einops.repeat(maximal_movers_project_onto[:, batch_idx, seq_idx], "comp d_model -> comp seq d_model", seq=seq_idx).clone()),
             test=False,
         )
-    elif PROJECT_MODE == "off":
+    elif QUERYSIDE_PROJECTION == "off":
         pass # handled by the 1 + int(...) above
 
     else:
-        raise ValueError(f"Unknown project mode {PROJECT_MODE}")
+        raise ValueError(f"Unknown project mode {QUERYSIDE_PROJECTION}")
 
     cur_attn_scores = dot_with_query(
         unnormalized_keys = keyside_projections[batch_idx, 1:seq_idx+1, :],
@@ -578,7 +586,7 @@ for batch_idx, seq_idx in tqdm(list(itertools.product(range(BATCH_SIZE), range(1
         layer_idx = 10,
         head_idx = 7,
         use_tqdm = False,
-        normalize_queries = (PROJECT_MODE == "unembeddings"), 
+        normalize_queries = (QUERYSIDE_PROJECTION == "unembeddings"), 
         normalize_keys = True,
         add_query_bias = True, 
         add_key_bias = True,
@@ -685,7 +693,7 @@ scatter, results, df = generate_scatter(
     subtext_to_cspa = ["i.e. do Callum's CSPA", "except also recompute", "attention patterns too!"],
     cspa_y_axis_title = "QKOV-CSPA",
     show_key_results=False,
-    title = f"QKOV-CSPA with {KEYSIDE_PROJECTIONS=} and {PROJECT_MODE=}",
+    title = f"QKOV-CSPA with {KEYSIDE_PROJECTION=} and {QUERYSIDE_PROJECTION=}",
 )
 
 #%%

@@ -86,7 +86,8 @@ W_EE = get_effective_embedding(model)['W_E (including MLPs)']
 
 #%%
 
-if MODE == "Key":
+if MODE == "Key": # What you want to do here is set `my_embeddings` equal to some residual stream state
+
     VERSION = "callum_no_pos_embed"
     my_random_tokens = model.to_tokens("The")[0]
     my_embeddings = t.zeros(BATCH_SIZE, max_seq_len, model.cfg.d_model)
@@ -376,85 +377,84 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
             used_batch_indices.extend([batch_idx for _ in range(len(indices))])
             used_seq_indices.extend([seq_idx for _ in range(len(indices))])
 
-    if False: # These correlation plots do not work
-        r2 = np.corrcoef(xs, ys)[0, 1] ** 2
+    # Make two plots
 
-        # get best fit line 
-        m, b = np.polyfit(xs, ys, 1)
+    r2 = np.corrcoef(xs, ys)[0, 1] ** 2
 
-        df = pd.DataFrame({
-        'xs': xs,
-        'ys': ys,
-        # sad, below is so broken
-        # 'text': [(str(model.to_string(mybatch[used_batch_idx, :used_seq_idx+1].cpu().tolist()))[-20:], 
-        #          "with completion", 
-        #          model.to_string(mytargets[used_batch_idx, used_seq_idx:used_seq_idx+1]), new_batch_to_old_batch[used_batch_idx], used_seq_idx) for used_batch_idx, used_seq_idx in zip(used_batch_indices, used_seq_indices, strict=True)]
-        })
+    # get best fit line 
+    m, b = np.polyfit(xs, ys, 1)
 
-        fig = px.scatter(
-            df,
-            x='xs',
-            y='ys',
-            # hover_data=['text'] # sad broken
+    df = pd.DataFrame({
+    'xs': xs,
+    'ys': ys,
+    'text': [(str(model.to_string(mybatch[used_batch_idx, :used_seq_idx+1].cpu().tolist()))[-20:], 
+             "with completion", 
+             model.to_string(mytargets[used_batch_idx, used_seq_idx:used_seq_idx+1]), new_batch_to_old_batch[used_batch_idx], used_seq_idx) for used_batch_idx, used_seq_idx in zip(used_batch_indices, used_seq_indices, strict=True)]
+    })
+
+    fig = px.scatter(
+        df,
+        x='xs',
+        y='ys',
+        # hover_data=['text'] # sad broken
+    )
+
+    # add best fit line from min x to max x
+    fig.add_trace(
+        go.Scatter(
+            x=[min(xs), max(xs)],
+            y=[m * min(xs) + b, m * max(xs) + b],
+            # text = 
+            mode="lines",
+            name=f"r^2 = {r2:.3f}",
         )
+    )
 
-        # add best fit line from min x to max x
-        fig.add_trace(
-            go.Scatter(
-                x=[min(xs), max(xs)],
-                y=[m * min(xs) + b, m * max(xs) + b],
-                # text = 
-                mode="lines",
-                name=f"r^2 = {r2:.3f}",
-            )
-        )
+    # add y = mx + c label
+    fig.add_annotation(
+        x=0.1,
+        y=0.1,
+        text=f"y = {m:.3f}x + {b:.3f}",
+        showarrow=False,
+    )
 
-        # add y = mx + c label
-        fig.add_annotation(
-            x=0.1,
-            y=0.1,
-            text=f"y = {m:.3f}x + {b:.3f}",
-            showarrow=False,
-        )
+    fig.update_layout(
+        title = f"Comparison of attention scores from parallel and perpendicular projections for Head {LAYER_IDX}.{HEAD_IDX}",
+        xaxis_title="Attention score from unembedding parallel projection",
+        yaxis_title="Attention score from unembedding perpendicular projection",
+    )
+    fig.show()
 
-        fig.update_layout(
-            title = f"Comparison of attention scores from parallel and perpendicular projections for Head {LAYER_IDX}.{HEAD_IDX}",
-            xaxis_title="Attention score from unembedding parallel projection",
-            yaxis_title="Attention score from unembedding perpendicular projection",
-        )
-        fig.show()
+    fig = hist(
+        [xs, ys],
+        labels={"variable": MODE + " input component", "value": "Attention"},
+        title=f"{LAYER_IDX}.{HEAD_IDX} attention probabilities under {MODE.lower()} interventions",
+        names=["Attention probability contribution from unembedding parallel projection", "Attention probability contribution from unembedding perpendicular projection"] if MODE == "Query" else ["Parallel", "Perpendicular"],
+        width=1200,
+        height=600,
+        opacity=0.7,
+        marginal="box",
+        template="simple_white",
+        return_fig=True,
+    )
 
-    else:        
-        fig = hist(
-            [xs, ys],
-            labels={"variable": MODE + " input component", "value": "Attention"},
-            title=f"{LAYER_IDX}.{HEAD_IDX} attention probabilities under {MODE.lower()} interventions",
-            names=["Attention probability contribution from unembedding parallel projection", "Attention probability contribution from unembedding perpendicular projection"] if MODE == "Query" else ["Parallel", "Perpendicular"],
-            width=1200,
-            height=600,
-            opacity=0.7,
-            marginal="box",
-            template="simple_white",
-            return_fig=True,
-        )
+    # Computing the histograms for xs and ys
+    counts_xs, _ = np.histogram(xs)
+    counts_ys, _ = np.histogram(ys)
 
-        # Computing the histograms for xs and ys
-        counts_xs, _ = np.histogram(xs)
-        counts_ys, _ = np.histogram(ys)
+    # Getting the maximum count
+    max_count = max(max(counts_xs), max(counts_ys))
 
-        # Getting the maximum count
-        max_count = max(max(counts_xs), max(counts_ys))
+    # Update x-axis
+    fig.update_xaxes(range=[-0.0, 0.5])  # Set the x-axis zoom level
 
-        # Update x-axis
-        fig.update_xaxes(range=[-0.0, 0.5])  # Set the x-axis zoom level
+    # Update y-axis
+    # fig.update_yaxes(range=[-0.1, 2*max_count]) # Set the y-axis zoom level
 
-        # Update y-axis
-        # fig.update_yaxes(range=[-0.1, 2*max_count]) # Set the y-axis zoom level
-
-        fig.show()
-
+    fig.show()
 
     old_xs = deepcopy(xs)
     old_ys = deepcopy(ys)
+    assert False, "Usually OOMs after this cell is reran, so this is a good place to stop and restart the kernel"
 
 # %%
