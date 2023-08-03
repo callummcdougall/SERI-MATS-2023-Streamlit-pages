@@ -1,14 +1,10 @@
 #%%
 
 """
-`explore_prompts.py` is taken from https://github.com/ArthurConmy/SERI-MATS-2023-Streamlit-pages/blob/96f2e0c33b0ca7eb0e629b0abc41c47df265a07f/explore_prompts/explore_prompts.py
+This was originally written at https://github.com/ArthurConmy/SERI-MATS-2023-Streamlit-pages/blob/96f2e0c33b0ca7eb0e629b0abc41c47df265a07f/explore_prompts/explore_prompts.py
 """
 
-
 # # Explore Prompts
-# 
-# This is the notebook I use to test out the functions in this directory, and generate the plots in the Streamlit page.
-
 # ## Setup
 
 # In[4]:
@@ -43,51 +39,8 @@ from transformer_lens.rs.callum2.explore_prompts.copy_suppression_classification
 )
 
 from transformer_lens.rs.arthurs_notebooks.arthur_utils import get_metric_from_end_state, dot_with_query, set_to_value
-
-from transformer_lens.rs.callum2.what_even_is_the_freaking_query.keys_fixed import project as original_project
-
+from transformer_lens.rs.callum2.what_even_is_the_freaking_query.keys_fixed import project as original_project # some other project function defined somewhere yikes
 clear_output()
-
-# In[5]:
-
-def get_effective_embedding_2(model: HookedTransformer) -> Float[Tensor, "d_vocab d_model"]:
-
-    W_E = model.W_E.clone()
-    W_U = model.W_U.clone()
-    # t.testing.assert_close(W_E[:10, :10], W_U[:10, :10].T)  NOT TRUE, because of the center unembed part!
-
-    resid = W_E.unsqueeze(0)
-
-    for i in range(10):
-        pre_attention = model.blocks[i].ln1(resid)
-        attn_out = einops.einsum(
-            pre_attention, 
-            model.W_V[i],
-            model.W_O[i],
-            "b s d_model, num_heads d_model d_head, num_heads d_head d_model_out -> b s d_model_out",
-        )
-        resid_mid = attn_out + resid
-        normalized_resid_mid = model.blocks[i].ln2(resid_mid)
-        mlp_out = model.blocks[i].mlp(normalized_resid_mid)
-        resid = resid_mid + mlp_out
-
-        if i == 0:
-            W_EE = mlp_out.squeeze()
-            W_EE_full = resid.squeeze()
-
-    W_EE_stacked = resid.squeeze()
-
-    t.cuda.empty_cache()
-
-    return {
-        "W_E (no MLPs)": W_E,
-        "W_U": W_U.T,
-        # "W_E (raw, no MLPs)": W_E,
-        "W_E (including MLPs)": W_EE_full,
-        "W_E (only MLPs)": W_EE,
-        "W_E (including MLPs, first 9 layers)": W_EE_stacked
-    }
-
 
 # In[6]:
 
@@ -96,26 +49,17 @@ model = HookedTransformer.from_pretrained(
     center_unembed=True,
     center_writing_weights=True,
     fold_ln=True,
-    device="cuda"
-    # fold value bizas?
+    device="cuda",
 )
 model.set_use_split_qkv_input(False)
 model.set_use_attn_result(True)
-
 clear_output()
-
-# In[7]:
-
-W_EE_dict = get_effective_embedding_2(model)
-
-# ## Getting model results
 
 # In[8]:
 
-BATCH_SIZE = 40 # Smaller on Arthur's machine
+BATCH_SIZE = 40 # make smaller on Arthur's machine
 SEQ_LEN = 100 # 70 for viz (no more, because attn)
 TESTING = False
-
 NEGATIVE_HEAD = (10, 7)
 NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX = NEGATIVE_HEAD
 
@@ -152,9 +96,10 @@ def process_webtext(
 
 DATA_TOKS, DATA_STR_TOKS_PARSED = process_webtext(verbose=True) # indices=list(range(32, 40))
 BATCH_SIZE, SEQ_LEN = DATA_TOKS.shape
-NUM_MINIBATCHES = 1 # previouly 3
+NUM_MINIBATCHES = 1 
+assert NUM_MINIBATCHES == 1, "Removed support for more minibatches"
 
-# ! These are the important variables. They define the QK interventions that we will do. 
+# ! These are the important variables. They define the QK intervention that we will do. 
 # KEYSIDE_PROJECTION_OPTIONS:
 # `the` means use "The" embeddings. "callum" means zero ablate all source attention weights except current token and BOS. callum_no_pos_embed is the same but with the positional embeddings zeroed out`.
 # QUERYSIDE_PROJECTION_OPTIONS:
@@ -162,7 +107,7 @@ NUM_MINIBATCHES = 1 # previouly 3
 # BOS_HANDLING:
 # bos handling control means that we set the attention score on BOS for every prompt specifically so that the attention weight is the same as it was in th oriignal prompt
 
-KEYSIDE_PROJECTION: Literal["the", "callum", "callum_no_pos_embed", "off"] = "callum"
+KEYSIDE_PROJECTION: Literal["the", "callum", "callum_no_pos_embed", "off"] = "off"
 QUERYSIDE_PROJECTION: Literal["double_unembeddings", "unembeddings", "layer_9_heads", "maximal_movers", "off"] = "double_unembeddings"
 BOS_HANDLING: Literal["control", "none"] = "control"
 
@@ -433,7 +378,6 @@ my_random_tokens = model.to_tokens("The")[0]
 my_embeddings = t.zeros(BATCH_SIZE, SEQ_LEN-1, model.cfg.d_model).cuda()
 
 if KEYSIDE_PROJECTION == "the":
-    warnings.warn("Need to test")
     for batch_idx in range(BATCH_SIZE):
         current_prompt = t.cat([
             einops.repeat(my_random_tokens, "random_seq_len -> cur_seq_len random_seq_len", cur_seq_len=SEQ_LEN-1).clone(),
@@ -446,8 +390,6 @@ if KEYSIDE_PROJECTION == "the":
         my_embeddings[batch_idx] = current_embeddings
 
 elif KEYSIDE_PROJECTION.startswith("callum"):
-
-    warnings.warn("Need to test")
     mask = torch.eye(SEQ_LEN).cuda()
     mask[:, 0] += 1
     mask[0, 0] -= 1
@@ -496,7 +438,7 @@ elif KEYSIDE_PROJECTION.startswith("callum"):
     t.cuda.empty_cache()
 
 else:
-    assert KEYSIDE_PROJECTION is None, "Invalid KEYSIDE_PROJECTIONS"
+    assert KEYSIDE_PROJECTION == "off", "Invalid KEYSIDE_PROJECTIONS"
 
 #%%
 
@@ -504,7 +446,7 @@ else:
 keyside_projections = t.zeros((BATCH_SIZE, SEQ_LEN-1, model.cfg.d_model)).to(model.cfg.device)
 keyside_orthogonals = t.zeros((BATCH_SIZE, SEQ_LEN-1, model.cfg.d_model)).to(model.cfg.device)
 
-if KEYSIDE_PROJECTION is not None:
+if KEYSIDE_PROJECTION != "off":
     for batch_idx, seq_idx in tqdm(list(itertools.product(range(BATCH_SIZE), range(SEQ_LEN-1)))):
         
         project_onto = None
@@ -542,7 +484,7 @@ attention_score_projections = t.zeros((BATCH_SIZE, SEQ_LEN-1, SEQ_LEN-1)).to(mod
 attention_score_projections[:] = attn_scores.clone()
 attention_score_projections[:] = -100_000
 
-for batch_idx, seq_idx in tqdm(list(itertools.product(range(BATCH_SIZE), range(1, SEQ_LEN-1)))):  # preserve BOS attention score
+for batch_idx, seq_idx in tqdm(list(itertools.product(range(BATCH_SIZE), range(0, SEQ_LEN-1)))):  # preserve BOS attention score
     model.reset_hooks()
 
     if QUERYSIDE_PROJECTION != "off" and QUERYSIDE_PROJECTION != "unembeddings":
@@ -551,26 +493,26 @@ for batch_idx, seq_idx in tqdm(list(itertools.product(range(BATCH_SIZE), range(1
     normalized_queries = einops.repeat(
         (1 + int(QUERYSIDE_PROJECTION not in ["off", "unembeddings"])) * normalize(pre_state[batch_idx, seq_idx, :]) * np.sqrt(model.cfg.d_model),
         "d_model -> seq_len d_model",
-        seq_len = seq_idx,
+        seq_len = seq_idx+1,
     )
 
-    if QUERYSIDE_PROJECTION == "unembeddings":
+    if QUERYSIDE_PROJECTION.endswith("unembeddings"):
         # project each onto the relevant unembedding
         normalized_queries, _ = original_project(
             normalized_queries,
-            list(einops.rearrange(model.W_U.T[E_sq_QK[batch_idx, 1:seq_idx+1]], "seq_len ten d_model -> ten seq_len d_model")),
+            list(einops.rearrange(model.W_U.T[E_sq_QK[batch_idx, :seq_idx+1]], "seq_len ten d_model -> ten seq_len d_model")),
             test=False,
         )
     elif QUERYSIDE_PROJECTION == "layer_9_heads":
         normalized_queries, _ = original_project(
             normalized_queries,
-            list(einops.repeat(layer_nine_outs[:, :, layer_nine_layer_9_heads][batch_idx, seq_idx], "head d_model -> head seq d_model", seq=seq_idx)), # for now project onto all layer 9 heads
+            list(einops.repeat(layer_nine_outs[:, :, layer_nine_layer_9_heads][batch_idx, seq_idx], "head d_model -> head seq d_model", seq=seq_idx+1)), # for now project onto all layer 9 heads
             test=False,
         )
     elif QUERYSIDE_PROJECTION == "maximal_movers":
         normalized_queries, _ = original_project(
             normalized_queries,
-            list(einops.repeat(maximal_movers_project_onto[:, batch_idx, seq_idx], "comp d_model -> comp seq d_model", seq=seq_idx).clone()),
+            list(einops.repeat(maximal_movers_project_onto[:, batch_idx, seq_idx], "comp d_model -> comp seq d_model", seq=seq_idx+1).clone()),
             test=False,
         )
     elif QUERYSIDE_PROJECTION == "off":
@@ -580,7 +522,7 @@ for batch_idx, seq_idx in tqdm(list(itertools.product(range(BATCH_SIZE), range(1
         raise ValueError(f"Unknown project mode {QUERYSIDE_PROJECTION}")
 
     cur_attn_scores = dot_with_query(
-        unnormalized_keys = keyside_projections[batch_idx, 1:seq_idx+1, :],
+        unnormalized_keys = keyside_projections[batch_idx, :seq_idx+1, :],
         unnormalized_queries = normalized_queries,
         model = model,
         layer_idx = 10,
@@ -592,15 +534,20 @@ for batch_idx, seq_idx in tqdm(list(itertools.product(range(BATCH_SIZE), range(1
         add_key_bias = True,
     )
 
-    attention_score_projections[batch_idx, seq_idx, 1:seq_idx+1] = cur_attn_scores
+    attention_score_projections[batch_idx, seq_idx, :seq_idx+1] = cur_attn_scores
 
 true_attention_pattern = attn_scores.clone().softmax(dim=-1)
 our_attention_scores = attention_score_projections.clone()
-# our_attention_scores *= 0.5 
-our_attention_scores[:, :, 0] = -100_000 # temporarily kill BOS
-our_attention_pattern = our_attention_scores.softmax(dim=-1)
-our_attention_pattern *= (-true_attention_pattern[:, :, 0] + 1.0).unsqueeze(-1) # so that BOS equal to original value
-our_attention_pattern[:, :, 0] = true_attention_pattern[:, :, 0]
+
+if BOS_HANDLING == "control": # ...
+    our_attention_scores[:, :, 0] = -100_000 # temporarily kill BOS
+    our_attention_pattern = our_attention_scores.softmax(dim=-1)
+    our_attention_pattern *= (-true_attention_pattern[:, :, 0] + 1.0).unsqueeze(-1) # so that BOS equal to original value
+    our_attention_pattern[:, :, 0] = true_attention_pattern[:, :, 0]
+
+else:
+    assert BOS_HANDLING == "off"
+    our_attention_pattern = our_attention_scores.softmax(dim=-1)
 
 assert abs((our_attention_pattern.sum(dim=2)-1.0).norm().item()) < 1e-3 # Yes, attention still sums to 1
 
@@ -609,16 +556,16 @@ assert abs((our_attention_pattern.sum(dim=2)-1.0).norm().item()) < 1e-3 # Yes, a
 CUTOFF = 50
 BATCH_INDEX = 2 # 2 is great!
 
-# for name, attention_pattern in zip(["true", "ours"], [true_attention_pattern, our_attention_pattern], strict=True): # I hope just in 0-1?
+for name, attention_pattern in zip(["true", "ours"], [true_attention_pattern, our_attention_pattern], strict=True): # I hope just in 0-1?
 # set range -10 10
-for name, attention_pattern in zip(["true", "ours"], [attn_scores, attention_score_projections], strict=True):  
+# for name, attention_pattern in zip(["true", "ours"], [attn_scores, attention_score_projections], strict=True):  
     imshow(
         attention_pattern[BATCH_INDEX, :CUTOFF, :CUTOFF],
         x = model.to_str_tokens(_DATA_TOKS[BATCH_INDEX, :CUTOFF]),   
         y = model.to_str_tokens(_DATA_TOKS[BATCH_INDEX, :CUTOFF]),   
         title = name,
-        zmin = -10, 
-        zmax = 10,
+        zmin = -10 if attention_pattern.min() < -0.0001 else -1, 
+        zmax = 10 if attention_pattern.min() < -0.0001 else 1, 
     )
 
 assert our_attention_pattern.min() >= 0.0 and our_attention_pattern.max() <= 1.0, "Attention pattern is not in 0-1"
@@ -693,7 +640,7 @@ scatter, results, df = generate_scatter(
     subtext_to_cspa = ["i.e. do Callum's CSPA", "except also recompute", "attention patterns too!"],
     cspa_y_axis_title = "QKOV-CSPA",
     show_key_results=False,
-    title = f"QKOV-CSPA with {KEYSIDE_PROJECTION=} and {QUERYSIDE_PROJECTION=}",
+    title = f"QKOV-CSPA with {KEYSIDE_PROJECTION=} and {QUERYSIDE_PROJECTION=} and {BOS_HANDLING=}",
 )
 
 #%%
