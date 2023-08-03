@@ -370,10 +370,10 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 [xs, ys],
                 strict=True,
             ):
-                denom_items = einops.repeat(old_denom_items, "seq_len -> indices_length seq_len", indices_length=len(indices)).clone()
-                denom_items[torch.arange(len(indices)), indices] = score
-                new_denom = torch.exp(new_denom_items).sum(dim=-1, keepdim=False)
-                xs_or_ys.extend((torch.exp(score) / new_denom.item())[indices].tolist())
+                denom_items = einops.repeat(old_denom_items, "seq_len -> indices_length seq_len", indices_length=len(indices)).clone().cpu()
+                denom_items[torch.arange(len(indices)), indices] = score[indices]
+                new_denom = torch.exp(denom_items).sum(dim=-1, keepdim=False)
+                xs_or_ys.extend((torch.exp(score[indices]) / new_denom).tolist())
 
             used_batch_indices.extend([batch_idx for _ in range(len(indices))])
             used_seq_indices.extend([seq_idx for _ in range(len(indices))])
