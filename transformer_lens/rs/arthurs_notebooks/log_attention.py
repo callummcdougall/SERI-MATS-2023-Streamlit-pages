@@ -226,12 +226,12 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
 
             old_denom_items = attn_score[batch_idx, seq_idx, :seq_idx+1]
 
-            unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE)
+            unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, :seq_idx+1].to(DEVICE)
             normalized_keys = unnormalized_keys / (unnormalized_keys.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5) 
 
             outputs = dot_with_query(
                 unnormalized_keys = normalized_keys,
-                unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
+                unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx+1),
                 model=model,
                 layer_idx=LAYER_IDX,
                 head_idx=HEAD_IDX,
@@ -242,37 +242,39 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 use_tqdm=False,
             )
             
+            ADD_KEY_BIAS = True
+
             if MODE == "Key":
                 para_keys, perp_keys = project(
                     normalized_keys,
-                    my_embeddings[batch_idx, 1:seq_idx+1].to(DEVICE),
+                    my_embeddings[batch_idx, :seq_idx+1].to(DEVICE),
                 )
 
                 para_score = dot_with_query(
                     unnormalized_keys = para_keys,
-                    unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
+                    unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx+1),
                     model=model,
                     layer_idx=LAYER_IDX,
                     head_idx = HEAD_IDX,
-                    add_key_bias = False,
+                    add_key_bias = ADD_KEY_BIAS,
                     add_query_bias=True,
                     normalize_keys = False,
                     normalize_queries = True,
                 )
                 perp_score = dot_with_query(
                     unnormalized_keys = perp_keys,
-                    unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
+                    unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx+1),
                     model=model,
                     layer_idx=LAYER_IDX,
                     head_idx = HEAD_IDX,
-                    add_key_bias = False,
+                    add_key_bias = ADD_KEY_BIAS,
                     add_query_bias=True,
                     normalize_keys = False,
                     normalize_queries = True,
                 )
                 bias_score = dot_with_query(
                     unnormalized_keys = 0.0*perp_keys,
-                    unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
+                    unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx+1),
                     model=model,
                     layer_idx=LAYER_IDX,
                     head_idx = HEAD_IDX,
@@ -284,13 +286,14 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
 
             elif MODE == "Query":
 
-                QUERY_MODE = "single_unembedding"
+                raise NotImplementedError("Haven't integrated BOS so +...2")
 
+                QUERY_MODE = "single_unembedding"
                 if QUERY_MODE == "semantically_similar":
                     K_semantic = 10
                     W_QK = model.W_Q[LAYER_IDX, HEAD_IDX].cpu() @ model.W_K[LAYER_IDX, HEAD_IDX].T.cpu() / (model.cfg.d_head ** 0.5)
                     
-                    current_ee = W_EE_toks[batch_idx, 1:seq_idx+1].cpu()
+                    current_ee = W_EE_toks[batch_idx, :seq_idx+1].cpu()
                     normalized_current_ee = current_ee / (current_ee.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
 
                     times_by_qk = normalized_current_ee @ W_QK.T.cpu()
@@ -301,8 +304,8 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
 
                     E_sq_QK: Int[Tensor, "seqK K_semantic"] = times_by_wu.topk(K_semantic, dim=-1).indices
 
-                    E_sq_QK_contains_self: Bool[Tensor, "seqK"] = (E_sq_QK == mybatch[batch_idx, 1:1+seq_idx, None]).any(-1)
-                    E_sq_QK[..., -1] = t.where(E_sq_QK_contains_self, E_sq_QK[..., -1], mybatch[batch_idx, 1:1+seq_idx])
+                    E_sq_QK_contains_self: Bool[Tensor, "seqK"] = (E_sq_QK == mybatch[batch_idx, :1+seq_idx, None]).any(-1)
+                    E_sq_QK[..., -1] = t.where(E_sq_QK_contains_self, E_sq_QK[..., -1], mybatch[batch_idx, :1+seq_idx])
                     E_sq_QK_rearranged = einops.rearrange(E_sq_QK, "seqK K_semantic -> K_semantic seqK") # K_semantic first is easier for projection
 
                 else:
@@ -312,10 +315,11 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
 
                 base_parallel, base_perp = project(
                     einops.repeat(query, "d -> s d", s=seq_idx),
-                    model.W_U.T[mybatch[batch_idx, 1:1+seq_idx]] if QUERY_MODE != "semantically_similar" else list(model.W_U.T[E_sq_QK_rearranged.cuda()]),
+                    model.W_U.T[mybatch[batch_idx, :1+seq_idx]] if QUERY_MODE != "semantically_similar" else list(model.W_U.T[E_sq_QK_rearranged.cuda()]),
                     # list(model.W_U.T[logit_lens_topk[batch_idx, seq_idx]]),
                     # list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
                 )
+                base_parallel[0] = query.clone() # keep BOS same
                 # parallel = einops.repeat(base_parallel, "d -> s d", s=seq_idx)
                 # perp = einops.repeat(base_perp, "d -> s d", s=seq_idx)
 
@@ -323,7 +327,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 perp = base_perp
 
                 para_score = dot_with_query(
-                    unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE),
+                    unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, :seq_idx+1].to(DEVICE),
                     unnormalized_queries = parallel,
                     model=model,
                     layer_idx=LAYER_IDX,
@@ -358,6 +362,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                     normalize_queries = False,
                     use_tqdm=False,
                 )
+
                 t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
 
             indices = outputs.argsort(descending=True)[:2].tolist()
@@ -365,20 +370,27 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
 
             # We also should probably recompute the denominator : ) git blame for old way where we did not recompute this
             
+            SUBTRACT_BASELINE = True
+            RECOMPUTE_DENOM = False
+
             for score, xs_or_ys in zip(
                 [para_score, perp_score],
                 [xs, ys],
                 strict=True,
             ):
                 denom_items = einops.repeat(old_denom_items, "seq_len -> indices_length seq_len", indices_length=len(indices)).clone().cpu()
-                denom_items[torch.arange(len(indices)), indices] = score[indices]
+
+                if RECOMPUTE_DENOM:
+                    denom_items[torch.arange(len(indices)), indices] = score[indices]
+
                 new_denom = torch.exp(denom_items).sum(dim=-1, keepdim=False)
-                xs_or_ys.extend((torch.exp(score[indices]) / new_denom - attn_pattern[batch_idx, seq_idx, indices].cpu()).tolist())
+                xs_or_ys.extend((torch.exp(score[indices]) / new_denom - (0.0 if not SUBTRACT_BASELINE else attn_pattern[batch_idx, seq_idx, indices].cpu())).tolist()) # 1+ accounts for zeroindexing
 
             used_batch_indices.extend([batch_idx for _ in range(len(indices))])
             used_seq_indices.extend([seq_idx for _ in range(len(indices))])
 
-            t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
+            if not ADD_KEY_BIAS:
+                t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
 
             bias_scores.extend(bias_score[indices].tolist())
             
