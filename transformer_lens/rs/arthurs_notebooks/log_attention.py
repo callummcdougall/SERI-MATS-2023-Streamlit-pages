@@ -224,7 +224,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
             if (batch_idx, seq_idx) not in loss_to_use:
                 continue
 
-            denom = torch.exp(attn_score[batch_idx, seq_idx, :seq_idx+1]).sum()
+            old_denom_items = attn_score[batch_idx, seq_idx, :seq_idx+1]
 
             unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE)
             normalized_keys = unnormalized_keys / (unnormalized_keys.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5) 
@@ -363,17 +363,25 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
             indices = outputs.argsort(descending=True)[:2].tolist()
             # indices.extend(torch.randperm(seq_idx)[:5].tolist())
 
-            xs.extend((torch.exp(para_score) / denom.item())[indices].tolist())
-            # xs.extend((para_score - denom.log().item())[indices].tolist())
-
-            ys.extend((torch.exp(perp_score) / denom.item())[indices].tolist())
-            # ys.extend((perp_score - denom.log().item())[indices].tolist())
+            # We also should probably recompute the denominator : ) git blame for old way where we did not recompute this
+            
+            for score, xs_or_ys in zip(
+                [para_score, perp_score],
+                [xs, ys],
+                strict=True,
+            ):
+                denom_items = einops.repeat(old_denom_items, "seq_len -> indices_length seq_len", indices_length=len(indices)).clone()
+                denom_items[torch.arange(len(indices)), indices] = score
+                new_denom = torch.exp(new_denom_items).sum(dim=-1, keepdim=False)
+                xs_or_ys.extend((torch.exp(score) / new_denom.item())[indices].tolist())
 
             used_batch_indices.extend([batch_idx for _ in range(len(indices))])
             used_seq_indices.extend([seq_idx for _ in range(len(indices))])
 
             t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
-            bias_scores.extend((torch.exp(bias_score) / denom.item())[indices].tolist())
+
+            bias_scores.extend(bias_score[indices].tolist())
+            
             used_batch_indices.extend([batch_idx for _ in range(len(indices))])
             used_seq_indices.extend([seq_idx for _ in range(len(indices))])
 

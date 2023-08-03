@@ -107,7 +107,7 @@ assert NUM_MINIBATCHES == 1, "Removed support for more minibatches"
 # BOS_HANDLING:
 # bos handling control means that we set the attention score on BOS for every prompt specifically so that the attention weight is the same as it was in th oriignal prompt
 
-KEYSIDE_PROJECTION: Literal["the", "callum", "callum_no_pos_embed", "off"] = "off"
+KEYSIDE_PROJECTION: Literal["the", "callum", "callum_no_pos_embed", "off"] = "the"
 QUERYSIDE_PROJECTION: Literal["double_unembeddings", "unembeddings", "layer_9_heads", "maximal_movers", "off"] = "double_unembeddings"
 BOS_HANDLING: Literal["control", "none"] = "control"
 
