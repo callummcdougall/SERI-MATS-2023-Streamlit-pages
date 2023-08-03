@@ -15,7 +15,9 @@ $ cd TransformerLens
 $ pip install -e . # poetry install also should work
 ```
 
-if you want to launch streamlit pages, run 
+We stored some large files in git history and need clean them up; try `git clone --depth 1 git@github.com:callummcdougall/SERI-MATS-2023-Streamlit-pages.git` if git clone is lagging.
+
+If you want to launch streamlit pages, run 
 
 ```python
 pip install streamlit
