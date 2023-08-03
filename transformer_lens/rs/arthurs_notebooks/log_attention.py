@@ -88,11 +88,12 @@ W_EE = get_effective_embedding(model)['W_E (including MLPs)']
 
 if MODE == "Key": # What you want to do here is set `my_embeddings` equal to some residual stream state
 
-    VERSION = "ee"
+    # VERSION = "layer 10 context-free residual state"
+    VERSION = "effective embedding"
     my_random_tokens = model.to_tokens("The")[0]
     my_embeddings = t.zeros(BATCH_SIZE, max_seq_len, model.cfg.d_model)
 
-    if VERSION == "ee":
+    if VERSION == "effective embedding":
         my_embeddings[:] = W_EE.cpu()[mybatch]
 
     elif VERSION == "the":
@@ -115,7 +116,7 @@ if MODE == "Key": # What you want to do here is set `my_embeddings` equal to som
     elif VERSION == "mlp0":
         my_embeddings[:] = cache[get_act_name("resid_post", 0)].cpu()
 
-    elif VERSION.startswith("callum"):
+    elif VERSION.startswith("layer 10 context-free residual state"):
 
         mask = torch.eye(max_seq_len).cuda()
         mask[:, 0] += 1
@@ -130,7 +131,7 @@ if MODE == "Key": # What you want to do here is set `my_embeddings` equal to som
 
         model.reset_hooks()
 
-        if VERSION == "callum_no_pos_embed":
+        if VERSION == "layer 10 context-free residual state with no positional embeddings":
             model.add_hook(
                 "hook_pos_embed",
                 lambda z, hook: 0.0*z,
@@ -365,13 +366,16 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
 
                 t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
 
-            indices = outputs.argsort(descending=True)[:2].tolist()
-            # indices.extend(torch.randperm(seq_idx)[:5].tolist())
+            SZ = 2
+            sorted_indices = outputs.argsort(descending=True)[:SZ].tolist()
+            if 0 in sorted_indices:
+                sorted_indices.remove(0)
+            indices = sorted_indices[:SZ]
 
             # We also should probably recompute the denominator : ) git blame for old way where we did not recompute this
             
             SUBTRACT_BASELINE = True
-            RECOMPUTE_DENOM = False
+            RECOMPUTE_DENOM = True
 
             for score, xs_or_ys in zip(
                 [para_score, perp_score],
@@ -448,16 +452,21 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
 
     fig = hist(
         [xs, ys],
-        labels={"variable": MODE + " input component", "value": "Attention"},
-        title=f"{LAYER_IDX}.{HEAD_IDX} attention probabilities under {MODE.lower()} interventions",
-        names=["Change in attention probability when using unembedding parallel projection", "Change in attention probability when using unembedding perpendicular projection"] if MODE == "Query" else ["Parallel", "Perpendicular"],
+        labels={"variable": MODE + " input component", "value": "Change in attention"},
+        title=f"Change in {LAYER_IDX}.{HEAD_IDX} attention probabilities under {MODE.lower()} interventions ({VERSION})",
+        names=["Parallel", "Perpendicular"],
         width=1200,
         height=600,
         opacity=0.7,
         marginal="box",
+        nbins = 20,
         template="simple_white",
         return_fig=True,
     )
+    
+    # # Sad, kills the box plot
+    # # Update y-axis
+    # fig.update_yaxes(range=[-0.1, max_count]) # Set the y-axis zoom level
 
     # Computing the histograms for xs and ys
     counts_xs, _ = np.histogram(xs)
@@ -466,11 +475,16 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
     # Getting the maximum count
     max_count = max(max(counts_xs), max(counts_ys))
 
-    # Update x-axis
-    fig.update_xaxes(range=[-0.0, 0.5])  # Set the x-axis zoom level
-
-    # Update y-axis
-    # fig.update_yaxes(range=[-0.1, 2*max_count]) # Set the y-axis zoom level
+    # add dotted x = 0 line 
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 0],
+            y=[0, 1.5*max_count],
+            mode="lines",
+            name="x = 0",
+            marker=dict(color="black"),
+        )
+    )
 
     fig.show()
 
