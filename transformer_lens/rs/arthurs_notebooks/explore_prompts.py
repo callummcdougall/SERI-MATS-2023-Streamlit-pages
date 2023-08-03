@@ -158,6 +158,19 @@ NUM_MINIBATCHES = 1 # previouly 3
 KEYSIDE_PROJECTIONS: Optional[Literal["the", "callum", "callum_no_pos_embed"]] = "callum_no_pos_embed" # then test Callum
 PROJECT_MODE: Literal["unembeddings", "layer_9_heads", "maximal_movers", "off"] = None # layer_9_heads is Neel's idea
 
+"""
+Explanation of maximal movers so Arthur does not forget again
+For each dest token:
+
+1) For each source token take the 10 most semantically similar tokens to this
+2) Take the top 10 unembeddings at destination input across all these tokens
+3) Project onto this unembedding space 
+4) Take the top 10 model components that map most to this subspace
+5) Project queries onto this subspace
+
+(it didn't work very well though things are complicated so it could just be screwedd...)
+"""
+
 DO_OV_INTERVENTION_TOO = True
 
 MINIBATCH_SIZE = BATCH_SIZE // NUM_MINIBATCHES
@@ -289,13 +302,11 @@ if PROJECT_MODE == "maximal_movers":
 
     relevant_unembeddings: Int[torch.Tensor, "K_unembed batch seqQ d_model"] = einops.rearrange(model.W_U.T[top_tokens_for_E_sq_QK], "batch seqQ K_unembed d_model -> K_unembed batch seqQ d_model")
 
-
     subspace_of_resid_pre = original_project(
         (pre_state/pre_state.norm(dim=-1, keepdim=True)) * np.sqrt(model.cfg.d_model), # simulate LN
         list(relevant_unembeddings[:, :, :-1]),
         test=False,
     )
-
 
     subspace_of_resid_pre_parallel, subspace_of_resid_pre_orthogonal = subspace_of_resid_pre
 
@@ -429,7 +440,6 @@ if KEYSIDE_PROJECTIONS == "the":
 elif str(KEYSIDE_PROJECTIONS).startswith("callum"):
 
     warnings.warn("Need to test")
-
     mask = torch.eye(SEQ_LEN).cuda()
     mask[:, 0] += 1
     mask[0, 0] -= 1
@@ -591,16 +601,16 @@ assert abs((our_attention_pattern.sum(dim=2)-1.0).norm().item()) < 1e-3 # Yes, a
 CUTOFF = 50
 BATCH_INDEX = 2 # 2 is great!
 
-for name, attention_pattern in zip(["true", "ours"], [true_attention_pattern, our_attention_pattern], strict=True): # I hope just in 0-1?
+# for name, attention_pattern in zip(["true", "ours"], [true_attention_pattern, our_attention_pattern], strict=True): # I hope just in 0-1?
 # set range -10 10
-# for name, attention_pattern in zip(["true", "ours"], [attn_scores, attention_score_projections], strict=True):  
+for name, attention_pattern in zip(["true", "ours"], [attn_scores, attention_score_projections], strict=True):  
     imshow(
         attention_pattern[BATCH_INDEX, :CUTOFF, :CUTOFF],
         x = model.to_str_tokens(_DATA_TOKS[BATCH_INDEX, :CUTOFF]),   
         y = model.to_str_tokens(_DATA_TOKS[BATCH_INDEX, :CUTOFF]),   
         title = name,
-        zmin = -1, 
-        zmax = 1,
+        zmin = -10, 
+        zmax = 10,
     )
 
 assert our_attention_pattern.min() >= 0.0 and our_attention_pattern.max() <= 1.0, "Attention pattern is not in 0-1"
