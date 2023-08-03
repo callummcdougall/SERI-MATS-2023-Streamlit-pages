@@ -27,7 +27,7 @@ DEVICE = "cuda"
 SHOW_PLOT = True
 DATASET_SIZE = 500
 BATCH_SIZE = 30 
-MODE = "Query"
+MODE = "Key"
 
 #%%
 
@@ -87,7 +87,7 @@ W_EE = get_effective_embedding(model)['W_E (including MLPs)']
 #%%
 
 if MODE == "Key":
-    VERSION = "callum"
+    VERSION = "callum_no_pos_embed"
     my_random_tokens = model.to_tokens("The")[0]
     my_embeddings = t.zeros(BATCH_SIZE, max_seq_len, model.cfg.d_model)
 
@@ -114,7 +114,7 @@ if MODE == "Key":
     elif VERSION == "mlp0":
         my_embeddings[:] = cache[get_act_name("resid_post", 0)].cpu()
 
-    elif VERSION == "callum":
+    elif VERSION.startswith("callum"):
 
         mask = torch.eye(max_seq_len).cuda()
         mask[:, 0] += 1
@@ -128,6 +128,13 @@ if MODE == "Key":
         torch.cuda.empty_cache()
 
         model.reset_hooks()
+
+        if VERSION == "callum_no_pos_embed":
+            model.add_hook(
+                "hook_pos_embed",
+                lambda z, hook: 0.0*z,
+            )
+
         for layer_idx in range(LAYER_IDX):
             
             # model.add_hook(
