@@ -107,9 +107,9 @@ assert NUM_MINIBATCHES == 1, "Removed support for more minibatches"
 # BOS_HANDLING:
 # bos handling control means that we set the attention score on BOS for every prompt specifically so that the attention weight is the same as it was in th oriignal prompt
 
-KEYSIDE_PROJECTION: Literal["the", "callum", "callum_no_pos_embed", "off"] = "the"
-QUERYSIDE_PROJECTION: Literal["double_unembeddings", "unembeddings", "layer_9_heads", "maximal_movers", "off"] = "double_unembeddings"
-BOS_HANDLING: Literal["control", "none"] = "control"
+KEYSIDE_PROJECTION: Literal["the", "callum", "callum_no_pos_embed", "off"] = "off"
+QUERYSIDE_PROJECTION: Literal["double_unembeddings", "unembeddings", "layer_9_heads", "maximal_movers", "off"] = "unembeddings"
+BOS_HANDLING: Literal["control", "off"] = "off"
 
 """
 Explanation of maximal movers so Arthur does not forget again
@@ -298,10 +298,22 @@ head_logit_lens = einops.einsum(
 #%%
 
 top_answers = torch.topk(
-    head_logit_lens,
+    -head_logit_lens,
     dim=-1,
     k=20, # really we want to do semantic similarity I think?
 ).indices
+
+#%%
+
+for i in range(BATCH_SIZE):
+    for j in range(SEQ_LEN-1):
+        my_tokens = model.to_str_tokens(top_answers[i, j])
+        my_tokens = [t.lower() for t in my_tokens]
+
+        # if i>4: assert False
+        # if " about" in my_tokens or "about" in my_tokens:
+        if any(["about" in t for t in my_tokens]):
+            print(i, j)
 
 #%%
 
