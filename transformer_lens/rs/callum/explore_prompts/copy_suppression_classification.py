@@ -26,6 +26,7 @@ def generate_scatter(
     subtext_to_cspa: List[str] = ["i.e. ablate everything", "except the pure copy-", "suppression mechanism"],
     cspa_y_axis_title: str = "CSPA",
     show_key_results: bool = True,
+    title: str = "Comparison of change in loss for different kinds of ablation",
 ):
     # Get results
     l_orig = ICS["L_ORIG"]
@@ -69,7 +70,7 @@ def generate_scatter(
         # color="colors", color_continuous_scale=colorscheme, range_color=(0, 1),
     ).update_layout(
         template="simple_white",
-        title="Comparison of change in loss for different kinds of ablation",
+        title=title,
         yaxis=dict(tickmode="linear", dtick=0.5, title_text=""),
         xaxis=dict(tickmode="linear", dtick=0.5, title_text="Full ablation"),
     ).update_traces(

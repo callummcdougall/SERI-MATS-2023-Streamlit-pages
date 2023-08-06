@@ -149,9 +149,7 @@ def dot_with_query(
     normalize_queries: bool = True,
     use_tqdm: bool = False,
 ) -> Float[torch.Tensor, "..."]:
-
-    warnings.warn("Please test this refactored version on the notebooks where you already used it")
-
+    
     assert list(unnormalized_keys.shape) == list(unnormalized_queries.shape), (
         unnormalized_keys.shape,
         unnormalized_queries.shape,
