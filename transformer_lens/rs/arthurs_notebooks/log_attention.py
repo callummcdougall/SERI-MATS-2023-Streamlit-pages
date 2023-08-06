@@ -226,11 +226,18 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
     used_batch_indices = []
     used_seq_indices = []
     bias_scores = []
+    break
 
+bad_pairs = []
+
+#%%
+
+
+if True: # remove at some point in future 
     for batch_idx in tqdm(range(BATCH_SIZE)):
         for seq_idx in range(1, 200): # max_seq_len): # skip BOS
 
-            if (batch_idx, seq_idx) not in loss_to_use:
+            if (batch_idx, seq_idx) not in loss_to_use and (batch_idx, seq_idx) not in bad_pairs:
                 continue
 
             old_denom_items = attn_score[batch_idx, seq_idx, :seq_idx+1]
@@ -296,6 +303,9 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
             elif MODE == "Query":
                 VERSION = "single_unembedding"
                 if VERSION == "old_semantically_similar":
+                    
+                    raise NotImplementedError("This is broken, need to fix the off by 1 we get cos avoiding BOS")
+
                     K_semantic = 10
                     W_QK = model.W_Q[LAYER_IDX, HEAD_IDX].cpu() @ model.W_K[LAYER_IDX, HEAD_IDX].T.cpu() / (model.cfg.d_head ** 0.5)
                     
@@ -321,7 +331,10 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                         sem_sim_things = [
                             torch.LongTensor(list(token_idx_version[token.item()])).to(normalized_query.device) for token in relevant_tokens # ughhh these are 
                         ]
-                    except Exception:
+                        print("Success")
+                    except Exception as e:
+                        bad_pairs.append((batch_idx, seq_idx))
+                        print("Failure", e)
                         continue
 
                 else:
@@ -358,7 +371,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                     layer_idx=LAYER_IDX,
                     head_idx=HEAD_IDX,
                     add_key_bias = True, 
-                    add_query_bias = False,
+                    add_query_bias = True,
                     normalize_keys = True,
                     normalize_queries = False,
                     use_tqdm=False,
@@ -370,7 +383,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                     layer_idx=LAYER_IDX,
                     head_idx=HEAD_IDX,
                     add_key_bias = True, 
-                    add_query_bias = False,
+                    add_query_bias = True,
                     normalize_keys = True,
                     normalize_queries = False,
                     use_tqdm=False,
@@ -388,13 +401,14 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                     use_tqdm=False,
                 )
 
-                t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
+                warnings.warn("We reenabled query biases so can't do the sanity check!")
+                # t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
 
             SZ = 2
             sorted_indices = outputs.argsort(descending=True)[:SZ].tolist()
             if 0 in sorted_indices:
                 sorted_indices.remove(0)
-            indices = sorted_indices[:SZ]
+            indices = torch.tensor(sorted_indices[:SZ]) + 1 # we redid 0 ...
 
             # We also should probably recompute the denominator : ) git blame for old way where we did not recompute this
             
@@ -409,10 +423,10 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 denom_items = einops.repeat(old_denom_items, "seq_len -> indices_length seq_len", indices_length=len(indices)).clone().cpu()
 
                 if RECOMPUTE_DENOM:
-                    denom_items[torch.arange(len(indices)), indices] = score[indices]
+                    denom_items[torch.arange(len(indices)), indices] = score[indices-1]
 
                 new_denom = torch.exp(denom_items).sum(dim=-1, keepdim=False)
-                xs_or_ys.extend((torch.exp(score[indices]) / new_denom - (0.0 if not SUBTRACT_BASELINE else attn_pattern[batch_idx, seq_idx, indices].cpu())).tolist()) # 1+ accounts for zeroindexing
+                xs_or_ys.extend((torch.exp(score[indices-1]) / new_denom - (0.0 if not SUBTRACT_BASELINE else attn_pattern[batch_idx, seq_idx, indices].cpu())).tolist()) # 1+ accounts for zeroindexing
 
             used_batch_indices.extend([batch_idx for _ in range(len(indices))])
             used_seq_indices.extend([seq_idx for _ in range(len(indices))])
@@ -420,7 +434,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
             if not ADD_KEY_BIAS:
                 t.testing.assert_close(outputs, para_score + perp_score + bias_score, atol=1e-3, rtol=1e-3)
 
-            bias_scores.extend(bias_score[indices].tolist())
+            bias_scores.extend(bias_score[indices-1].tolist())
             
             used_batch_indices.extend([batch_idx for _ in range(len(indices))])
             used_seq_indices.extend([seq_idx for _ in range(len(indices))])
