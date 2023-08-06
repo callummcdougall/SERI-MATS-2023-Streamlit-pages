@@ -8,6 +8,9 @@ from transformer_lens.cautils.notebook import *
 from transformer_lens.rs.callum.keys_fixed import project
 from transformer_lens.rs.arthurs_notebooks.arthur_utils import get_metric_from_end_state, dot_with_query
 from transformer_lens.rs.callum.explore_prompts.model_results_3 import get_effective_embedding
+from transformer_lens.rs.callum2.generate_st_html.utils import (
+    ST_HTML_PATH,
+)
 
 model: HookedTransformer = HookedTransformer.from_pretrained(
     "gpt2-small",
@@ -27,7 +30,7 @@ DEVICE = "cuda"
 SHOW_PLOT = True
 DATASET_SIZE = 500
 BATCH_SIZE = 30 
-MODE = "Key"
+MODE = "Query"
 
 #%%
 
@@ -172,6 +175,11 @@ W_EE_toks: Float[Tensor, "batch seqK d_model"] = W_EE[mybatch]
 
 #%%
 
+fpath = ST_HTML_PATH.parent.parent / "cspa/cspa_semantic_dict_full_token_idx_version.pkl"
+token_idx_version = torch.load(fpath)
+
+#%%
+
 for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), range(12))):
     attn_score = cache[f"blocks.{LAYER_IDX}.attn.hook_attn_scores"][:, HEAD_IDX].to(DEVICE)
     attn_pattern = attn_score.exp() / attn_score.exp().sum(dim=-1, keepdim=True)
@@ -227,12 +235,12 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
 
             old_denom_items = attn_score[batch_idx, seq_idx, :seq_idx+1]
 
-            unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, :seq_idx+1].to(DEVICE)
+            unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, (1 if MODE=="Query" else 0):seq_idx+1].to(DEVICE)
             normalized_keys = unnormalized_keys / (unnormalized_keys.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5) 
 
             outputs = dot_with_query(
                 unnormalized_keys = normalized_keys,
-                unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx+1),
+                unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=(0 if MODE=="Query" else 1) + seq_idx),
                 model=model,
                 layer_idx=LAYER_IDX,
                 head_idx=HEAD_IDX,
@@ -286,11 +294,8 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 )
 
             elif MODE == "Query":
-
-                raise NotImplementedError("Haven't integrated BOS so +...2")
-
-                QUERY_MODE = "single_unembedding"
-                if QUERY_MODE == "semantically_similar":
+                QUERY_MODE = "new_hardcoded_semantically_similar"
+                if QUERY_MODE == "old_semantically_similar":
                     K_semantic = 10
                     W_QK = model.W_Q[LAYER_IDX, HEAD_IDX].cpu() @ model.W_K[LAYER_IDX, HEAD_IDX].T.cpu() / (model.cfg.d_head ** 0.5)
                     
@@ -309,26 +314,45 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                     E_sq_QK[..., -1] = t.where(E_sq_QK_contains_self, E_sq_QK[..., -1], mybatch[batch_idx, :1+seq_idx])
                     E_sq_QK_rearranged = einops.rearrange(E_sq_QK, "seqK K_semantic -> K_semantic seqK") # K_semantic first is easier for projection
 
+                elif QUERY_MODE == "new_hardcoded_semantically_similar":
+                    # K_semantic = 8 # ugh just include all, there are a non constant n7umber...
+                    relevant_tokens = mybatch[batch_idx, 1:1+seq_idx]
+                    try:
+                        sem_sim_things = [
+                            torch.LongTensor(list(token_idx_version[token.item()])).to(normalized_query.device) for token in relevant_tokens # ughhh these are 
+                        ]
+                    except Exception:
+                        continue
+
                 else:
                     assert QUERY_MODE == "single_unembedding"
 
                 query = normalized_query[batch_idx, seq_idx]
 
-                base_parallel, base_perp = project(
-                    einops.repeat(query, "d -> s d", s=seq_idx),
-                    model.W_U.T[mybatch[batch_idx, :1+seq_idx]] if QUERY_MODE != "semantically_similar" else list(model.W_U.T[E_sq_QK_rearranged.cuda()]),
-                    # list(model.W_U.T[logit_lens_topk[batch_idx, seq_idx]]),
-                    # list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
-                )
-                base_parallel[0] = query.clone() # keep BOS same
-                # parallel = einops.repeat(base_parallel, "d -> s d", s=seq_idx)
-                # perp = einops.repeat(base_perp, "d -> s d", s=seq_idx)
+                if QUERY_MODE == "new_hardcoded_semantically_similar":
+                    base_parallel = torch.zeros((seq_idx, model.cfg.d_model)).to(query.device)
+                    base_perp = torch.zeros((seq_idx, model.cfg.d_model)).to(query.device)
+                    for project_seq_idx in range(1, seq_idx+1):
+                        elem_base_parallel, elem_base_perp = project(
+                            query.clone(),
+                            list(model.W_U.T[sem_sim_things[project_seq_idx-1]]),
+                        )
+                        base_parallel[project_seq_idx-1] = elem_base_parallel
+                        base_perp[project_seq_idx-1] = elem_base_perp
 
+                else:
+                    base_parallel, base_perp = project(
+                        einops.repeat(query, "d -> s d", s=seq_idx),
+                        model.W_U.T[mybatch[batch_idx, 1:1+seq_idx]] if QUERY_MODE != "old_semantically_similar" else list(model.W_U.T[E_sq_QK_rearranged.cuda()]),
+                        # list(model.W_U.T[logit_lens_topk[batch_idx, seq_idx]]),
+                        # list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
+                    )
+                
                 parallel = base_parallel
                 perp = base_perp
 
                 para_score = dot_with_query(
-                    unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, :seq_idx+1].to(DEVICE),
+                    unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE),
                     unnormalized_queries = parallel,
                     model=model,
                     layer_idx=LAYER_IDX,

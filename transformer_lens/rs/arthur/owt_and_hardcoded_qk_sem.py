@@ -81,11 +81,10 @@ if not fpath.exists():
                     succ += 1
 
     input("Sure you want to save this 8MB file?")
-    torch.save(token_idx_version, ST_HTML_PATH.parent.parent / "cspa/cspa_semantic_dict_full_token_idx_version.pkl") # hopefully not too beefy
+    torch.save(token_idx_version, fpath) # hopefully not too beefy
 
 else:
     token_idx_version = torch.load(fpath)
-
 
 #%%
 
