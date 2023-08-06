@@ -84,3 +84,7 @@ This is exclusively for generating the HTML figures that will be on the followin
 
 2. Browse Examples
 3. Test Your Own Examples
+
+# TODO 
+
+Move all the installs inside of the `requirements.txt` except this repo itself into the pyproject.toml
