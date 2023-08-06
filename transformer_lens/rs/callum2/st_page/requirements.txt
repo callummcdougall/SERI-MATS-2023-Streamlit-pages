@@ -1,13 +1,1 @@
 git+https://github.com/ArthurConmy/SERI-MATS-2023-Streamlit-pages.git
-# =======
-# git+https://github.com/callummcdougall/SERI-MATS-2023-Streamlit-pages.git
-# >>>>>>> main
-# einops
-# torch
-# jaxtyping
-# typing
-# tqdm
-# ipython
-# plotly
-# circuitsvis
-# streamlit
