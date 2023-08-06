@@ -1,3 +1,7 @@
+# Description of directories in `transformer_lens/rs/callum2`
+
+*(Written by Callum)* These are the directories which I use to structure my own work.
+
 ## `ioi_and_bos`
 
 This directory is for 2 small investigations:
