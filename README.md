@@ -13,8 +13,10 @@ This setup relies on using an SSH key to access Github. See [here](https://docs.
 ```bash
 $ git clone git@github.com:callummcdougall/SERI-MATS-2023-Streamlit-pages.git
 $ cd TransformerLens
-$ pip install -e . # poetry install also should work
+$ pip install -e .
 ```
+
+Note that in the backend, `pyproject.toml` is used to manage installations. You should add requirements, e.g `einops`, via running `poetry add einops`.
 
 We stored some large files in git history and need clean them up; try `git clone --depth 1 git@github.com:callummcdougall/SERI-MATS-2023-Streamlit-pages.git` if git clone is lagging.
 
