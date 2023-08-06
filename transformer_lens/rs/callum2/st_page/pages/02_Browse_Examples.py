@@ -338,10 +338,6 @@ The head is useful here, because when we attend to `" Cairo"` we suppress `" Egy
 
 There are also a few other examples in (40) where CSPA fails for this same reason.
 
-#### (41*) by executing ➔ 47
-
-This is a case we missed because of not using enough semantically related tokens. `" executing"` suppresses `" execution"`, but it's not the top listed semantic similarity for us if we only list five. It should be the top listed! Cuda errors are bottlenecking our projections, and the methodology should be changed.
-
 #### (51) condenm the senseless ➔ motorcycle
 
 This seems like "distributed copy suppression". Our model captures about 50% of it, and the other 50% is because a few related tokens e.g. `" fatalities"` are also suppressed, and we don't capture that - that's fine.
