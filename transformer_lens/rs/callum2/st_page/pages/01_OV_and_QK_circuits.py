@@ -19,7 +19,7 @@ os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 st.set_page_config(layout="wide")
 
-st.error("Note - I've not yet fixed scale factors in this page, so although the relative values should mostly make sense, the actual values might be incorrect.")
+from transformer_lens.rs.callum2.generate_st_html.utils import ST_HTML_PATH
 
 # dict_to_store = {
 #     "tokenizer": model.tokenizer,
@@ -70,7 +70,7 @@ def plot_full_matrix_histogram(
     head: str = "10.7",
     neg: bool = True,
     circuit: Literal["QK", "OV"] = "OV",
-    flip: bool = False,
+    focus_on: Literal["source", "destination"] = "source",
 ):
     '''
     By default, this looks at what dest most attends to (QK) or what src causes to be most suppressed (OV).
@@ -79,16 +79,10 @@ def plot_full_matrix_histogram(
     '''
     _head = head.replace(".", "")
     tokenizer = dict_to_store_less["tokenizer"]
-    W_EE_V = dict_to_store_less["W_EE_V"].float()
-    W_U_O = dict_to_store_less["W_U_O"].float()
-    W_U_Q = dict_to_store_less["W_U_Q"].float()
-    W_EE_K = dict_to_store_less["W_EE_K"].float()
-    # b_Q = dict_to_store_less["b_Q"].float()
-    # b_K = dict_to_store_less["b_K"].float()
-    # W_Q = dict_to_store["W_Q"].float()
-    # W_K = dict_to_store["W_K"].float()
-    # W_V = dict_to_store["W_V"].float()
-    # W_O = dict_to_store["W_O"].float()
+    W_EE_V = dict_to_store_less["W_EE_V"]
+    W_U_O = dict_to_store_less["W_U_O"]
+    W_U_Q = dict_to_store_less["W_U_Q"]
+    W_EE_K = dict_to_store_less["W_EE_K"]
 
     # denom = (model.cfg.d_head ** 0.5)
     denom = 64 ** 0.5
@@ -101,57 +95,45 @@ def plot_full_matrix_histogram(
     if isinstance(dest_toks, int): dest_toks = [dest_toks]
 
     if circuit == "OV":
-        if flip:
+        if focus_on == "destination":
             if len(dest_toks) > 1:
                 st.error(f"Error: if you're focusing on the destination token, you should only have a single destination token in the input. Instead you have {dest}.{short_error_msg}")
                 return
             hist_toks = src_toks
-            # W_U_toks = W_U.T[dest_toks[0]]
-            # W_EE_scaled = W_EE / W_EE.std(dim=-1, keepdim=True)
-            # W_EE_OV = W_EE_scaled @ W_OV
-            # W_EE_OV_scaled = W_EE_OV / W_EE_OV.std(dim=-1, keepdim=True)
-            # full_vector: Float[Tensor, "d_vocab"] = W_EE_OV_scaled @ W_U_toks
-            W_U_O_toks_scaled = W_U_O.T[dest_toks[0]] / W_U_O.T[dest_toks[0]].std(dim=-1, keepdim=True)
-            W_EE_V_scaled = W_EE_V / W_EE_V.std(dim=-1, keepdim=True)
-            full_vector: Float[Tensor, "d_vocab"] = W_EE_V_scaled @ W_U_O_toks_scaled
+            # W_U_O_toks_scaled = W_U_O.T[dest_toks[0]] / W_U_O.T[dest_toks[0]].std(dim=-1, keepdim=True)
+            # W_EE_V_scaled = W_EE_V / W_EE_V.std(dim=-1, keepdim=True)
+            # full_vector: Float[Tensor, "d_vocab"] = W_EE_V_scaled @ W_U_O_toks_scaled
+            full_vector: Float[Tensor, "d_vocab"] = W_EE_V @ W_U_O[:, dest_toks[0]]
         else:
             if len(src_toks) > 1:
                 st.error(f"Error: if you're focusing on the source token, you should only have a single source token in the input. Instead you have {src}.{short_error_msg}")
                 return
             hist_toks = dest_toks
-            # W_EE_scaled_toks = W_EE[src_toks[0]] / W_EE[src_toks[0]].std(dim=-1, keepdim=True)
-            # W_EE_OV_toks = W_EE_scaled_toks @ W_OV
-            # W_EE_OV_scaled_toks = W_EE_OV_toks / W_EE_OV_toks.std(dim=-1, keepdim=True)
-            # full_vector: Float[Tensor, "d_vocab"] = W_EE_OV_scaled_toks @ W_U
-            W_EE_V_toks_scaled = W_EE_V[src_toks[0]] / W_EE_V[src_toks[0]].std(dim=-1, keepdim=True)
-            W_U_O_scaled = W_U_O / W_U_O.std(dim=-1, keepdim=True)
-            full_vector: Float[Tensor, "d_vocab"] = W_EE_V_toks_scaled @ W_U_O_scaled
+            # W_EE_V_toks_scaled = W_EE_V[src_toks[0]] / W_EE_V[src_toks[0]].std(dim=-1, keepdim=True)
+            # W_U_O_scaled = W_U_O / W_U_O.std(dim=-1, keepdim=True)
+            # full_vector: Float[Tensor, "d_vocab"] = W_EE_V_toks_scaled @ W_U_O_scaled
+            full_vector: Float[Tensor, "d_vocab"] = W_EE_V[src_toks[0]] @ W_U_O
 
         full_vector_topk = full_vector.topk(k, dim=-1, largest=not(neg))
 
     elif circuit == "QK":
-        if flip:
+        if focus_on == "source":
             if len(src_toks) > 1:
                 st.error(f"Error: if you're focusing on the source token, you should only have a single source token in the input. Instead you have {src}.{short_error_msg}")
                 return
             hist_toks = dest_toks
-            # W_EE_scaled_toks = W_EE[src_toks[0]] / W_EE[src_toks[0]].std(dim=-1, keepdim=True)
-            # W_U_scaled = W_U.T / W_U.T.std(dim=-1, keepdim=True)
-            # full_vector: Float[Tensor, "d_vocab"] = W_U_scaled @ (W_QK @ W_EE_scaled_toks + W_Q @ b_K) / denom
-            W_EE_K_toks_scaled = W_EE_K[src_toks[0]] / W_EE_K[src_toks[0]].std(dim=-1, keepdim=True)
-            W_U_Q_scaled = W_U_Q / W_U_Q.std(dim=-1, keepdim=True)
-            full_vector: Float[Tensor, "d_vocab"] = W_U_Q_scaled @ W_EE_K_toks_scaled / denom
+            # W_EE_K_toks_scaled = W_EE_K[src_toks[0]] / W_EE_K[src_toks[0]].std(dim=-1, keepdim=True)
+            # W_U_Q_scaled = W_U_Q / W_U_Q.std(dim=-1, keepdim=True)
+            full_vector: Float[Tensor, "d_vocab"] = W_U_Q @ W_EE_K[src_toks[0]] / denom
         else:
             if len(dest_toks) > 1:
                 st.error(f"Error: if you're focusing on the destination token, you should only have a single destination token in the input. Instead you have {dest}.{short_error_msg}")
                 return
             hist_toks = src_toks
-            # W_U_scaled_toks = W_U.T[dest_toks[0]] / W_U.T[dest_toks[0]].std(dim=-1, keepdim=True)
-            # W_EE_scaled = W_EE / W_EE.std(dim=-1, keepdim=True)
-            # full_vector: Float[Tensor, "d_vocab"] = (W_U_scaled_toks @ W_QK + b_Q @ W_K.T) @ W_EE_scaled.T / denom
-            W_EE_scaled = W_EE_K / W_EE_K.std(dim=-1, keepdim=True)
-            W_U_Q_toks_scaled = W_U_Q[dest_toks[0]] / W_U_Q[dest_toks[0]].std(dim=-1, keepdim=True)
-            full_vector: Float[Tensor, "d_vocab"] = W_U_Q_toks_scaled @ W_EE_scaled.T / denom
+            # W_EE_scaled = W_EE_K / W_EE_K.std(dim=-1, keepdim=True)
+            # W_U_Q_toks_scaled = W_U_Q[dest_toks[0]] / W_U_Q[dest_toks[0]].std(dim=-1, keepdim=True)
+            # full_vector: Float[Tensor, "d_vocab"] = W_U_Q_toks_scaled @ W_EE_scaled.T / denom
+            full_vector: Float[Tensor, "d_vocab"] = W_U_Q[dest_toks[0]] @ W_EE_K.T / denom
 
         full_vector_topk = full_vector.topk(k, dim=-1, largest=True)
     
@@ -173,22 +155,15 @@ def plot_full_matrix_histogram(
             y.append(full_vector[h_tok].item())
             color.append("#FF7F0E")
     
-    if circuit == "OV":
-        if flip:
-
-            title = "<br><b style='font-size:22px;'>OV circuit</b>:<br>" + customwrap(f"Which source tokens most suppress the prediction of <b>{dest[0].replace(' ', 'Ġ')!r}</b> ?").replace("Ġ", " ")
-            x_label = "Source token"
-        else:
-            title = "<br><b style='font-size:22px;'>OV circuit</b>:<br>" + customwrap(f"Which predictions does source token <b>{src[0].replace(' ', 'Ġ')!r}</b> suppress most, when attended to?").replace("Ġ", " ")
-            x_label = "Destination token (prediction)"
-    else:
-        if flip:
-            title = "<br><b style='font-size:22px;'>QK circuit</b>:<br>" + customwrap(f"Which tokens' unembeddings most attend to source token <b>{src[0].replace(' ', 'Ġ')!r}</b> ?").replace("Ġ", " ")
-            x_label = "Destination token (unembedding)"
-        else:
-            title = "<br><b style='font-size:22px;'>QK circuit</b>:<br>" + customwrap(f"Which source tokens does the unembedding of <b>{dest[0].replace(' ', 'Ġ')!r}</b> attend to most?").replace("Ġ", " ")
-            x_label = "Source token"
-    x_label = ""
+    title = f"<br><b style='font-size:22px;'>{circuit} circuit</b>:<br>"
+    if (circuit, focus_on) == ("OV", "destination"):
+        title += customwrap(f"Which source tokens most suppress the prediction of <b>{dest[0].replace(' ', 'Ġ')!r}</b> ?")
+    elif (circuit, focus_on) == ("OV", "source"):
+        title += customwrap(f"Which predictions does source token <b>{src[0].replace(' ', 'Ġ')!r}</b> suppress most, when attended to?")
+    elif (circuit, focus_on) == ("QK", "source"):
+        title += customwrap(f"Which tokens' unembeddings most attend to source token <b>{src[0].replace(' ', 'Ġ')!r}</b> ?")
+    elif (circuit, focus_on) == ("QK", "destination"):
+        title += customwrap(f"Which source tokens does the unembedding of <b>{dest[0].replace(' ', 'Ġ')!r}</b> attend to most?")
 
     df = pd.DataFrame({
         "x": x, "y": y, "color": color
@@ -202,8 +177,8 @@ def plot_full_matrix_histogram(
         if min(y) < 0: values_range[0] = min(y) - 1
 
     fig = px.bar(
-        df, x="y", y="x", color="color", template="simple_white", title=title,
-        width=650, height=250+25*len(x), labels={"y": "Logits" if (circuit=="OV") else "Attention score", "x": x_label, "color": "Token class"},
+        df, x="y", y="x", color="color", template="simple_white", title=title.replace("Ġ", " "),
+        width=650, height=250+25*len(x), labels={"y": "Logits" if (circuit=="OV") else "Attention score", "x": "", "color": "Token class"},
         color_discrete_map="identity", text_auto=".2f"
     ).update_layout(
         yaxis_categoryorder = 'total descending' if neg else 'total ascending',
@@ -216,8 +191,6 @@ def plot_full_matrix_histogram(
         cliponaxis=False
     )
     return fig
-
-ST_HTML_PATH = Path("transformer_lens/rs/callum2/st_page/media")
 
 @st.cache_data(show_spinner=False, max_entries=1)
 def get_dict_to_store_less():
@@ -364,7 +337,7 @@ def create_histograms(
         circuit="QK",
         neg=False,
         head="10.7",
-        flip=(focus_on=="source"),
+        focus_on=focus_on,
     )
     if hist_QK is None: return None, None
 
@@ -376,7 +349,7 @@ def create_histograms(
         circuit="OV",
         neg=True,
         head="10.7",
-        flip=(focus_on=="destination")
+        focus_on=focus_on,
     )
     return hist_QK, hist_OV
 

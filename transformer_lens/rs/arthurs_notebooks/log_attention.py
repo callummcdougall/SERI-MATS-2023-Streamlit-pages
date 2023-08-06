@@ -7,7 +7,7 @@ Copy of direct effect survey
 from transformer_lens.cautils.notebook import *
 from transformer_lens.rs.callum.keys_fixed import project
 from transformer_lens.rs.arthurs_notebooks.arthur_utils import get_metric_from_end_state, dot_with_query
-from transformer_lens.rs.callum2.explore_prompts.model_results_3 import get_effective_embedding
+from transformer_lens.rs.callum.explore_prompts.model_results_3 import get_effective_embedding
 
 model: HookedTransformer = HookedTransformer.from_pretrained(
     "gpt2-small",
