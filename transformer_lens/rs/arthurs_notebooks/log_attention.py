@@ -482,7 +482,7 @@ if True: # remove at some point in future
     fig.update_layout(
         title = f"Change in attention probabilities when projecting Head {LAYER_IDX}.{HEAD_IDX} {' ' if MODE == 'Query' and VERSION == 'single_unembedding' else ' (names inaccurate!)'}",
         xaxis_title="Project query to unembedding parallel projection",
-        yaxis_title="Change in attention probability from unembedding perpendicular projection",
+        yaxis_title="Project query onto unembedding complement",
     )
     fig.show()
 
