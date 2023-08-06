@@ -15,6 +15,7 @@ from nltk.stem import WordNetLemmatizer
 
 MY_TENSES = [PRESENT, PAST, FUTURE, SUBJUNCTIVE, INFINITIVE, PROGRESSIVE]
 MY_NUMBERS = [PLURAL, SINGULAR]
+
 MY_SUFFIXES = ["r", "ic", "al", "ous", "able", "ful", "ive"]
 
 def concat_lists(list_of_lists):
