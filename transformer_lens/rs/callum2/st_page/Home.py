@@ -1,13 +1,13 @@
 import streamlit as st
-import os
 
-st.write(os.getcwd())
+# import os
+# st.write(os.getcwd())
 
 st.markdown(
 r"""
 # Explore Prompts
 
-This page was designed to help explore different prompts for GPT-2 Small, as part of my & Arthur Conmy's work on negative heads & copy suppression in transformers.
+This page was designed to help explore different prompts for GPT-2 Small, as part of Callum McDougall, Arthur Conmy & Cody Rushing's work on self-repair in LLMs. We focus on negative behaviour (specifically copy-suppression in heads 10.7 and 11.10 for GPT2-small) and backup behaviour (specifically in the IOI task).
 
 The goals of this page are:
 
