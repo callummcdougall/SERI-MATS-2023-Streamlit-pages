@@ -1,7 +1,7 @@
 import streamlit as st
-import os
 
-st.write(os.getcwd())
+# import os
+# st.write(os.getcwd())
 
 st.markdown(
 r"""
