@@ -91,8 +91,8 @@ W_EE = get_effective_embedding(model)['W_E (including MLPs)']
 
 if MODE == "Key": # What you want to do here is set `my_embeddings` equal to some residual stream state
 
-    # VERSION = "layer 10 context-free residual state"
-    VERSION = "effective embedding"
+    VERSION = "layer 10 context-free residual state"
+    # VERSION = "effective embedding"
     my_random_tokens = model.to_tokens("The")[0]
     my_embeddings = t.zeros(BATCH_SIZE, max_seq_len, model.cfg.d_model)
 
@@ -228,26 +228,25 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
     bias_scores = []
     break
 
-bad_pairs = []
-
 #%%
 
+att_values = []
 
 if True: # remove at some point in future 
     for batch_idx in tqdm(range(BATCH_SIZE)):
         for seq_idx in range(1, 200): # max_seq_len): # skip BOS
 
-            if (batch_idx, seq_idx) not in loss_to_use and (batch_idx, seq_idx) not in bad_pairs:
+            if (batch_idx, seq_idx) not in loss_to_use:
                 continue
 
             old_denom_items = attn_score[batch_idx, seq_idx, :seq_idx+1]
 
-            unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, (1 if MODE=="Query" else 0):seq_idx+1].to(DEVICE)
+            unnormalized_keys = cache[f"blocks.{LAYER_IDX}.hook_resid_pre"][batch_idx, 1:seq_idx+1].to(DEVICE)
             normalized_keys = unnormalized_keys / (unnormalized_keys.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5) 
 
             outputs = dot_with_query(
                 unnormalized_keys = normalized_keys,
-                unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=(0 if MODE=="Query" else 1) + seq_idx),
+                unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
                 model=model,
                 layer_idx=LAYER_IDX,
                 head_idx=HEAD_IDX,
@@ -263,12 +262,12 @@ if True: # remove at some point in future
             if MODE == "Key":
                 para_keys, perp_keys = project(
                     normalized_keys,
-                    my_embeddings[batch_idx, :seq_idx+1].to(DEVICE),
+                    my_embeddings[batch_idx, 1:seq_idx+1].to(DEVICE),
                 )
 
                 para_score = dot_with_query(
                     unnormalized_keys = para_keys,
-                    unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx+1),
+                    unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
                     model=model,
                     layer_idx=LAYER_IDX,
                     head_idx = HEAD_IDX,
@@ -279,7 +278,7 @@ if True: # remove at some point in future
                 )
                 perp_score = dot_with_query(
                     unnormalized_keys = perp_keys,
-                    unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx+1),
+                    unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
                     model=model,
                     layer_idx=LAYER_IDX,
                     head_idx = HEAD_IDX,
@@ -290,7 +289,7 @@ if True: # remove at some point in future
                 )
                 bias_score = dot_with_query(
                     unnormalized_keys = 0.0*perp_keys,
-                    unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx+1),
+                    unnormalized_queries = einops.repeat(normalized_query[batch_idx, seq_idx], "d -> s d", s=seq_idx),
                     model=model,
                     layer_idx=LAYER_IDX,
                     head_idx = HEAD_IDX,
@@ -406,9 +405,8 @@ if True: # remove at some point in future
 
             SZ = 2
             sorted_indices = outputs.argsort(descending=True)[:SZ].tolist()
-            if 0 in sorted_indices:
-                sorted_indices.remove(0)
-            indices = torch.tensor(sorted_indices[:SZ]) + 1 # we redid 0 ...
+            indices = torch.tensor(sorted_indices[:SZ]) + 1
+            att_values.extend(attn_pattern[batch_idx, seq_idx, indices].tolist())
 
             # We also should probably recompute the denominator : ) git blame for old way where we did not recompute this
             
@@ -447,12 +445,12 @@ if True: # remove at some point in future
     m, b = np.polyfit(xs, ys, 1)
 
     df = pd.DataFrame({
-    'xs': xs,
-    'ys': ys,
-    # #  very sad, broken
-    # 'text': [(str(model.to_string(mybatch[used_batch_idx, :used_seq_idx+1].cpu().tolist()))[-20:], 
-    #          "with completion", 
-    #          model.to_string(mytargets[used_batch_idx, used_seq_idx:used_seq_idx+1]), new_batch_to_old_batch[used_batch_idx], used_seq_idx) for used_batch_idx, used_seq_idx in zip(used_batch_indices, used_seq_indices, strict=True)]
+        'xs': xs,
+        'ys': ys,
+        # #  very sad, broken
+        # 'text': [(str(model.to_string(mybatch[used_batch_idx, :used_seq_idx+1].cpu().tolist()))[-20:], 
+        #          "with completion", 
+        #          model.to_string(mytargets[used_batch_idx, used_seq_idx:used_seq_idx+1]), new_batch_to_old_batch[used_batch_idx], used_seq_idx) for used_batch_idx, used_seq_idx in zip(used_batch_indices, used_seq_indices, strict=True)]
     })
 
     fig = px.scatter(
@@ -482,17 +480,17 @@ if True: # remove at some point in future
     )
 
     fig.update_layout(
-        title = f"Change in attention probabilities when using parallel and perpendicular projections for Head {LAYER_IDX}.{HEAD_IDX}",
-        xaxis_title="Change in attention probability from unembedding parallel projection",
+        title = f"Change in attention probabilities when projecting Head {LAYER_IDX}.{HEAD_IDX} {' ' if MODE == 'Query' and VERSION == 'single_unembedding' else ' (names inaccurate!)'}",
+        xaxis_title="Project query to unembedding parallel projection",
         yaxis_title="Change in attention probability from unembedding perpendicular projection",
     )
     fig.show()
 
     fig = hist(
-        [xs, ys],
+        [xs],
         labels={"variable": MODE + " input component", "value": "Change in attention"},
-        title=f"Change in {LAYER_IDX}.{HEAD_IDX} attention probabilities under {MODE.lower()} interventions ({VERSION})",
-        names=["Parallel", "Perpendicular"],
+        title=f"Change in {LAYER_IDX}.{HEAD_IDX} attention probabilities when approximating {MODE.lower()} with {VERSION.replace('_', ' ')}",
+        # names=["Parallel", "Perpendicular"], # we removed support for both at same time
         width=1200,
         height=600,
         opacity=0.7,
