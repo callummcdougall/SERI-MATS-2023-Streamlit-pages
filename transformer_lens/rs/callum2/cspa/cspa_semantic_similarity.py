@@ -1,20 +1,9 @@
-from jaxtyping import Int
-from typing import Dict, Tuple, List
 import torch as t
-from torch import Tensor
 from transformer_lens import HookedTransformer
 from tqdm import tqdm
-import gzip
 
 # %pip install nltk
 # %pip install --no-deps pattern
-import nltk
-from nltk.corpus import wordnet
-from pattern.en import conjugate, PRESENT, PAST, FUTURE, SUBJUNCTIVE, INFINITIVE, PROGRESSIVE, PLURAL, SINGULAR # type: ignore
-from nltk.stem import WordNetLemmatizer
-
-MY_TENSES = [PRESENT, PAST, FUTURE, SUBJUNCTIVE, INFINITIVE, PROGRESSIVE]
-MY_NUMBERS = [PLURAL, SINGULAR]
 
 MY_SUFFIXES = ["r", "ic", "al", "ous", "able", "ful", "ive"]
 
@@ -146,6 +135,8 @@ def create_full_semantic_similarity_dict(model: HookedTransformer, full_version:
     '''
     # Load nltk's wordnet
     if full_version:
+        import nltk
+        from nltk.corpus import wordnet
         nltk.download('wordnet')
         
     # First, create a dictionary `d` which only contains lists (1) and (3)
@@ -235,6 +226,10 @@ def create_full_semantic_similarity_dict(model: HookedTransformer, full_version:
 
 
 def get_related_words(word: str, model: HookedTransformer):
+    from pattern.text.en import conjugate, PRESENT, PAST, FUTURE, SUBJUNCTIVE, INFINITIVE, PROGRESSIVE, PLURAL, SINGULAR
+    from nltk.stem import WordNetLemmatizer
+    MY_TENSES = [PRESENT, PAST, FUTURE, SUBJUNCTIVE, INFINITIVE, PROGRESSIVE]
+    MY_NUMBERS = [PLURAL, SINGULAR]
 
     # Get stripped version (e.g. "writer" or "writing" -> "write")
     lemmatizer = WordNetLemmatizer()

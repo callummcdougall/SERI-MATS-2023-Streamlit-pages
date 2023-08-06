@@ -8,5 +8,3 @@ ipython
 plotly
 circuitsvis
 streamlit
-nltk
-pattern
