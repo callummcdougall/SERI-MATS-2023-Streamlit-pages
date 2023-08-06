@@ -294,8 +294,8 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 )
 
             elif MODE == "Query":
-                QUERY_MODE = "new_hardcoded_semantically_similar"
-                if QUERY_MODE == "old_semantically_similar":
+                VERSION = "single_unembedding"
+                if VERSION == "old_semantically_similar":
                     K_semantic = 10
                     W_QK = model.W_Q[LAYER_IDX, HEAD_IDX].cpu() @ model.W_K[LAYER_IDX, HEAD_IDX].T.cpu() / (model.cfg.d_head ** 0.5)
                     
@@ -314,7 +314,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                     E_sq_QK[..., -1] = t.where(E_sq_QK_contains_self, E_sq_QK[..., -1], mybatch[batch_idx, :1+seq_idx])
                     E_sq_QK_rearranged = einops.rearrange(E_sq_QK, "seqK K_semantic -> K_semantic seqK") # K_semantic first is easier for projection
 
-                elif QUERY_MODE == "new_hardcoded_semantically_similar":
+                elif VERSION == "new_hardcoded_semantically_similar":
                     # K_semantic = 8 # ugh just include all, there are a non constant n7umber...
                     relevant_tokens = mybatch[batch_idx, 1:1+seq_idx]
                     try:
@@ -325,11 +325,11 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                         continue
 
                 else:
-                    assert QUERY_MODE == "single_unembedding"
+                    assert VERSION == "single_unembedding"
 
                 query = normalized_query[batch_idx, seq_idx]
 
-                if QUERY_MODE == "new_hardcoded_semantically_similar":
+                if VERSION == "new_hardcoded_semantically_similar":
                     base_parallel = torch.zeros((seq_idx, model.cfg.d_model)).to(query.device)
                     base_perp = torch.zeros((seq_idx, model.cfg.d_model)).to(query.device)
                     for project_seq_idx in range(1, seq_idx+1):
@@ -343,7 +343,7 @@ for LAYER_IDX, HEAD_IDX in [(10, 7)] +  list(itertools.product(range(9, 12), ran
                 else:
                     base_parallel, base_perp = project(
                         einops.repeat(query, "d -> s d", s=seq_idx),
-                        model.W_U.T[mybatch[batch_idx, 1:1+seq_idx]] if QUERY_MODE != "old_semantically_similar" else list(model.W_U.T[E_sq_QK_rearranged.cuda()]),
+                        model.W_U.T[mybatch[batch_idx, 1:1+seq_idx]] if VERSION != "old_semantically_similar" else list(model.W_U.T[E_sq_QK_rearranged.cuda()]),
                         # list(model.W_U.T[logit_lens_topk[batch_idx, seq_idx]]),
                         # list(model.W_U.T[wut_indices]), # Project onto semantically similar tokens
                     )
