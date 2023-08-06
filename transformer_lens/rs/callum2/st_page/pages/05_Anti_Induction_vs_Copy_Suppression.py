@@ -7,8 +7,8 @@ st.set_page_config(layout="wide")
 from pathlib import Path
 import plotly.express as px
 
-from transformer_lens.rs.callum2.st_page.streamlit_styling import styling # type: ignore
-from transformer_lens.rs.callum2.st_page.explore_prompts_utils import ST_HTML_PATH # type: ignore
+from transformer_lens.rs.callum2.st_page.streamlit_styling import styling
+from transformer_lens.rs.callum2.generate_st_html.utils import ST_HTML_PATH
 styling()
 
 import pandas as pd
@@ -121,7 +121,7 @@ min_size = int(min([get_size(model_name) for model_name in MODEL_NAMES]) // 1e6)
 max_size = int(max([get_size(model_name) for model_name in MODEL_NAMES]) // 1e6)
 
 def plot_all_results(
-    negneg=False,
+    pospos=False,
     showtext=False,
     fraction=False,
     categories="all",
@@ -140,10 +140,10 @@ def plot_all_results(
         model_scores = SCORES_DICT[model_name]
         for layer in range(model_scores.size(1)):
             for head in range(model_scores.size(2)):
-                results_copy_suppression_ioi.append(model_scores[0, layer, head].item())
-                results_anti_induction.append(model_scores[1, layer, head].item())
+                results_copy_suppression_ioi.append(-model_scores[0, layer, head].item())
+                results_anti_induction.append(-model_scores[1, layer, head].item())
                 if model_scores.shape[0] == 3:
-                    results_copy_suppression_norm.append(model_scores[2, layer, head].item())
+                    results_copy_suppression_norm.append(-model_scores[2, layer, head].item())
                 else:
                     results_copy_suppression_norm.append(np.nan)
                 model_names.append(model_name)
@@ -168,9 +168,9 @@ def plot_all_results(
     else:
         x = "results_cs_ioi"
 
-    if negneg:
-        is_neg = [i for i, (x, y) in enumerate(zip(results_copy_suppression_ioi, results_anti_induction)) if x < 0 and y < 0]
-        df = df.iloc[is_neg]
+    if pospos:
+        is_pos = [i for i, (x, y) in enumerate(zip(results_copy_suppression_ioi, results_anti_induction)) if x > 0 and y > 0]
+        df = df.iloc[is_pos]
 
     if categories.lower() == "none":
         df = df[df["model_name"] == ""] # filter everything out
@@ -207,6 +207,8 @@ def plot_all_results(
     fig.update_xaxes(showgrid=True)
     fig.update_yaxes(showgrid=True)
     fig.update_traces(textposition='top center')
+    fig.add_vline(x=0, line_width=1, line_color="black")
+    fig.add_hline(y=0, line_width=1, line_color="black")
 
     # Now we add legend groups
     for trace in fig.data:
@@ -239,9 +241,11 @@ Given a sequence such as ***"When John and Mary went to the shops, John gave a d
 For each attention head, we used 100 randomly generated sequences.
 """)
 
+st.info(r"""Coming soon - copy-suppression measured by performance recovery on CSPA, rather than by behaviour on IOI.""")
+
 cols = st.columns(2)
 with cols[0]:
-    negneg = st.checkbox("Only show neg-neg quadrant")
+    pospos = st.checkbox("Only show pos-pos quadrant", True)
     showtext = st.checkbox("Show head names as annotations")
     fraction = st.checkbox("Color points by fraction through model")
     categories = st.radio(
@@ -263,7 +267,7 @@ with cols[0]:
     )
 
 fig = plot_all_results(
-    negneg=negneg,
+    pospos=pospos,
     showtext=showtext,
     fraction=fraction,
     categories=categories,

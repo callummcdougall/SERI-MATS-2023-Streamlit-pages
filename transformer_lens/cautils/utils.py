@@ -17,7 +17,7 @@ import sys
 import time
 import gzip
 from datasets import load_dataset
-from copy import deepcopy
+from copy import copy, deepcopy
 from jaxtyping import Float, Int, Bool, jaxtyped
 from typing import Union, List, Dict, Tuple, Callable, Optional, Any, Sequence, Iterable, Mapping, TypeVar, Generic, NamedTuple, Literal
 from torch import Tensor

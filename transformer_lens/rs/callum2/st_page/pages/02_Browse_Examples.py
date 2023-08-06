@@ -8,9 +8,12 @@ from streamlit.components.v1 import html
 import pickle
 import gzip
 
-from transformer_lens.rs.callum2.st_page.streamlit_styling import styling # type: ignore
-from transformer_lens.rs.callum2.st_page.generate_html import CSS # type: ignore
-from transformer_lens.rs.callum2.st_page.explore_prompts_utils import ST_HTML_PATH # type: ignore
+import platform
+is_local = (platform.processor() != "")
+
+from transformer_lens.rs.callum2.st_page.streamlit_styling import styling
+from transformer_lens.rs.callum2.generate_st_html.generate_html_funcs import CSS
+from transformer_lens.rs.callum2.generate_st_html.utils import ST_HTML_PATH
 
 import torch as t
 t.set_grad_enabled(False)
@@ -19,7 +22,8 @@ styling()
 
 @st.cache_data(show_spinner=False, max_entries=1)
 def load_html():
-    with gzip.open(ST_HTML_PATH / "GZIP_HTML_PLOTS_b51_s61.pkl", "rb") as f:
+    filename = f"GZIP_HTML_PLOTS_b{300 if is_local else 51}_s61.pkl"
+    with gzip.open(ST_HTML_PATH / filename, "rb") as f:
         HTML_PLOTS = pickle.load(f)
     return HTML_PLOTS
 
@@ -35,14 +39,18 @@ ATTENTION_TYPES = ["info-weighted", "standard"]
 ATTN_VIS_TYPES = ["large", "small"]
 
 first_idx = 36
-batch_idx = st.sidebar.slider("Pick a sequence", 0, BATCH_SIZE-1, first_idx)
+if is_local:
+    batch_idx = st.sidebar.number_input(f"Pick a sequence (0-{BATCH_SIZE-1})", 0, BATCH_SIZE-1, first_idx)
+else:
+    batch_idx = st.sidebar.slider("Pick a sequence", 0, BATCH_SIZE-1, first_idx)
 head_name = st.sidebar.radio("Pick a head", NEG_HEADS) # , "both"
 # assert head_name != "both", "Both not implemented yet. Please choose either 10.7 or 11.10"
 if head_name == "10.7":
     EFFECTS = ["direct", "indirect", "indirect (excluding 11.10)", "both"]
 effect = st.sidebar.radio("Pick a type of intervention effect", EFFECTS)
 ln_mode = st.sidebar.radio("Pick a type of layernorm mode for the intervention", LN_MODES)
-ablation_mode = st.sidebar.radio("Pick a type of ablation", ABLATION_MODES)
+# ablation_mode = st.sidebar.radio("Pick a type of ablation", ABLATION_MODES)
+ablation_mode = "mean"
 full_ablation_mode = "+".join([effect, ln_mode, ablation_mode])
 full_ablation_mode_dla = "+".join([ln_mode, ablation_mode])
 
@@ -74,20 +82,18 @@ If "frozen", then we use the same layernorm parameters than we did in the clean 
                     
 </details>
 
-<details>
-<summary>Ablation type</summary>
-
-<br>
-
-We can zero-ablate the output of our head, or mean-ablate. Mean ablation is more principled, because it takes into account things like a constant bias term.
-                    
-</details>
-
 """, unsafe_allow_html=True)
+
+# <details>
+# <summary>Ablation type</summary>
+# <br>
+# We can zero-ablate the output of our head, or mean-ablate. Mean ablation is more principled, because it takes into account things like a constant bias term.
+# </details>
 
 # HTML_LOSS = HTML_PLOTS["LOSS"][(batch_idx, head_name, full_ablation_mode)]
 HTML_LOGITS_ORIG = HTML_PLOTS["LOGITS_ORIG"][(batch_idx,)]
 HTML_LOGITS_ABLATED = HTML_PLOTS["LOGITS_ABLATED"][(batch_idx, head_name, full_ablation_mode)]
+HTML_LOGITS_CSPA = HTML_PLOTS["LOGITS_ABLATED"][(batch_idx, "CSPA")]
 # HTML_DLA = HTML_PLOTS["DLA"][(batch_idx, head_name, "NEG/POS")]
 # HTML_ATTN = HTML_PLOTS["ATTN"][(batch_idx, head_name, vis_name, attn_type)]
 # HTML_UNEMBEDDINGS = HTML_PLOTS["UNEMBEDDINGS"][(batch_idx, head_name)]
@@ -99,18 +105,20 @@ r"""# Browse Examples
 
 This page allows you to browse through a large set of OpenWebText prompts, and see how negative heads (10.7 and 11.10) behave on the different tokens in those prompts. It should help build your intuition about how much of the negative heads' behaviour is copy-suppression, and when this is good/bad.
 
+### What is copy suppression?
+
+Let $s$ and $d$ stand for the source and destination tokens respectively. The idealised form of copy suppression works as follows: token $s$ is being predicted at destination token $d$ before the negative head, which causes $d$ to attend back to $s$ and suppress the prediction of $s$. This is beneficial when $s$ is in fact incorrect (because the head will be pushing down incorrect predictions), and it's harmful when $s$ is in fact correct (because the head will be pushing down correct predictions).
+
+There's one additional complicating factor, which we've called **semantic copy suppression**. We can also have token $s^*$ being predicted at $d$, where $s^*$ is **semantically related** to a source token $s$. By this, we mean that they are the same token up to small variations e.g. a prepended space, capitalization, plurals, other minor morphological changes e.g. verb tenses, or cursed features of tokenization (more on this later).
+
 ### How does each visualisation relate to copy-suppression?
 
-* **Loss difference from ablating negative head** - to figure out when a head is important, we need to see when ablating it changes the loss. We offer 4 different kinds of ablation: zero vs mean ablation, and removing direct effect vs patching (the latter includes indirect effects).
-* **Direct effect on logits** - in situations where the heads are important, we need to know what tokens are being pushed up/down by this head, and how the logit output changes when we ablate the head.
-* **Attention patterns** - hopefully the direct effect plot shows that, in most important examples, 10.7 is suppressing a token which appears earlier in context. The attention patterns should show that 10.7 is also attending back to this token (i.e. it's being negatively copied).
-* **Prediction-attention?** - hopefully the attention plot shows that we attend back to the token which is being suppressed, but why do we do this? Our theory states that the unembedding of this token is a large component query-side. This plot shows the size of the unembedding component of the query-side attention for the token it's attending to, relative to the average size for other tokens in the context.
+* <u>**Loss**</u>. You can see the loss difference per token when you ablate the head (we offer different kinds of ablation). A large increase means this head was very useful at this token. We define **MIDS** (max-impact dataset samples) as the tokens which have the largest change in loss when ablating the head.
+* <u>**Logits**</u>. You can see the head's largest direct effect (positive and negative), as well as the top predictions before and after ablation. *You should see that, for MIDS, the largest negative direct effect at token $d$ is on some token $s^*$ which is semantically related to a source token $s$.*
+* <u>**Attention patterns**</u>. *You should see that, for MIDS, $d$ attends back to $s$.*
+* <u>**Logit lens**</u>. This shows you the largest predictions before the head, both over the entire vocabulary and over the source tokens. *You should see that, for MIDS, $s^*$ is predicted at $d$.*
 
-When all put together, the 2nd/3rd/4th plots should show that:
-
-* Negative heads' direct effect on logits is to push down a token which appears earlier in context,
-* Negative heads are attending to this token which appears earlier in context,
-* The reason they're attending to this token is because it was being predicted at that destination position.
+Finally, we have a form of ablation which tries to delete all information except for this described copy suppression mechanism. We call this **CSPA** (copy-suppression preserving ablation). You can see the results of this ablation in the "CSPA" tab, and verify that all this qualitative behaviour holds up when put it to the test.
 
 <br>
 """, unsafe_allow_html=True)
@@ -119,7 +127,8 @@ tabs = st.tabs([
     "Loss",
     "Logits",
     "Attention Patterns",
-    "Prediction-Attention?",
+    "Logit Lens",
+    "CSPA",
 ])
 
 with tabs[0]:
@@ -201,7 +210,9 @@ To complete this picture, we still want to look at the attention patterns, and v
         }[x])
 
         HTML_DLA = HTML_PLOTS["DLA"][(batch_idx, head_name, full_ablation_mode_dla, radio_negpos_logits)]
-        html(CSS + HTML_DLA, height=600)
+        
+        DLA_CONTAINER = st.container()
+
 
     with inner_tabs[1]:
         st.markdown(
@@ -210,7 +221,7 @@ r"""
 
 In the columns below, you can also compare whole model's predictions before / after ablation.
 
-The left is colored by probability assigned to correct token. The right is colored by change in logprobs assigned to correct token relative to the left (so red means ablation decreased the logprobs, i.e. the head was helpful here).
+The original logits are colored by probability assigned to the correct token. The ablated logits are colored by change in logprobs assigned to the correct token (so these colors are just the reverse of the colors for the loss plot earlier).
 
 <details>
 <summary>Analysis</summary>
@@ -224,16 +235,7 @@ Note that the negative head is suppressing both `pier` and `Pier`, because they 
 
 """, unsafe_allow_html=True)
 
-        cols = st.columns(2)
-
-        with cols[0]:
-            st.markdown("### Original")
-            st.caption("Colored by logprob assigned to correct next token.")
-            html(CSS + HTML_LOGITS_ORIG, height=900)
-        with cols[1]:
-            st.markdown("### Ablated")
-            st.caption("Colored by change in logprob for correct next token.")
-            html(CSS + HTML_LOGITS_ABLATED, height=900)
+        LOGITS_CONTAINER = st.container()
 
 with tabs[2]:
     st.markdown(
@@ -298,3 +300,113 @@ We still don't know exactly why false positives occur - one possible theory is t
 
     HTML_UNEMBEDDINGS = HTML_PLOTS["UNEMBEDDINGS"][(batch_idx, head_name)]
     html(CSS + HTML_UNEMBEDDINGS, height=1500)
+
+with tabs[4]:
+    st.markdown(
+r"""
+## Copy suppression-preserving ablation
+
+We describe this ablation in mode detail in the "Copy Suppression Classification" page. To summarize:
+
+> *For each source token $s$, we project its attention result vector $v_s^T W_O$ onto the unembeddings of its semantically similar tokens $s^*$. This is how we test that we understand the OV circuit (i.e. it directly pushes on the logits of tokens which it attends to).*
+> 
+> *For each of these pairs $(s, s^*)$, we also mean-ablate them unless $s^*$ is being predicted at the destination token $d$. This is how we test that we understand the QK circuit (i.e. it attends to things which are predicting).*
+
+We've emphasised all tokens which are in the top or bottom 3% of loss-affecting examples. We've also colored them by how much of this loss effect is lost when you perform CSPA:
+
+* Blue means the head **improves** model performance here. Amount of improvement captured by copy-suppression = <td>&nbsp;<mark style="background-color:rgb(247, 247, 247)"><font color="black"><b>0%</b></font></mark>, &nbsp;<mark style="background-color:rgb(209, 229, 240)"><font color="black"><b>20%</b></font></mark>, &nbsp;<mark style="background-color:rgb(146, 197, 222)"><font color="black"><b>40%</b></font></mark>, &nbsp;<mark style="background-color:rgb(67, 147, 195)"><font color="black"><b>60%</b></font></mark>, &nbsp;<mark style="background-color:rgb(33, 102, 172)"><font color="white"><b>80%</b></font></mark>, &nbsp;<mark style="background-color:rgb(5, 48, 97)"><font color="white"><b>100%</b></font></mark></td>
+* Red means the head **harms** model performance here. Amount of deterioration captured by copy-suppression = <td>&nbsp;<mark style="background-color:rgb(247, 247, 247)"><font color="black"><b>0%</b></font></mark>, &nbsp;<mark style="background-color:rgb(253, 219, 199)"><font color="black"><b>20%</b></font></mark>, &nbsp;<mark style="background-color:rgb(244, 165, 130)"><font color="black"><b>40%</b></font></mark>, &nbsp;<mark style="background-color:rgb(214, 96, 77)"><font color="black"><b>60%</b></font></mark>, &nbsp;<mark style="background-color:rgb(178, 24, 43)"><font color="white"><b>80%</b></font></mark>, &nbsp;<mark style="background-color:rgb(103, 0, 31)"><font color="white"><b>100%</b></font></mark></td>
+
+In other words, we want to see very dark colors for all the bold words, because this shows that our understanding of copy suppression does match what the head is doing here.
+
+<details>
+<summary>Analysis - a sample of cases where CSPA fails to capture the effect, and why it fails.</summary>
+
+Asterisk = it's sad that we missed this example because it does seem like copy suppression, and CSPA should be changed so that we get this example.
+
+Hat = this is a nice example of something we missed, which it's okay that we missed.
+
+This is also for us during research - at the end, all of these should make sense and be satisfying (without any asterisks). That'll be a good sign that we're done here.
+
+#### (32) \n\n A ➔ course
+
+Turns out that `" course"` and `" curriculum"` are top pairs in the QK circuit, so it makes sense that a prediction of `" curriculum"` would attend to the source token `" course"`, even if that doesn't show up in our model of copy-suppression. Not sure how to fix this, except to better understand exactly why words like these two are seen as equivalent by the model.
+
+#### (40) Cairo talks continue between ➔ Israel
+
+The head is useful here, because when we attend to `" Cairo"` we suppress `" Egypt"` (this can be seen from the OV circuit, and also it makes sense because they're related words). Our hardcoded semantic similarity doesn't cover this case. Note, the fact that CSPA fails here shows that `" Cairo"` suppressing `" Egypt"` isn't just a consequence of cosine similarity between these 2 words. From head 10.7's perspective, these tokens are very similar.
+
+There are also a few other examples in (40) where CSPA fails for this same reason.
+
+#### (41*) by executing ➔ 47
+
+This is a case we missed because of not using enough semantically related tokens. `" executing"` suppresses `" execution"`, but it's not the top listed semantic similarity for us if we only list five. It should be the top listed! Cuda errors are bottlenecking our projections, and the methodology should be changed.
+
+#### (51) condenm the senseless ➔ motorcycle
+
+This seems like "distributed copy suppression". Our model captures about 50% of it, and the other 50% is because a few related tokens e.g. `" fatalities"` are also suppressed, and we don't capture that - that's fine.
+
+#### (53) Both examples
+
+There are only 3 examples here. None of them are captured very well. This is understandable, because things are quite distributed and not crisp.
+
+#### (57^) Kanye (the comma one at the end)
+
+We have attention to Kanye West and Taylor Swift (all four names). The head is harmful in this case because `" Kanye"` (the correct token) is suppressed. But we mostly attend to `" West"`. Interestingly, the OV and QK circuits don't think these words are related at all, so my guess is that something bigram-y is going on here (e.g. there's a neuron which activates on the full name Kanye West, and it's this neuron's output which is the important key-side and value-side component).
+
+#### (73^)
+
+Attention is incredibly distributed, so it's not highly localized. I think doing the non-sparse projection would perform better here, but I still think making it sparse is worth it.
+
+#### (80^) Jihad vs . ➔ Mc
+
+The head attends to `" Jihad"`, and pushes down - ahem - "related words", in particular the word `" Terror"` (as well as `" Islam"`, although to a lesser extent). This won't be captured by the narrow semantic similarity.
+
+---
+
+Many of the remaining examples make me think that these metrics would all look much crisper if I filtered for the most extreme 2.5% (or even 3-4%) rather than 5%. Lots of the unsatisfying cases are also borderline on 5% (and barely have any nontrivial attention, it just happens to be working in the right direction).
+
+</details>
+
+""", unsafe_allow_html=True)
+
+    if is_local:
+        show_cspa = st.checkbox("Tick this box to show the CSPA plots for logits & DLA on the second tab, using head 10.7, direct effect, frozen layernorm. *(This is mainly useful during research, so we can see where & why CSPA is failing to capture the effect.)*", value=False)
+    else:
+        show_cspa = False
+    st.markdown("---")
+
+    HTML_CSPA = HTML_PLOTS["CSPA"][(batch_idx,)]
+    html(CSS.replace("min-width: 275px", "min-width: 200px") + HTML_CSPA, height=800)
+
+
+# s1 = "* Blue means the head **improves** model performance here. Amount of improvement captured by copy-suppression = " + format_word_importances(
+#     [f"<b>{s}</b>" for s in ["0%", "20%", "40%", "60%", "80%", "100%"]],
+#     [1.0, 0.9, 0.8, 0.7, 0.6, 0.5][::-1],
+#     ["" for _ in range(6)],
+# ).replace("</mark>", "</mark>, ") + " (i.e. darker colors are what we want to see!)"
+# print(s1)
+
+
+
+
+# ! This is where we actually fill in the containers with HTML plots - this depends on whether we are showing the CSPA stuff too
+
+with LOGITS_CONTAINER:
+    if is_local and show_cspa:
+        HTML_LOGITS_ALL = "".join([CSS, "<h2>Original</h2>", HTML_LOGITS_ORIG, "<h2>Ablated</h2>", HTML_LOGITS_ABLATED, "<h2>CSPA (10.7, direct, frozen)</h2>", HTML_LOGITS_CSPA])
+        height = 1400
+    else:
+        HTML_LOGITS_ALL = "".join([CSS, "<h2>Original</h2>", HTML_LOGITS_ORIG, "<h2>Ablated</h2>", HTML_LOGITS_ABLATED])
+        height = 1000
+    html(HTML_LOGITS_ALL, height=height)
+
+with DLA_CONTAINER:
+    if is_local and show_cspa:
+        HTML_DLA_CSPA = HTML_PLOTS["DLA"][(batch_idx, "CSPA", radio_negpos_logits)]
+        HTML_DLA_ALL = "".join([CSS, "<h2>Original</h2>", HTML_DLA, "<h2>CSPA (10.7, direct, frozen)</h2>", HTML_DLA_CSPA])
+        height = 700
+    else:
+        HTML_DLA_ALL = CSS + HTML_DLA
+        height = 500
+    html(HTML_DLA_ALL, height=height)

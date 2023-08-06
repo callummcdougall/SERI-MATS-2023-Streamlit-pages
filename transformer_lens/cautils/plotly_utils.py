@@ -42,6 +42,8 @@ def imshow(tensor, renderer=None, **kwargs):
     facet_labels = kwargs_pre.pop("facet_labels", None)
     facet_label_size = kwargs_pre.pop("facet_label_size", None)
     animation_labels = kwargs_pre.pop("animation_labels", None)
+    if "aspect" not in kwargs_pre:
+        kwargs_pre["aspect"] = "auto"
     if "color_continuous_scale" not in kwargs_pre:
         kwargs_pre["color_continuous_scale"] = "RdBu"
     if "margin" in kwargs_post and isinstance(kwargs_post["margin"], int):
@@ -70,8 +72,8 @@ def imshow(tensor, renderer=None, **kwargs):
           while f"xaxis{i}" in fig["layout"]:
             kwargs_post[f"xaxis{i}_{setting}"] = kwargs_post[f"xaxis_{setting}"]
             i += 1
-    if "autosize" not in kwargs_post:
-        kwargs_post["autosize"] = False
+    # if "autosize" not in kwargs_post:
+    #     kwargs_post["autosize"] = False
     fig.update_layout(**kwargs_post)
     if draw: 
         fig.update_layout(modebar_add=MODEBAR_ADD)

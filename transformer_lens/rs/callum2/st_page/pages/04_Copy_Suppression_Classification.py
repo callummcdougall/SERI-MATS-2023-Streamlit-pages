@@ -7,8 +7,15 @@ st.set_page_config(layout="wide")
 import pickle
 import gzip
 
-from transformer_lens.rs.callum2.st_page.streamlit_styling import styling # type: ignore
-from transformer_lens.rs.callum2.st_page.explore_prompts_utils import ST_HTML_PATH # type: ignore
+import platform
+is_local = (platform.processor() != "")
+
+from transformer_lens.rs.callum2.st_page.streamlit_styling import styling
+from transformer_lens.rs.callum2.generate_st_html.utils import ST_HTML_PATH
+from transformer_lens.rs.callum2.cspa.cspa_plots import (
+    generate_scatter,
+    generate_loss_based_scatter,
+)
 
 import torch as t
 t.set_grad_enabled(False)
@@ -106,10 +113,13 @@ r"""
 ### What percentage of 10.7's behaviour is copy-suppression?
 """)
 
-if "fig_dict" not in st.session_state:
-    with gzip.open(ST_HTML_PATH / "CS_CLASSIFICATION.pkl", "rb") as f:
-        st.session_state["fig_dict"] = pickle.load(f)
+@st.cache_data(show_spinner=False, max_entries=1)
+def load_fig_dict():
+    with gzip.open(ST_HTML_PATH / "CSPA_figs.pkl", "rb") as f:
+        fig_dict = pickle.load(f)
+    return fig_dict
 
+fig_dict = load_fig_dict()
 
 with st.expander("Click on this dropdown for an analysis of what percentage of the head's behaviour is is preserved by CSPA."):
     st.markdown(
@@ -138,29 +148,26 @@ The key observations here are:
 You can hover over each point to see the sequence & token it corresponds to, and then look at the corresponding sequence & token in the "Browse Examples" page. For some of the examples where CSPA fails to capture the head's effect, it still seems like copy-suppression, but attention is distributed over several source tokens so it's not surprising that limiting to $K_u = 10$ misses a lot of the signal. However, there are some examples which genuinely don't look like copy-suppression. Also, we still have some false positives (situations where you might expect copy-suppression to be happening but it doesn't), and we won't have fully understood the heads' behaviour unless we understand these too.
 """)
 
+    checkbox = st.checkbox("Highlight red all the points from the 'Browse Examples' page (so you can cross-reference them)", value=False)
+
+    if checkbox:
+        k = 300 if is_local else 51
+    else:
+        k = "samecolor"
+
     st.plotly_chart(
-        st.session_state["fig_dict"]["scatter"],
+        fig_dict[k],
         use_container_width = True,
     )
 
     st.markdown(
 r"""
-#### Histograms
+#### Line plot
 
-The next two plots show histograms of the proportion of loss which is still not explained by CSPA (in other words, it shows values $y/x$ for the scatter plot above). We've filtered by the top $X$ of loss-affecting examples (both positive and negative) for $X=0.05$ and $X=0.025$ respectively, because it's meaningless to talk about the proportion of loss explained by CSPA if that proportion is extrememly small in the first place (and because we care more about explaining the head's behaviour in situations where it has a large effect on the model).
-
-The key observations here are:
-
-1. **CSPA usually explains most of the loss** (the median is closer to zero than one, in both plots).
-2. **The more extreme the example, the better CSPA does.** In other words, the larger the head's effect on the loss, the more likely this is to be copy-suppression.
+The next plot shows similar information, but we've simplified the plot by bucketing the points according to how much they affect the loss, and averaging over both the x and y values. This more crisply shows the pattern we can see in the plot above: CSPA explains most of the head's effect, and especially when it has a large effect on the loss.
 """)
 
-    cols = st.columns(2)
-    with cols[0]: st.plotly_chart(
-        st.session_state["fig_dict"]["hist1"],
-        use_container_width = True,
-    )
-    with cols[1]: st.plotly_chart(
-        st.session_state["fig_dict"]["hist2"],
-        use_container_width = True,
+    st.plotly_chart(
+        fig_dict["loss-based scatter"],
+        use_container_width = False,
     )
