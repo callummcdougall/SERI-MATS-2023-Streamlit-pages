@@ -283,7 +283,7 @@ def add_cspa_to_streamlit_page(
     first_key = list(cspa_results.keys())[0]
 
     # ! Get all CSPA visulisations (this looks janky because I like being able to compare different forms of CSPA!)
-    if verbose: print("Generating CSPA plots ...", end="\r"); t0 = time.time()
+    if verbose: print("Generating CSPA plots  ...", end="\r"); t0 = time.time()
     # First, get them in the form {CSPA type: {batch_idx: single plot}}
     CSPA_PLOTS = {
         k: generate_html_for_cspa_plots(
@@ -299,7 +299,7 @@ def add_cspa_to_streamlit_page(
         (batch_idx,): "".join([f"<h3>{k}</h3>" + CSPA_PLOTS[k][(batch_idx,)] for k in CSPA_PLOTS])
         for batch_idx in range(cspa_results[first_key]["loss"].shape[0])
     }
-    if verbose: print(f"Generating CSPA plots ... {time.time()-t0:.2f}")
+    if verbose: print(f"Generating CSPA plots  ... {time.time()-t0:.2f}")
 
     # Display a single plot and stop here, if requested
     if test_idx is not None:

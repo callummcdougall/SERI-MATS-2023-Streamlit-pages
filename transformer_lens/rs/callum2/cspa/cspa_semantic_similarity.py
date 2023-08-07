@@ -1,6 +1,7 @@
 import torch as t
 from transformer_lens import HookedTransformer
 from tqdm import tqdm
+from typing import Optional
 
 # %pip install nltk
 # %pip install --no-deps pattern
@@ -117,7 +118,7 @@ def get_equivalency_toks(t1: str, model: HookedTransformer, full_version: bool =
     return t1_list_single_toks, t1_list_multi_toks
 
 
-def make_list_correct_length(L, K):
+def make_list_correct_length(L, K, pad_tok: Optional[str] = None):
     '''
     If len(L) < K, pad list L with its last element until it is of length K.
     If len(L) > K, truncate.
@@ -127,8 +128,11 @@ def make_list_correct_length(L, K):
     if len(L) == 0:
         L = ["<|endoftext|>"]
 
+    if pad_tok is None:
+        pad_tok = L[-1]
+
     if len(L) <= K:
-        L = L + [L[-1]] * (K - len(L))
+        L = L + [pad_tok] * (K - len(L))
     else:
         L = L[:K]
 

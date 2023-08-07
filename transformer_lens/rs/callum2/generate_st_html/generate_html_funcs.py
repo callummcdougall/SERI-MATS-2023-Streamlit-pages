@@ -205,7 +205,7 @@ def clip(x):
 def generate_html_for_cspa_plots(
     str_toks_list: List[List[str]],
     cspa_results: Dict[str, Float[Tensor, "batch seq-1"]],
-    s_sstar_pairs: Dict[Tuple[int, int], List[Tuple[int, int]]],
+    s_sstar_pairs: Dict[Tuple[int, int], List[Tuple[float, int, int]]],
     cutoff: float = 0.03,
 ):
     '''
@@ -247,11 +247,11 @@ def generate_html_for_cspa_plots(
                 hover_text += f"Orig loss: {l_orig:.3f}<br>Δ loss from ablation: {l_abl_diff:.3f}<br>Δ loss from CSPA: {l_proj_diff:.3f}"
                 # Add the hover text from (s, s*) pairs
                 table_body = "".join([
-                    f"<tr><td>{s!r}</td><td>{sstar!r}</td></tr>"
-                    for s, sstar in s_sstar_pairs[(b, sQ)]
+                    f"<tr><td>{s}</td><td>{sstar}</td><td>{LL:.2f}</td></tr>"
+                    for LL, s, sstar in s_sstar_pairs[(b, sQ)]
                 ])
                 hover_text += "<br><br>Info moved by CSPA:<br>"
-                hover_text += f"<table><thead><tr><th>s</th><th>s*</th></tr></thead><tbody>{table_body}</tbody></table>"
+                hover_text += f"<table><thead><tr><th>s</th><th>s*</th><th>Logits</th></tr></thead><tbody>{table_body}</tbody></table>"
             
             hover_text_list.append(hover_text)
         

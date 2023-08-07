@@ -423,7 +423,7 @@ def get_cspa_results(
         # Flatten all tokens, and convert them into str toks
         str_toks_flat = model.to_str_tokens(toks.flatten(), prepend_bos=False)
         # Use our dictionary to find the top `K_semantic` semantically similar tokens for each one
-        semantically_similar_str_toks = concat_lists([make_list_correct_length(concat_lists(semantic_dict[str_tok]), K_semantic) for str_tok in str_toks_flat])
+        semantically_similar_str_toks = concat_lists([make_list_correct_length(concat_lists(semantic_dict[str_tok]), K_semantic, pad_tok='======') for str_tok in str_toks_flat])
         # Turn these into tokens
         semantically_similar_toks = model.to_tokens(semantically_similar_str_toks, prepend_bos=False)
         semantically_similar_toks = semantically_similar_toks.reshape(batch_size, seq_len, K_semantic) # [batch seqK K_semantic]
@@ -522,6 +522,7 @@ def get_cspa_results(
         result: Float[Tensor, "batch seqQ head d_model"],
         hook: HookPoint,
         resid_pre: Float[Tensor, "batch seqQ d_model"],
+        final_scale: Optional[Float[Tensor, "batch seqQ 1"]] = None
     ):
         '''
         Projects each result vector onto the unembeddings for semantically similar tokens.
@@ -554,6 +555,7 @@ def get_cspa_results(
             K_unembeddings=K_unembeddings,
             function_toks=FUNCTION_TOKS,
             model=model,
+            final_scale=final_scale,
         )
         hook.ctx["s_sstar_pairs"] = s_sstar_pairs
 
@@ -629,7 +631,7 @@ def get_cspa_results(
     if "o" in components_to_project:
         model.add_hook(hook_name_v, hook_fn_store_v_or_attn_in_ctx)
         model.add_hook(hook_name_pattern, hook_fn_store_v_or_attn_in_ctx)
-        model.add_hook(hook_name_result, partial(hook_fn_result, resid_pre=resid_pre))
+        model.add_hook(hook_name_result, partial(hook_fn_result, resid_pre=resid_pre, final_scale=final_scale))
     # Add hooks to project the value input along the source tokens' effective embeddings
     if "v" in components_to_project:
         model.add_hook(hook_name_v_input, hook_fn_project_v)
@@ -760,6 +762,8 @@ def get_top_predicted_semantically_similar_tokens(
     K_unembeddings: int,
     function_toks: Int[Tensor, "tok"],
     model: HookedTransformer,
+    final_scale: Optional[Float[Tensor, "batch seqQ 1"]] = None,
+    s_sstar_contains_indices: bool = False,
 ):
     '''
     Arguments:
@@ -806,9 +810,10 @@ def get_top_predicted_semantically_similar_tokens(
     # Else, we filter down the sem similar unembeddings to only those that are predicted
     else:
         # Get logit lens from current value of residual stream
-        resid_pre_scaled = resid_pre / resid_pre.std(dim=-1, keepdim=True)
+        # logit_lens[b, sQ, sK, K_s] = prediction at destination token (b, sQ), for the K_s'th semantically similar token to source token (b, sK)
+        resid_pre_scaled = resid_pre if (final_scale is None) else resid_pre / final_scale
         logit_lens = einops.einsum(
-            resid_pre, semantically_similar_unembeddings,
+            resid_pre_scaled, semantically_similar_unembeddings,
             "batch seqQ d_model, batch seqK d_model K_semantic -> batch seqQ seqK K_semantic",
         )
 
@@ -820,26 +825,25 @@ def get_top_predicted_semantically_similar_tokens(
         seqK_idx = einops.repeat(t.arange(seq_len), "seqK -> 1 1 seqK 1").to(logit_lens.device)
         logit_lens = t.where(seqQ_idx < seqK_idx, -1e9, logit_lens)
         # MASK: each source token should only be counted at its first instance
-        # Note, we apply this mask to get our topk (so no repetitions), but we don't want to apply it when we're choosing pairs to keep
+        # Note, we apply this mask to get our topk values (so no repetitions), but we don't want to apply it when we're choosing pairs to keep
         first_occurrence_mask = einops.repeat(first_occurrence_2d(toks), "batch seqK -> batch 1 seqK 1")
         logit_lens_for_topk = t.where(~first_occurrence_mask, -1e9, logit_lens)
 
         # Get the top predicted src-semantic-neighbours s* for each destination token d
         top_K_and_Ksem_per_dest_token_values = t.topk(logit_lens_for_topk.flatten(-2, -1), K_unembeddings, dim=-1).values[..., [[-1]]] # [batch seqQ 1 1]
         # We also want to get the list of (s, s*) for analysis afterwards
-        top_K_and_Ksem_per_dest_token = t.nonzero(logit_lens + 1e-6 >= top_K_and_Ksem_per_dest_token_values) # [n batch_seqQ_seqK_K_s], n = batch*seqQ*K_u
+        top_K_and_Ksem_mask = (logit_lens + 1e-6 >= top_K_and_Ksem_per_dest_token_values) # [batch seqQ seqK K_s]
+        top_K_and_Ksem_per_dest_token = t.nonzero(top_K_and_Ksem_mask) # [n batch_seqQ_seqK_K_s], n >= batch * seqQ * K_u (more if we're double-counting source tokens)
         for b, sQ, sK, K_s in top_K_and_Ksem_per_dest_token.tolist():
-            s = model.to_single_str_token(toks[b, sK].item())
-            sstar = model.to_single_str_token(semantically_similar_toks[b, sK, K_s].item())
-            LL = logit_lens[b, sQ, sK, K_s] # for sorting with (and maybe I'll add it to the visualization too)
+            s = (f"[{sK}] " if s_sstar_contains_indices else "") + repr(model.to_single_str_token(toks[b, sK].item()))
+            sstar = repr(model.to_single_str_token(semantically_similar_toks[b, sK, K_s].item()))
+            LL = logit_lens[b, sQ, sK, K_s].item() # for sorting with (and maybe I'll add it to the visualization too)
             # Make sure we only count each (s, s*) pair once (since this dict is for the HTML visualisations)
-            if (s, sstar) not in list(map(lambda x: (x[1], x[2]), s_sstar_pairs[(b, sQ)])):
+            if (s, sstar) not in list(map(lambda x: x[1:], s_sstar_pairs[(b, sQ)])):
                 s_sstar_pairs[(b, sQ)].append((LL, s, sstar))
         # Make sure we rank order the entries in each dictionary by how much they're being predicted
         for (b, sQ), s_star_list in s_sstar_pairs.items():
-            s_sstar_pairs[(b, sQ)] = [x[1:] for x in sorted(s_star_list, key = lambda x: x[0], reverse=True)]
-        # Create a boolean mask from it
-        top_K_and_Ksem_mask = (logit_lens >= top_K_and_Ksem_per_dest_token_values) # [batch seqQ seqK K_s]
+            s_sstar_pairs[(b, sQ)] = sorted(s_star_list, key = lambda x: x[0], reverse=True)
 
         # Use this boolean mask to set some of the unembedding vectors to zero
         unembeddings = einops.repeat(semantically_similar_unembeddings, "batch seqK d_model K_semantic -> batch 1 seqK d_model K_semantic")
