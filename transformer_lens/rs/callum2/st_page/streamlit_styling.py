@@ -135,5 +135,14 @@ code:not(pre code) {
     color: red;
     background: #F0F2F6;
 }
+.css-fg4pbf code.language-c, .css-fg4pbf pre:has(code.language-c) {
+    background-color: #ffe3c4;
+}
+.css-fg4pbf code.language-c span {
+    color: black !important;
+}
+.css-ffhzg2 code.language-c, .css-ffhzg2 pre:has(code.language-c) {
+    background-color: #3d2000;
+}
 </style>""", unsafe_allow_html=True)
 

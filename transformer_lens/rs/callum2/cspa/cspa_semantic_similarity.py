@@ -34,7 +34,7 @@ def verb_to_noun(verb):
         ]
 
 def noun_to_adj(noun):
-    return [noun + suffix for suffix in MY_SUFFIXES]
+    return [noun + suffix for suffix in MY_SUFFIXES] + [noun + suffix + "s" for suffix in MY_SUFFIXES]
 
 def is_token(t1, model: HookedTransformer):
     '''For some reason this works, and "t1 is in model.tokenizer.vocab" doesn't.'''
@@ -56,6 +56,7 @@ def get_list_with_no_repetitions(L):
 def get_equivalency_toks(t1: str, model: HookedTransformer, full_version: bool = False):
     
     # (C) add all syntactically related versions
+    t1_orig = t1
     if full_version:
         # Full version where you use nltk's semantically related tokens
         t1_list = [t1.strip(" ")] + get_related_words(t1.strip(" ").lower(), model)
@@ -73,10 +74,23 @@ def get_equivalency_toks(t1: str, model: HookedTransformer, full_version: bool =
     # (D) replace all elements in t1_list with their tokenized versions (sorting so that non-split are first)
     # (this is also a bit hacky)
     t1_list_tokenized = model.to_str_tokens(t1_list, prepend_bos=False)
-    # Get all tokens which are actual single tokens...
+
+    # Get all tokens which are actual single tokens
     t1_list_single_toks = get_list_with_no_repetitions([i[0] for i in t1_list_tokenized if len(i) == 1])
-    # ...and all tokens from the variants which aren't single tokens.
-    t1_list_multi_toks = get_list_with_no_repetitions(concat_lists([i for i in t1_list_tokenized if len(i) > 1]))
+    
+    # Get all tokens which are tokenized versions of "core words"
+    # What are "core words"? (1) the +space version, (2) the -space version (if it's a capital)
+    # This captures things like " Berkeley"->"keley", but sadly not " Saskatchewan"->" Saskatchewans"
+    # Also, I want to make sure that all the substrings are at least length 3, because if e.g. the capital letter gets stripped off then that probably means this isn't a useful substring (not really sure about this)
+    core_words = []
+    if not(t1_orig.startswith(" ")): core_words.append(t1_orig)
+    if t1_orig.startswith(" ") and (len(t1_orig) > 1) and t1_orig[1].isupper(): core_words.append(t1_orig[1:])
+    t1_list_multi_toks = model.to_str_tokens(core_words, prepend_bos=False)
+    t1_list_multi_toks = get_list_with_no_repetitions([
+        substr for tokenized_str in t1_list_multi_toks for substr in tokenized_str
+        if len(tokenized_str) > 1 and min(map(len, tokenized_str)) >= 3
+    ])
+    t1_list_multi_toks = get_list_with_no_repetitions(concat_lists([i for i in t1_list_multi_toks if len(i) > 1]))
 
     return t1_list_single_toks, t1_list_multi_toks
 
@@ -262,3 +276,6 @@ def get_related_words(word: str, model: HookedTransformer):
     forced_words = [forced_plural]
     
     return [word] + forced_words + related_words
+
+
+# %%

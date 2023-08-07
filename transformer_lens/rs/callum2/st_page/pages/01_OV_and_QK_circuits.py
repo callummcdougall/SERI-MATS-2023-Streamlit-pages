@@ -21,23 +21,6 @@ st.set_page_config(layout="wide")
 
 from transformer_lens.rs.callum2.generate_st_html.utils import ST_HTML_PATH
 
-# dict_to_store = {
-#     "tokenizer": model.tokenizer,
-#     "W_V_107": model.W_V[10, 7],
-#     "W_O_107": model.W_O[10, 7],
-#     "W_V_1110": model.W_V[11, 10],
-#     "W_O_1110": model.W_O[11, 10],
-#     "W_Q_107": model.W_Q[10, 7],
-#     "W_K_107": model.W_K[10, 7],
-#     "W_Q_1110": model.W_Q[11, 10],
-#     "W_K_1110": model.W_K[11, 10],
-#     "b_Q_107": model.b_Q[10, 7],
-#     "b_K_107": model.b_K[10, 7],
-#     "b_Q_1110": model.b_Q[11, 10],
-#     "b_K_1110": model.b_K[11, 10],
-#     "W_EE": W_EE_dict["W_E (including MLPs)"],
-#     "W_U": model.W_U,
-# }
 # dict_to_store_less = {
 #     "tokenizer": model.tokenizer,
 #     "W_EE_V": W_EE @ model.W_V[10, 7],

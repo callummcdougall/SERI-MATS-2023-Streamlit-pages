@@ -1,16 +1,4 @@
 import sys, os
-for root_dir in [
-    os.getcwd().split("rs/")[0] + "rs/callum2/explore_prompts", # For Arthur's branch
-    "/app/seri-mats-2023-streamlit-pages/explore_prompts", # For Streamlit page (public)
-    os.getcwd().split("seri_mats_23_streamlit_pages")[0] + "seri_mats_23_streamlit_pages/explore_prompts", # For Arthur's branch
-    os.getcwd().split("SERI-MATS-2023-Streamlit-pages")[0] + "SERI-MATS-2023-Streamlit-pages/explore_prompts", # For Arthur's branch
-]:
-    if os.path.exists(root_dir):
-        break
-os.chdir(root_dir)
-if root_dir not in sys.path: sys.path.append(root_dir)
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-
 import streamlit as st
 import gzip
 import pickle
@@ -24,6 +12,10 @@ import textwrap
 import torch as t
 t.set_grad_enabled(False)
 # from transformers import AutoTokenizer
+
+from transformer_lens.rs.callum2.cspa.cspa_utils import (
+    ST_HTML_PATH,
+)
 
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
@@ -227,9 +219,6 @@ def plot_full_matrix_histogram(
     )
     return fig
 
-
-
-ST_HTML_PATH = Path(root_dir) / "media"
 
 @st.cache_data(show_spinner=False, max_entries=1)
 def get_dict_to_store_less():
