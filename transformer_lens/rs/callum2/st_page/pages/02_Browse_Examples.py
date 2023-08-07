@@ -22,7 +22,7 @@ styling()
 
 @st.cache_data(show_spinner=False, max_entries=1)
 def load_html():
-    filename = f"GZIP_HTML_PLOTS_b{300 if is_local else 51}_s61.pkl"
+    filename = f"GZIP_HTML_PLOTS_b{200 if is_local else 51}_s61.pkl"
     with gzip.open(ST_HTML_PATH / filename, "rb") as f:
         HTML_PLOTS = pickle.load(f)
     return HTML_PLOTS

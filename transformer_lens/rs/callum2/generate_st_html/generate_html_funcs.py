@@ -251,7 +251,7 @@ def generate_html_for_cspa_plots(
                     for LL, s, sstar in s_sstar_pairs[(b, sQ)]
                 ])
                 hover_text += "<br><br>Info moved by CSPA:<br>"
-                hover_text += f"<table><thead><tr><th>s</th><th>s*</th><th>Logits</th></tr></thead><tbody>{table_body}</tbody></table>"
+                hover_text += f"<table><thead><tr><th>s</th><th>s*</th><th>Logit Lens</th></tr></thead><tbody>{table_body}</tbody></table>"
             
             hover_text_list.append(hover_text)
         

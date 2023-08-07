@@ -151,7 +151,7 @@ You can hover over each point to see the sequence & token it corresponds to, and
     checkbox = st.checkbox("Highlight red all the points from the 'Browse Examples' page (so you can cross-reference them)", value=False)
 
     if checkbox:
-        k = 300 if is_local else 51
+        k = 200 if is_local else 51
     else:
         k = "samecolor"
 
