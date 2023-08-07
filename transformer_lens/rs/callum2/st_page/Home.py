@@ -1,7 +1,13 @@
 import streamlit as st
+import os, sys
+from pathlib import Path
 
-# import os
-# st.write(os.getcwd())
+# Stuff to make the page work on my local machine
+p = Path(r"C:\Users\calsm\Documents\AI Alignment\SERIMATS_23\seri_mats_23_streamlit_pages")
+if os.path.exists(str_p := str(p.resolve())):
+    os.chdir(str_p)
+    if (sys.path[0] != str_p):
+        sys.path.insert(0, str_p)
 
 st.markdown(
 r"""

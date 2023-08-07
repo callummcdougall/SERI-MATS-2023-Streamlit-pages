@@ -1,2 +1,2 @@
 [server]
-headless = true
+baseUrlPath = "self-repair"
