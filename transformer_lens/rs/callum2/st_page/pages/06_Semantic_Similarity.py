@@ -222,6 +222,7 @@ Here are a few more examples where our rules work well:
 Here are some examples where our hardcoded rules work less well, and explanations for why. Note that we've left function words off this list, because we don't expect the results to hold up for function words (for reasons we've discussed).
 
 * `" Cairo"` - although we capture the stem `"airo"` which is useful, we're missing out on words related to **Egypt** which are all very copy-suppressed. This shows one weakness with our semantic similarity rules - although being semantically similar is one way (possibly the main way) for two tokens to be treated the same in the QK and OV circuits, it's not the only way. If the QK and OV circuits are in some sense "collapsing the differences between words, except for the main kinds of differences i.e. topic-related differences", then it makes sense that it would think these two words are similar.
+* `" run"` - this is an interesting example. It works well in one direction (if we're predicting `" run"`, then our semantic similarity rules correctly identify the source tokens that we'll attend back to, and the source tokens that will suppress the `" run"` prediction). But it works less well in the other direction, i.e. when `" run"` is a source token (and unfortunately this is the direction we need it to work well in for our ablation method). 
 
 
 </details>
@@ -284,10 +285,11 @@ def create_histograms(
 
 
 # Widgets for defining histogram params. When these are changed, the page is reloaded, and the code to display the histograms is below this.
-cols = st.columns(2)
+cols = st.columns(3)
 with cols[0]:
     tok_input = st.text_input("Token", "' token'", key="tok_input")
-    topk = st.slider("Number of top tokens to show: ", min_value=5, max_value=30, value=15, key="topk")
+with cols[1]:
+    topk = st.slider("Number of top tokens to show: ", min_value=5, max_value=30, value=20, key="topk")
     K_sem = st.slider("Max number of semantically similar tokens to show: ", min_value=1, max_value=15, value=10, key="K_sem")
 
 error_box = st.container()
@@ -304,7 +306,7 @@ hists_dict, semantically_similar_str_toks = create_histograms(
 )
 if hists_dict is not None:
     s = "\n".join(list(map(repr, semantically_similar_str_toks)))
-    with cols[1]:
+    with cols[2]:
         st.markdown(
 f"""### Similar tokens
 

@@ -5,7 +5,6 @@ from tqdm import tqdm
 # %pip install nltk
 # %pip install --no-deps pattern
 
-MY_SUFFIXES = ["r", "ic", "al", "ous", "able", "ful", "ive"]
 
 def concat_lists(list_of_lists):
     return [item for sublist in list_of_lists for item in sublist]
@@ -26,15 +25,39 @@ def verb_to_noun(verb):
     if len(verb) <= 2:
         return []
     else:
-        return [
-            verb[:-1] + 'er',
-            verb[:-1] + 'ion',
-            verb[:-1] + 'ers',
-            verb[:-1] + 'ions',
+        suffixes = [
+            'er', # e.g. writer, racer
+            'ner', # e.g. runner
+            'ion', # e.g. execution
         ]
+        return [
+            v + suffix + plural
+            for v in [
+                verb, # sometimes we don't crop, e.g. run -> runner
+                verb[:-1], # sometimes we do crop, e.g. write -> writer
+            ]
+            for suffix in suffixes
+            for plural in ['', 's']
+        ]
+        
+def adj_variants(adj):
+    return [
+        adj[:-1] + "ier", # e.g. pretty -> prettier
+    ]
 
-def noun_to_adj(noun):
-    return [noun + suffix for suffix in MY_SUFFIXES] + [noun + suffix + "s" for suffix in MY_SUFFIXES]
+def noun_or_verb_to_adj(noun_or_verb):
+    return [
+        noun_or_verb + suffix + plural
+        for suffix in [
+            "r", # ?
+            "ic", # robotic
+            "al", # comical
+            "ous", # scandalous
+            "able", # readable
+            "ive", # active
+        ]
+        for plural in ['', 's']
+    ]
 
 def is_token(t1, model: HookedTransformer):
     '''For some reason this works, and "t1 is in model.tokenizer.vocab" doesn't.'''
@@ -90,7 +113,6 @@ def get_equivalency_toks(t1: str, model: HookedTransformer, full_version: bool =
         substr for tokenized_str in t1_list_multi_toks for substr in tokenized_str
         if len(tokenized_str) > 1 and min(map(len, tokenized_str)) >= 3
     ])
-    t1_list_multi_toks = get_list_with_no_repetitions(concat_lists([i for i in t1_list_multi_toks if len(i) > 1]))
 
     return t1_list_single_toks, t1_list_multi_toks
 
@@ -167,12 +189,21 @@ def create_full_semantic_similarity_dict(model: HookedTransformer, full_version:
 
     # Construct the full dict from the reversed dict
     cspa_semantic_dict = {str_tok: [[str_tok], [], []] for str_tok in cspa_semantic_dict_reversed}
-    for str_tok, (str_tok_single_list, str_tok_multi_list) in cspa_semantic_dict_reversed.items():
-        for str_tok_single in str_tok_single_list:
-            if str_tok_single in cspa_semantic_dict: cspa_semantic_dict[str_tok_single][0].append(str_tok)
-        for str_tok_multi in str_tok_multi_list:
-            if str_tok_multi in cspa_semantic_dict: cspa_semantic_dict[str_tok_multi][1].append(str_tok)
-        cspa_semantic_dict[str_tok][2].extend(str_tok_multi_list)
+    for key, (value_singles, value_substrings) in cspa_semantic_dict_reversed.items():
+        # Examples:
+        # ' Berkeley' -> ([' Berkeley'], ['Ber', 'keley'])
+        #    ' Pier' -> ([' pier', ' Pier'], [])
+        #    ' pier' -> ([' pier', ' Pier'], [])
+        #      'pie' -> (['pie', 'Pie', ' pie', ' pies', ' Pie'], [])
+
+        # First list is basically the same, cause it's the "bidirectional one"
+        cspa_semantic_dict[key][0].extend(value_singles)
+        # Second list should be the "superstrings list"
+        for value_substring in value_substrings:
+            if value_substring in cspa_semantic_dict:
+                cspa_semantic_dict[value_substring][1].append(key)
+        # Third list should be the "substrings list"
+        cspa_semantic_dict[key][2].extend(value_substrings)
 
     # Remove repetitions (and sort the substring list so that the longest are first)
     for k, v_list in cspa_semantic_dict.items():
@@ -240,6 +271,15 @@ def create_full_semantic_similarity_dict(model: HookedTransformer, full_version:
 
 
 def get_related_words(word: str, model: HookedTransformer):
+    '''
+    This ignores spaces and capitals and tokenization, and just looks at words
+    as a language feature. For instance, this will capture "pier" and "piers" only.
+    '''
+    # We don't want short letter combinations to accidentally generate more words, since
+    # this function is mainly intended for words rather than letter combinations.
+    if len(word.strip()) <= 2:
+        return [word]
+
     from pattern.text.en import conjugate, PRESENT, PAST, FUTURE, SUBJUNCTIVE, INFINITIVE, PROGRESSIVE, PLURAL, SINGULAR
     from nltk.stem import WordNetLemmatizer
     MY_TENSES = [PRESENT, PAST, FUTURE, SUBJUNCTIVE, INFINITIVE, PROGRESSIVE]
@@ -247,11 +287,12 @@ def get_related_words(word: str, model: HookedTransformer):
 
     # Get stripped version (e.g. "writer" or "writing" -> "write")
     lemmatizer = WordNetLemmatizer()
-    lemma = lemmatizer.lemmatize(word, 'v')
-    if lemma == word:
-        ends_with_suffix = [suffix for suffix in MY_SUFFIXES if word.endswith(suffix)]
-        if len(ends_with_suffix) > 0:
-            lemma = word[:-len(ends_with_suffix[0])]
+    lemma_verb = lemmatizer.lemmatize(word, 'v')
+    lemma_noun = lemmatizer.lemmatize(word, 'n')
+    lemma_adj = lemmatizer.lemmatize(word, 'a')
+    # lemma should be the one of these with the shortest length
+    lemma = min([lemma_verb, lemma_noun, lemma_adj], key=len)
+    
     related_words = []
 
     # Get things which pattern.en is pretty good with
@@ -263,7 +304,7 @@ def get_related_words(word: str, model: HookedTransformer):
     # Get hardcoded things which pattern.en can't handle
     ing_words = verb_to_ing(lemma)
     noun_forms = verb_to_noun(lemma)
-    adj_forms = noun_to_adj(lemma)
+    adj_forms = noun_or_verb_to_adj(lemma) + adj_variants(lemma)
     hardcoded_words = ing_words + noun_forms + adj_forms
     related_words = [f" {s}" for s in set(related_words + hardcoded_words) - {None}]
     
@@ -271,11 +312,7 @@ def get_related_words(word: str, model: HookedTransformer):
     toks = model.to_tokens(related_words, prepend_bos=False)
     related_words = [word[1:] for (word, tok) in zip(related_words, toks) if tok[1] == model.tokenizer.bos_token_id]
     
-    # Get forced words (which I won't be checking for if they're tokens, e.g. " Saskatchewans")
-    forced_plural = lemma + "s"
-    forced_words = [forced_plural]
-    
-    return [word] + forced_words + related_words
+    return get_list_with_no_repetitions([word] + related_words)
 
 
 # %%
