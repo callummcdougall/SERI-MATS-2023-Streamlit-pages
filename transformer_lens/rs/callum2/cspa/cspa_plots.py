@@ -269,18 +269,39 @@ def add_cspa_to_streamlit_page(
     head's actual DLA.
 
     You have to specify either html_plots_filename or give HTML_PLOTS, but not both.
+
+    Also, if cspa_results and s_sstar_pairs are actually {str: {str: Tensor}} rather than {str: Tensor},
+    this is interpreted as being multiple different visualisations which you can compare. They're stacked
+    on top of each other in the HTML page.
     '''
     assert (html_plots_filename is None) != (HTML_PLOTS is None)
 
-    # Get the CSPA results
+    cspa_values = list(cspa_results.values())
+    if isinstance(cspa_values[0], t.Tensor):
+        cspa_results = {"": cspa_results}
+        s_sstar_pairs = {"": s_sstar_pairs}
+    first_key = list(cspa_results.keys())[0]
+
+    # ! Get all CSPA visulisations (this looks janky because I like being able to compare different forms of CSPA!)
     if verbose: print("Generating CSPA plots ...", end="\r"); t0 = time.time()
-    CSPA_PLOTS = generate_html_for_cspa_plots(
-        str_toks_list = data_str_toks_parsed,
-        cspa_results = cspa_results,
-        s_sstar_pairs = s_sstar_pairs,
-        cutoff = cutoff,
-    )
+    # First, get them in the form {CSPA type: {batch_idx: single plot}}
+    CSPA_PLOTS = {
+        k: generate_html_for_cspa_plots(
+            str_toks_list = data_str_toks_parsed,
+            cspa_results = cspa_results[k],
+            s_sstar_pairs = s_sstar_pairs[k],
+            cutoff = cutoff,
+        )
+        for k in cspa_results
+    }
+    # Second, get them in the form {batch_idx: (multiples plots, concatenated over type)}}
+    CSPA_PLOTS = {
+        (batch_idx,): "".join([f"<h3>{k}</h3>" + CSPA_PLOTS[k][(batch_idx,)] for k in CSPA_PLOTS])
+        for batch_idx in range(cspa_results[first_key]["loss"].shape[0])
+    }
     if verbose: print(f"Generating CSPA plots ... {time.time()-t0:.2f}")
+
+    # Display a single plot and stop here, if requested
     if test_idx is not None:
         display(HTML(CSS.replace("min-width: 275px", "min-width: 200px") + CSPA_PLOTS[(test_idx,)] + "<br>" * 20))
         return CSPA_PLOTS
@@ -294,7 +315,7 @@ def add_cspa_to_streamlit_page(
     # Check that the CSPA results we have are as large as these html plots
     # If CSPA plots are smaller, we only show as many as are already present in the HTML plots dict
     html_plots_batch_idx = max(keys[0] for keys in HTML_PLOTS["DLA"]) + 1
-    cspa_batch_idx, seq_len_minus1 = cspa_results["loss"].shape
+    cspa_batch_idx, seq_len_minus1 = cspa_results[first_key]["loss"].shape
     assert cspa_batch_idx >= html_plots_batch_idx
     CSPA_PLOTS = {k: v for k, v in CSPA_PLOTS.items() if k[0] < html_plots_batch_idx}
 
@@ -304,39 +325,57 @@ def add_cspa_to_streamlit_page(
     # If we're adding DLA & logits, then generate the plots for this and add them to the big dict
     if toks_for_doing_DLA is not None:
 
-        if verbose: print("Generating logit plots ...", end="\r"); t0 = time.time()
-        toks_cpu = toks_for_doing_DLA.cpu()
+        if verbose: print("Generating DLA plots ...", end="\r"); t0 = time.time()
+        toks_cpu = toks_for_doing_DLA[:html_plots_batch_idx].cpu()
 
-        # Get all DLA visulisations
-        html_pos_list, html_neg_list = generate_html_for_DLA_plot(
-            toks = toks_cpu,
-            dla_logits = cspa_results["dla"],
-            model = model
-        )
-        for batch_idx, (html_pos, html_neg) in enumerate(zip(html_pos_list, html_neg_list)):
+        # ! Get all DLA visulisations (this looks janky because I like being able to compare different forms of CSPA!)
+        html_pos_and_neg = {
+            k: generate_html_for_DLA_plot(
+                toks = toks_cpu,
+                dla_logits = cspa_results[k]["dla"][:html_plots_batch_idx],
+                model = model
+            )
+            for k in cspa_results
+        }
+        html_pos_and_neg = {
+            batch_idx: [
+                "".join([f"<h3>{k}</h3>" + html_pos_and_neg[k][0][batch_idx] for k in html_pos_and_neg]), # pos
+                "".join([f"<h3>{k}</h3>" + html_pos_and_neg[k][1][batch_idx] for k in html_pos_and_neg]), # neg
+            ]
+            for batch_idx in range(html_plots_batch_idx)
+        }
+
+        for batch_idx, (html_pos, html_neg) in html_pos_and_neg.items():
             HTML_PLOTS["DLA"][(batch_idx, "CSPA", "neg")] = str(html_neg)
             HTML_PLOTS["DLA"][(batch_idx, "CSPA", "pos")] = str(html_pos)
 
-        if verbose: print(f"{'Generating logit plots':<39} ... {time.time()-t0:.2f}")
-        if verbose: print(f"{'Generating DLA plots':<39} ...", end="\r"); t0 = time.time()
+        if verbose: print(f"{'Generating DLA plots':<22} ... {time.time()-t0:.2f}")
+        if verbose: print(f"{'Generating logit plots':<22} ...", end="\r"); t0 = time.time()
 
-        # Get all logit visulisations
-        html_logits_list = generate_html_for_logit_plot(
-            full_toks = toks_cpu,
-            full_logprobs = cspa_results["logits"].log_softmax(-1),
-            full_non_ablated_logprobs = cspa_results["logits_orig"].log_softmax(-1),
-            model = model,
-        )
-        for batch_idx, html in enumerate(html_logits_list):
+        # ! Get all logit visulisations (this looks janky because I like being able to compare different forms of CSPA!)
+        html_logits_list = {
+            k: generate_html_for_logit_plot(
+                full_toks = toks_cpu,
+                full_logprobs = cspa_results[k]["logits"][:html_plots_batch_idx].log_softmax(-1),
+                full_non_ablated_logprobs = cspa_results[k]["logits_orig"][:html_plots_batch_idx].log_softmax(-1),
+                model = model,
+            )
+            for k in cspa_results
+        }
+        html_logits_list = {
+            batch_idx: "".join([f"<h3>{k}</h3>" + html_logits_list[k][batch_idx] for k in html_logits_list])
+            for batch_idx in range(html_plots_batch_idx)
+        }
+        for batch_idx, html in html_logits_list.items():
             HTML_PLOTS["LOGITS_ABLATED"][(batch_idx, "CSPA")] = str(html)
         
-        if verbose: print(f"{'Generating DLA plots':<39} ... {time.time()-t0:.2f}")
+        if verbose: print(f"{'Generating logit plots':<22} ... {time.time()-t0:.2f}")
 
     # Save new plots (or just return)
     if html_plots_filename is None:
         return HTML_PLOTS
     else:
-        if verbose: print(f"{f'Saving plots to {full_filename.name!r}':<39} ...", end="\r"); t0 = time.time()
+        if verbose: print(f"Saving plots to {full_filename.name!r} ...", end="\r"); t0 = time.time()
         with gzip.open(full_filename, "wb") as f:
             pickle.dump(HTML_PLOTS, f)
-        if verbose: print(f"{f'Saving plots to {full_filename.name!r}':<39} ... {time.time()-t0:.2f}", end="\r")
+        if verbose: print(f"Saving plots to {full_filename.name!r} ... {time.time()-t0:.2f}", end="\n")
