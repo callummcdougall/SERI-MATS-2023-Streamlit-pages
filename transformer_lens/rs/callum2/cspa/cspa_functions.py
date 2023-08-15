@@ -346,6 +346,7 @@ def get_cspa_results(
     result_mean: Optional[Dict[Tuple[int, int], Float[Tensor, "seq_plus d_model"]]] = None,
     use_cuda: bool = False,
     return_dla: bool = False,
+    return_logits: bool = False,
 ) -> Tuple[
         Dict[str, Float[Tensor, "batch seq-1"]],
         Dict[Tuple[str, str], List[Tuple[str, str]]],
@@ -666,6 +667,10 @@ def get_cspa_results(
         cspa_results["dla"] = ((head_result_cspa - head_result_orig_mean_ablated) / final_scale) @ model.W_U
         cspa_results["logits"] = logits_cspa
         cspa_results["logits_orig"] = logits
+    if return_logits:
+        cspa_results["logits"] = logits_cspa
+        cspa_results["logits_orig"] = logits
+        cspa_results["logits_ablated"] = logits_mean_ablated
 
     return cspa_results, s_sstar_pairs
 
