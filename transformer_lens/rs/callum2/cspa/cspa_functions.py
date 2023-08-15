@@ -304,7 +304,7 @@ def get_effective_embedding(model: HookedTransformer) -> Float[Tensor, "d_vocab 
 
     W_E = model.W_E.clone()
     W_U = model.W_U.clone()
-    # t.testing.assert_close(W_E[:10, :10], W_U[:10, :10].T)  NOT TRUE, because of the center unembed part!
+    # t.testing.assert_close(W_E[:3, :3], W_U[:3, :3].T)  NOT TRUE, because of the center unembed part, and the folded weights
 
     resid_pre = W_E.unsqueeze(0)
     pre_attention = model.blocks[0].ln1(resid_pre)
@@ -338,7 +338,7 @@ def get_cspa_results(
     model: HookedTransformer,
     toks: Int[Tensor, "batch seq"],
     negative_head: Tuple[int, int],
-    components_to_project: List[str],
+    interventions: List[str],
     K_unembeddings: Optional[int] = None,
     K_semantic: int = 10,
     semantic_dict: dict = {},
@@ -355,7 +355,7 @@ def get_cspa_results(
     Short explpanation of the copy-suppression preserving ablation (hereby CSPA), with
     the following arguments:
 
-        components_to_project = ["o"]
+        interventions = ["qk", "ov"]
         K_semantic = 3
         K_unembeddings = 5
 
@@ -375,11 +375,15 @@ def get_cspa_results(
             to some token s* which is being predicted at d, and in this case the information
             which is moved is restricted to the subspace of the unembedding of s*.
 
+        If instead we just had interventions = ["qk"], then we'd filter for the pairs (s, s*)
+        where s* is predicted at d, but we wouldn't project their output vectors onto
+        unembeddings. If instead we just had ["ov"], then we'd project all vectors from s onto 
+        the span of unembeddings of their s*, but we wouldn't also filter for pairs (s, s*) 
+        where s* is predicted.
+
     
     A few notes / explanations:
 
-        > There are options for "q" and "v" to be iin the components to project, but this
-          currently isn't how the best version of this ablation method works.
         > result_mean is the vector we'll use for ablation, if supplied. It'll map e.g. 
           (10, 7) to the mean result vector for each seqpos (hopefully seqpos is larger than 
           that for toks).
@@ -394,6 +398,8 @@ def get_cspa_results(
     # ====================================================================
     # STEP 0: Setup
     # ====================================================================
+
+    LAYER, HEAD = negative_head
 
     W_EE_dict = get_effective_embedding(model)
     W_EE = W_EE_dict[effective_embedding]
@@ -432,7 +438,7 @@ def get_cspa_results(
         semantically_similar_toks = toks.unsqueeze(-1) # [batch seqK 1]
 
     # Get these tokens' unembeddings
-    unembeddings = W_U.T[toks] # [batch seqK d_model]
+    # unembeddings = W_U.T[toks] # [batch seqK d_model]
 
 
 
@@ -442,15 +448,15 @@ def get_cspa_results(
     
     # Get all hook names
     # TODO - change names to "pattern_hook_name" and "pattern_hook_fn" etc
-    hook_name_resid = utils.get_act_name("resid_pre", 10)
-    hook_name_resid_final = utils.get_act_name("resid_post", 11)
-    hook_name_q_input = utils.get_act_name("q_input", 10)
-    hook_name_k_input = utils.get_act_name("k_input", 10)
-    hook_name_v_input = utils.get_act_name("v_input", 10)
-    hook_name_result = utils.get_act_name("result", 10)
-    hook_name_v = utils.get_act_name("v", 10)
-    hook_name_pattern = utils.get_act_name("pattern", 10)
-    hook_name_scale = utils.get_act_name("scale", 10, "ln1")
+    hook_name_resid = utils.get_act_name("resid_pre", LAYER)
+    hook_name_resid_final = utils.get_act_name("resid_post", model.cfg.n_layers - 1)
+    hook_name_q_input = utils.get_act_name("q_input", LAYER)
+    hook_name_k_input = utils.get_act_name("k_input", LAYER)
+    hook_name_v_input = utils.get_act_name("v_input", LAYER)
+    hook_name_result = utils.get_act_name("result", LAYER)
+    hook_name_v = utils.get_act_name("v", LAYER)
+    hook_name_pattern = utils.get_act_name("pattern", LAYER)
+    hook_name_scale = utils.get_act_name("scale", LAYER, "ln1")
     hook_name_scale_final = utils.get_act_name("scale")
     hook_names_to_cache = [hook_name_k_input, hook_name_q_input, hook_name_v_input, hook_name_scale, hook_name_scale_final, hook_name_resid, hook_name_resid_final, hook_name_result]
     
@@ -475,7 +481,7 @@ def get_cspa_results(
         # If current value of index matches the component we want to freeze layernorm at, then freeze.
         component_index = {"q": 0, "k": 1, "v": 2}[component]
         if component_index == hook.ctx["index"]:
-            scale[:, :, 7] = frozen_scale
+            scale[:, :, HEAD] = frozen_scale
         # Increment index, and delete if we've incremented 3 times.
         hook.ctx["index"] += 1
         if hook.ctx["index"] == 3:
@@ -485,9 +491,9 @@ def get_cspa_results(
 
     def hook_fn_store_v_or_attn_in_ctx(activation: Tensor, hook: HookPoint):
         if hook.name.endswith("hook_pattern"):
-            hook.ctx["pattern"] = activation[:, 7] # [batch seqQ seqK]
+            hook.ctx["pattern"] = activation[:, HEAD] # [batch seqQ seqK]
         elif hook.name.endswith("hook_v"):
-            hook.ctx["v"] = activation[:, :, 7] # [batch seqK d_head]
+            hook.ctx["v"] = activation[:, :, HEAD] # [batch seqK d_head]
     
 
 
@@ -502,10 +508,10 @@ def get_cspa_results(
         '''
         Projects the value input onto the effective embedding for the source token.
         '''
-        v_input_head = v_input[:, :, 7]
+        v_input_head = v_input[:, :, HEAD]
         v_input_head_mean = einops.reduce(v_input_head, "batch seqK d_model -> seqK d_model")
 
-        v_input[:, :, 7] = project(
+        v_input[:, :, HEAD] = project(
             vectors = v_input_head - v_input_head_mean,
             proj_directions = effective_embeddings,
         ) + v_input_head_mean
@@ -523,63 +529,103 @@ def get_cspa_results(
         result: Float[Tensor, "batch seqQ head d_model"],
         hook: HookPoint,
         resid_pre: Float[Tensor, "batch seqQ d_model"],
-        final_scale: Optional[Float[Tensor, "batch seqQ 1"]] = None
+        final_scale: Optional[Float[Tensor, "batch seqQ 1"]] = None,
+        ablate_qk: bool = True,
+        ablate_ov: bool = True,
     ):
         '''
         Projects each result vector onto the unembeddings for semantically similar tokens.
 
         We assume that `v` and `pattern` for this head (which might have been changed from their 
         clean values) have been stored in their respective hook contexts.
+
+        If `ablate_qk` is True, then we also apply the attention filter, i.e. we only
+        project onto the unembeddings of tokens which are predicted at this position.
         '''
         # Get v and pattern from previous hook.ctx
         v: Tensor = model.hook_dict[hook_name_v].ctx.pop("v") # [batch seqK d_head]
         pattern: Tensor = model.hook_dict[hook_name_pattern].ctx.pop("pattern") # [batch seqQ seqK]            
         
         # Multiply by output matrix, then by attention probabilities
-        output = v @ model.W_O[10, 7] # [batch seqK d_model]
+        output = v @ model.W_O[LAYER, HEAD] # [batch seqK d_model]
         output_attn = einops.einsum(output, pattern, "batch seqK d_model, batch seqQ seqK -> batch seqQ seqK d_model")
         output_attn_mean_ablated = einops.reduce(output_attn, "batch seqQ seqK d_model -> seqQ 1 d_model", "mean")
         # We want to use the results supplied for mean ablation, if we're short on data here
         if batch_size * seq_len < 1000:
             assert result_mean is not None, "You should be using an externally supplied mean ablation vector for such a small dataset."
             output_attn_pre_mean_ablation = einops.einsum(
-                result_mean[(10, 7)][:seq_len], pattern,
+                result_mean[(LAYER, HEAD)][:seq_len], pattern,
                 "seqQ d_model, batch seqQ seqK -> batch seqQ seqK d_model"
             )
             output_attn_mean_ablated = einops.reduce(output_attn_pre_mean_ablation, "batch seqQ seqK d_model -> seqQ 1 d_model", "mean")
 
-        # Get the unembeddings we'll be projecting onto (also get the dict of (s, s*) pairs and store in context)
-        semantically_similar_unembeddings, s_sstar_pairs = get_top_predicted_semantically_similar_tokens(
-            toks=toks,
-            resid_pre=resid_pre,
-            semantically_similar_toks=semantically_similar_toks,
-            K_unembeddings=K_unembeddings,
-            function_toks=FUNCTION_TOKS,
-            model=model,
-            final_scale=final_scale,
-        )
-        hook.ctx["s_sstar_pairs"] = s_sstar_pairs
 
         # Perform the projection onto semantically similar tokens (make sure to do it wrt the mean)
-        output_attn_projected = project(
-            vectors = output_attn - output_attn_mean_ablated,
-            proj_directions = semantically_similar_unembeddings,
-        ) + output_attn_mean_ablated
+
+        # If we ablate QK, this means we need to get the top predicted semantically similar tokens
+        if ablate_qk:
+            # Get the unembeddings we'll be projecting onto (also get the dict of (s, s*) pairs and store in context)
+            t0 = time.time()
+            semantically_similar_unembeddings, s_sstar_pairs, top_K_and_Ksem_mask = get_top_predicted_semantically_similar_tokens(
+                toks=toks,
+                resid_pre=resid_pre,
+                semantically_similar_toks=semantically_similar_toks,
+                K_unembeddings=K_unembeddings,
+                function_toks=FUNCTION_TOKS,
+                model=model,
+                final_scale=final_scale,
+            )
+            hook.ctx["s_sstar_pairs"] = s_sstar_pairs
+            time_for_sstar = time.time() - t0
+        else:
+            time_for_sstar = 0.0
+            semantically_similar_unembeddings = einops.repeat(
+                W_U.T[semantically_similar_toks],
+                "batch seqK K_semantic d_model -> batch seqQ seqK d_model K_semantic",
+                seqQ = seq_len,
+            )
+
+        if ablate_ov:
+            # We project the output onto the unembeddings we got from the code above (which will either be all unembeddings,
+            # or those which were filtered for being predicted on the destination side).
+            output_attn_projected = project(
+                vectors = output_attn - output_attn_mean_ablated,
+                proj_directions = semantically_similar_unembeddings,
+            ) + output_attn_mean_ablated
+        else:
+            # In this case, we assume we are filtering for QK (cause we're doing at least one). We want to set the output to
+            # be the mean-ablated output at all source positions which are not in the top predicted semantically similar tokens.
+            top_K_and_Ksem_mask_any = einops.reduce(
+                top_K_and_Ksem_mask, 
+                "batch seqQ seqK K_semantic -> batch seqQ seqK",
+                reduction = lambda tensor, dims: tensor.any(dims[0])
+            )
+            top_K_and_Ksem_mask_any_repeated = einops.repeat(
+                top_K_and_Ksem_mask_any,
+                "batch seqQ seqK -> batch seqQ seqK d_model",
+                d_model = model.cfg.d_model,
+            )
+            output_attn_projected = t.where(
+                top_K_and_Ksem_mask_any_repeated,
+                output_attn,
+                output_attn_mean_ablated,
+            )
 
         # Sum over key-side vectors to get new head result
         # ? (don't override the BOS token attention, because it's more appropriate to preserve this information I think)
         # output_attn_projected[:, :, 0, :] = output_attn[:, :, 0, :]
         head_result = einops.reduce(output_attn_projected, "batch seqQ seqK d_model -> batch seqQ d_model", "sum")
 
-        result[:, :, 7] = head_result
-        
+        result[:, :, HEAD] = head_result
+
+        hook.ctx["time_for_sstar"] = time_for_sstar     
         return result
 
     def hook_fn_cache_result(
         result: Float[Tensor, "batch seqQ head d_model"],
         hook: HookPoint,
     ):
-        hook.ctx["result"] = result[:, :, 7]
+        hook.ctx["result"] = result[:, :, HEAD]
 
 
     # ==================================
@@ -592,7 +638,7 @@ def get_cspa_results(
         scores: Float[Tensor, "batch head seqQ seqK"],
         hook: HookPoint,
     ):
-        hook.ctx["scores"] = scores[:, 7]
+        hook.ctx["scores"] = scores[:, HEAD]
 
 
     # ====================================================================
@@ -608,12 +654,12 @@ def get_cspa_results(
     )
     loss = model.loss_fn(logits, toks, per_token=True)
     resid_post_final = cache["resid_post", -1] # [batch seqQ d_model]
-    resid_pre = cache["resid_pre", 10] # [batch seqK d_model]
+    resid_pre = cache["resid_pre", LAYER] # [batch seqK d_model]
     # * Weird error which I should fix; sometimes it seems like scale isn't recorded as different across heads
-    scale = cache["scale", 10, "ln1"]
+    scale = cache["scale", LAYER, "ln1"]
     if scale.ndim == 4:
-        scale = cache["scale", 10, "ln1"][:, :, 7] # [batch seqK 1]
-    head_result_orig = cache["result", 10][:, :, 7] # [batch seqQ d_model]
+        scale = cache["scale", LAYER, "ln1"][:, :, HEAD] # [batch seqK 1]
+    head_result_orig = cache["result", LAYER][:, :, HEAD] # [batch seqQ d_model]
     final_scale = cache["scale"] # [batch seq 1]
     del cache
     
@@ -621,31 +667,29 @@ def get_cspa_results(
     head_result_orig_mean_ablated = einops.reduce(head_result_orig, "batch seqQ d_model -> seqQ d_model", "mean")
     if batch_size * seq_len < 1000:
         assert result_mean is not None, "You should be using an externally supplied mean ablation vector for such a small dataset."
-        head_result_orig_mean_ablated = result_mean[(10, 7)][:seq_len]
+        head_result_orig_mean_ablated = result_mean[(LAYER, HEAD)][:seq_len]
     resid_post_final_mean_ablated = resid_post_final + (head_result_orig_mean_ablated - head_result_orig) # [batch seq d_model]
     logits_mean_ablated = (resid_post_final_mean_ablated / final_scale) @ model.W_U + model.b_U
     loss_mean_ablated = model.loss_fn(logits_mean_ablated, toks, per_token=True)
     model.reset_hooks()
 
     # Thirdly, get results after projecting
-    # Add hook functions to project the decomposed result vectors along the semnatically similar unembeddings
-    if "o" in components_to_project:
-        model.add_hook(hook_name_v, hook_fn_store_v_or_attn_in_ctx)
-        model.add_hook(hook_name_pattern, hook_fn_store_v_or_attn_in_ctx)
-        model.add_hook(hook_name_result, partial(hook_fn_result, resid_pre=resid_pre, final_scale=final_scale))
-    # Add hooks to project the value input along the source tokens' effective embeddings
-    if "v" in components_to_project:
-        model.add_hook(hook_name_v_input, hook_fn_project_v)
-        model.add_hook(hook_name_scale, partial(hook_fn_freeze_scale, frozen_scale=scale, component="v"))
-    # Add hooks to project the query input along each source tokens' semantically similar unembedding
-    if "q" in components_to_project:
-        pass
-        # model.add_hook(hook_name_pattern, partial(hook_fn_project_q_via_pattern, resid_pre=resid_pre))
-        # model.add_hook(utils.get_act_name("attn_scores", 10), partial(hook_fn_cache_scores))
-    # Cache the result when this is all done, and then run block 10 just so we can get this new result
+    assert ("qk" in interventions) or ("ov" in interventions)
+    hook_fn_result_kwargs = dict(
+        resid_pre=resid_pre,
+        final_scale=final_scale,
+        ablate_qk=("qk" in interventions),
+        ablate_ov=("ov" in interventions),
+    )
+    model.add_hook(hook_name_v, hook_fn_store_v_or_attn_in_ctx)
+    model.add_hook(hook_name_pattern, hook_fn_store_v_or_attn_in_ctx)
+    model.add_hook(hook_name_result, partial(hook_fn_result, **hook_fn_result_kwargs))
+
+    # Cache the result when this is all done, and then run block LAYER just so we can get this new result
     model.add_hook(hook_name_result, hook_fn_cache_result)
-    _ = model.blocks[10](resid_pre)
+    _ = model.blocks[LAYER](resid_pre)
     s_sstar_pairs = model.hook_dict[hook_name_result].ctx.pop("s_sstar_pairs", None)
+    time_for_sstar = model.hook_dict[hook_name_result].ctx.pop("time_for_sstar", None)
     # Take this new result vector
     head_result_cspa = model.hook_dict[hook_name_result].ctx.pop("result") # [batch seq d_model]
     resid_post_final_cspa = resid_post_final + (head_result_cspa - head_result_orig) # [batch seq d_model]
@@ -672,7 +716,7 @@ def get_cspa_results(
         cspa_results["logits_orig"] = logits
         cspa_results["logits_ablated"] = logits_mean_ablated
 
-    return cspa_results, s_sstar_pairs
+    return cspa_results, s_sstar_pairs, time_for_sstar
 
 
 
@@ -681,7 +725,7 @@ def get_cspa_results_batched(
     toks: Int[Tensor, "batch seq"],
     max_batch_size: int,
     negative_head: Tuple[int, int],
-    components_to_project: List[str],
+    interventions: List[str],
     K_unembeddings: Optional[int] = None,
     K_semantic: int = 10,
     semantic_dict: dict = {},
@@ -689,13 +733,13 @@ def get_cspa_results_batched(
     use_cuda: bool = False,
     verbose: bool = False,
     return_dla: bool = False,
+    return_logits: bool = False,
     start_idx: int = 0,
 ) -> Dict[str, Float[Tensor, "batch seq-1"]]:
     '''
     Gets results from CSPA, by splitting the tokens along batch dimension and running it several 
     times. This allows me to use batch sizes of 1000+ without getting CUDA errors.
     '''
-    cspa_results_list = []
     chunks = toks.shape[0] // max_batch_size
     lower_upper_list = []
 
@@ -710,18 +754,19 @@ def get_cspa_results_batched(
         
         # Get new results
         result_mean = None
-        cspa_results, s_sstar_pairs = get_cspa_results(
-            model,
-            _toks,
-            negative_head,
-            components_to_project,
-            K_unembeddings,
-            K_semantic,
-            semantic_dict,
-            effective_embedding,
-            result_mean,
-            use_cuda,
-            return_dla,
+        cspa_results, s_sstar_pairs, time_for_sstar = get_cspa_results(
+            model = model,
+            toks = _toks,
+            negative_head = negative_head,
+            interventions = interventions,
+            K_unembeddings = K_unembeddings,
+            K_semantic = K_semantic,
+            semantic_dict = semantic_dict,
+            effective_embedding = effective_embedding,
+            result_mean = result_mean,
+            use_cuda = use_cuda,
+            return_dla = return_dla,
+            return_logits = return_logits,
         )
 
         # Save results, and clear cache
@@ -729,7 +774,7 @@ def get_cspa_results_batched(
             pickle.dump((cspa_results, s_sstar_pairs), f)
         del cspa_results, s_sstar_pairs
         t.cuda.empty_cache()
-        if verbose: print(f"Running batch {i+1}/{chunks} of size {_toks.shape[0]} ... {time.time()-t0:.2f}")
+        if verbose: print(f"Running batch {i+1}/{chunks} of size {_toks.shape[0]} ... {time.time()-t0:.2f} (get s* time = {time_for_sstar:.2f})")
 
     # Load all results from where they are saved
     if verbose:
@@ -746,8 +791,9 @@ def get_cspa_results_batched(
             for key in cspa_results:
                 cspa_results[key] = t.concat([cspa_results[key], _cspa_results[key].cpu()], dim=0)
             # Add the (s, s*) pairs, making sure to increment by the appropriate batch index
-            for (b, sQ), v in _s_sstar_pairs.items():
-                s_sstar_pairs[(b+upper, sQ)] = v
+            if _s_sstar_pairs is not None:
+                for (b, sQ), v in _s_sstar_pairs.items():
+                    s_sstar_pairs[(b+upper, sQ)] = v
 
     if verbose:
         print(f"Loading all results from where they were saved ... {time.time()-t0:.2f}")
@@ -769,7 +815,11 @@ def get_top_predicted_semantically_similar_tokens(
     model: HookedTransformer,
     final_scale: Optional[Float[Tensor, "batch seqQ 1"]] = None,
     s_sstar_contains_indices: bool = False,
-):
+) -> Tuple[
+    Float[Tensor, "batch seqQ seqK d_model K_semantic"], 
+    Dict[tuple, list],
+    Bool[Tensor, "batch seqQ seqK K_semantic"],
+]:
     '''
     Arguments:
 
@@ -788,17 +838,17 @@ def get_top_predicted_semantically_similar_tokens(
 
     Returns:
 
-        semantically_similar_unembeddings: [batch seqQ seqK d_model K_unembeddings]
+        semantically_similar_unembeddings: [batch seqQ seqK d_model K_semantic]
             The unembeddings of the semantically similar tokens, with all the vectors except the
             ones we're actually using set to zero.
         
-        mask: [batch seqQ seqK K_semantic]
-            The causal mask which we'll be applying once we project the unembeddings.
-
         s_sstar_pairs: defaultdict(list)
             Keys are (b, sQ) indices, values are lists of (s, s*) str_tok pairs which are preserved
             in CSPA, where s is a source token and s* is a semantically similar token that is predicted
             at the destination position.
+        
+        mask: [batch seqQ seqK K_semantic]
+            The mask which we'll be applying once we project the unembeddings.
     '''
     semantically_similar_unembeddings = model.W_U.T[semantically_similar_toks].transpose(-1, -2) # [batch seqK d_model K_semantic]
     batch_size, seq_len = toks.shape
@@ -852,11 +902,18 @@ def get_top_predicted_semantically_similar_tokens(
 
         # Use this boolean mask to set some of the unembedding vectors to zero
         unembeddings = einops.repeat(semantically_similar_unembeddings, "batch seqK d_model K_semantic -> batch 1 seqK d_model K_semantic")
-        mask = einops.repeat(top_K_and_Ksem_mask, "batch seqQ seqK K_semantic -> batch seqQ seqK 1 K_semantic")
-        semantically_similar_unembeddings = unembeddings * mask.float()
+        top_K_and_Ksem_mask_repeated = einops.repeat(top_K_and_Ksem_mask, "batch seqQ seqK K_semantic -> batch seqQ seqK 1 K_semantic")
+        semantically_similar_unembeddings = unembeddings * top_K_and_Ksem_mask_repeated.float()
 
-    return semantically_similar_unembeddings, s_sstar_pairs
+    return semantically_similar_unembeddings, s_sstar_pairs, top_K_and_Ksem_mask
 
+
+
+# ? Removed this because it didn't work well
+# # Add hooks to project the value input along the source tokens' effective embeddings
+# if "v" in interventions:
+#     model.add_hook(hook_name_v_input, hook_fn_project_v)
+#     model.add_hook(hook_name_scale, partial(hook_fn_freeze_scale, frozen_scale=scale, component="v"))
 
 
 # ? This code doesn't work super well; projecting queries is meh.
@@ -899,8 +956,8 @@ def get_top_predicted_semantically_similar_tokens(
 #     query_input_projected = query_input_projected + query_input_mean
 
 #     # Now we can get keys and queries, and calculate our new attention scores (scaled and masked!)
-#     keys = (resid_pre / scale) @ model.W_K[10, 7] + model.b_K[10, 7]
-#     queries = (query_input_projected / scale.unsqueeze(-1)) @ model.W_Q[10, 7] + model.b_Q[10, 7]
+#     keys = (resid_pre / scale) @ model.W_K[LAYER, HEAD] + model.b_K[LAYER, HEAD]
+#     queries = (query_input_projected / scale.unsqueeze(-1)) @ model.W_Q[LAYER, HEAD] + model.b_Q[LAYER, HEAD]
 #     new_attn_scores = einops.einsum(
 #         queries, keys,
 #         "batch seqQ seqK d_head, batch seqK d_head -> batch seqQ seqK",
@@ -910,11 +967,38 @@ def get_top_predicted_semantically_similar_tokens(
 
 #     # We want to make sure that attention prob to the zeroth token is same as before (as a baseline)
 #     # e.g. if original attn to 0 was very high, we'll be scaling down the new not-to-0 attn probs
-#     new_pattern[:, 1:, 1:] *= (1 - pattern[:, 7, 1:, [0]]) / (1 - new_pattern[:, 1:, [0]])
-#     new_pattern[:, :, 0] = pattern[:, 7, :, 0]
+#     new_pattern[:, 1:, 1:] *= (1 - pattern[:, HEAD, 1:, [0]]) / (1 - new_pattern[:, 1:, [0]])
+#     new_pattern[:, :, 0] = pattern[:, HEAD, :, 0]
 #     # t.testing.assert_close(new_pattern.sum(dim=-1), t.ones_like(new_pattern.sum(dim=-1)))
 
-#     hook.ctx["info"] = (pattern[:, 7].clone(), new_attn_scores.clone(), new_pattern.clone())
+#     hook.ctx["info"] = (pattern[:, HEAD].clone(), new_attn_scores.clone(), new_pattern.clone())
 
-#     pattern[:, 7] = new_pattern
+#     pattern[:, HEAD] = new_pattern
 #     return pattern
+
+
+
+
+def kl_div(
+    logits1: Float[Tensor, "... d_vocab"],
+    logits2: Float[Tensor, "... d_vocab"],
+):
+    '''
+    Estimates KL divergence D_KL( logits1 || logits2 ), i.e. where logits1 is the "ground truth".
+
+    Each tensor is assumed to have all dimensions be the batch dimension, except for the last one
+    (which is a distribution over the vocabulary).
+
+    In our use-cases, logits1 will be the non-ablated version of the model.
+    '''
+
+    logprobs1 = logits1.log_softmax(dim=-1)
+    logprobs2 = logits2.log_softmax(dim=-1)
+    logprob_diff = logprobs1 - logprobs2
+    probs1 = logits1.softmax(dim=-1)
+
+    return einops.reduce(
+        probs1 * logprob_diff,
+        "... d_vocab -> ...",
+        reduction = "sum",
+    )

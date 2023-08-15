@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Literal
 import time
 import gzip
 from jaxtyping import Float, Int
@@ -23,37 +23,53 @@ from transformer_lens.rs.callum2.generate_st_html.generate_html_funcs import (
 from transformer_lens.rs.callum2.generate_st_html.utils import (
     ST_HTML_PATH,
 )
+from transformer_lens.rs.callum2.cspa.cspa_functions import (
+    kl_div,
+)
 
 
-def generate_loss_based_scatter(cspa_results, nbins=200): 
+def generate_loss_based_scatter(cspa_results, nbins=200, values: Literal["kl-div", "kl-div-reversed", "loss"] = "loss"):
+    assert values in ["kl-div", "kl-div-reversed", "loss"]
 
-    l_orig = cspa_results["loss"].flatten()
-    l_abl = cspa_results["loss_ablated"].flatten()
-    l_cs = cspa_results["loss_projected"].flatten()
+    if values.startswith("kl-div"):
+        logits_orig = cspa_results["logits_orig"]
+        logits_abl = cspa_results["logits_ablated"]
+        logits_cspa = cspa_results["logits"]
+        title = "KL divergence of ablated predictions, relative to clean predictions"
+        if values == "kl-div":
+            xaxis_values = kl_div(logits_orig, logits_abl).flatten()
+            yaxis_values = kl_div(logits_orig, logits_cspa).flatten()
+        elif values == "kl-div-reversed":
+            xaxis_values = kl_div(logits_abl, logits_orig).flatten()
+            yaxis_values = kl_div(logits_cspa, logits_orig).flatten()
 
-    l_abl_diff = l_abl - l_orig
-    ranks = t.argsort(t.argsort(l_abl_diff))
-    quantiles = ((ranks.float() / (l_abl_diff.numel() - 1)) * nbins).int()
+    elif values == "loss":
+        l_orig = cspa_results["loss"].flatten()
+        l_abl = cspa_results["loss_ablated"].flatten()
+        l_cspa = cspa_results["loss_projected"].flatten()
+        title = "Change in loss from ablation (relative to clean model)"
+        xaxis_values = l_abl - l_orig
+        yaxis_values = l_cspa - l_orig
+
+    ranks = t.argsort(t.argsort(xaxis_values))
+    quantiles = ((ranks.float() / (xaxis_values.numel() - 1)) * nbins).int()
     quantiles = t.clamp(quantiles, 0, nbins-1)
 
-    avg_loss_increase_abl_per_bucket = []
-    avg_loss_increase_cs_per_bucket = []
+    xaxis_values_per_bucket = []
+    yaxis_values_per_bucket = []
 
     for i in range(0, nbins-1):
         is_in_bucket = (quantiles == i)
-        _l_orig = l_orig[is_in_bucket]
-        _l_abl = l_abl[is_in_bucket]
-        _l_cs = l_cs[is_in_bucket]
 
-        l_abl_minus_orig = (_l_abl - _l_orig).mean().item()
-        l_cs_minus_orig = (_l_cs - _l_orig).mean().item()
+        xaxis_value = xaxis_values[is_in_bucket].mean().item()
+        yaxis_value = yaxis_values[is_in_bucket].mean().item()
 
-        avg_loss_increase_abl_per_bucket.append(l_abl_minus_orig)
-        avg_loss_increase_cs_per_bucket.append(l_cs_minus_orig)
+        xaxis_values_per_bucket.append(xaxis_value)
+        yaxis_values_per_bucket.append(yaxis_value)
 
     df = pd.DataFrame({
-        "Full ablation": avg_loss_increase_abl_per_bucket,
-        "CSPA": avg_loss_increase_cs_per_bucket
+        "Full ablation": xaxis_values_per_bucket,
+        "CSPA": yaxis_values_per_bucket
     })
 
     fig = px.scatter(
@@ -63,7 +79,7 @@ def generate_loss_based_scatter(cspa_results, nbins=200):
         width=800,
         height=600,
         template="simple_white",
-        title="Effect of CSPA on loss"
+        title=title,
     ).update_traces(
         mode='markers+lines'
     ).update_layout(
@@ -73,16 +89,24 @@ def generate_loss_based_scatter(cspa_results, nbins=200):
     xmax = df["Full ablation"].max()
     fig.add_shape(type="line", x0=xmin, y0=xmin, x1=xmax, y1=xmax, line=dict(color="red", dash="dash", width=2), opacity=0.8)
     fig.add_hline(y=0, line=dict(color="red", dash="dash", width=2), opacity=0.8)
-    fig.add_vline(x=0, line_width=1, opacity=0.4, line_color="black")
 
-    fig.add_trace(go.Scatter(
-        x=[xmax+0.05, xmax+0.05],
-        y = [-0.08, 0.67],
-        mode="text",
-        text=["No intervention", "Full ablation"],
-        textposition="middle left",
-        textfont_size=14,
-    ))
+    if values == "loss":
+        fig.add_vline(x=0, line_width=1, opacity=0.4, line_color="black")
+        x_y_text_list = [(0.98, 0.54, "No intervention"), (0.98, 1.04, "Full ablation")]
+    elif values.startswith("kl-div"):
+        x_y_text_list = [(0.98, 0.17, "No intervention"), (0.98, 0.86, "Full ablation")]
+
+    for (x, y, text) in x_y_text_list:
+        fig.add_annotation(
+            text=text,
+            xref="paper", yref="paper",
+            x=x, y=y,
+            font_size=14,
+            xanchor="right",
+            showarrow=False,
+            align="left",
+        )
+
     fig.update_xaxes(showspikes=True, spikemode="across")
     fig.update_yaxes(showspikes=True, spikethickness=2)
     fig.update_layout(spikedistance=1000, hoverdistance=100)
