@@ -23,30 +23,18 @@ from transformer_lens.rs.callum2.generate_st_html.generate_html_funcs import (
 from transformer_lens.rs.callum2.generate_st_html.utils import (
     ST_HTML_PATH,
 )
-from transformer_lens.rs.callum2.cspa.cspa_functions import (
-    kl_div,
-)
-
 
 def generate_loss_based_scatter(cspa_results, nbins=200, values: Literal["kl-div", "kl-div-reversed", "loss"] = "loss"):
     assert values in ["kl-div", "kl-div-reversed", "loss"]
 
     if values.startswith("kl-div"):
-        logits_orig = cspa_results["logits_orig"]
-        logits_abl = cspa_results["logits_ablated"]
-        logits_cspa = cspa_results["logits"]
+        xaxis_values = cspa_results["kl_div_ablated_to_orig"].flatten()
+        yaxis_values = cspa_results["kl_div_cspa_to_orig"].flatten()
         title = "KL divergence of ablated predictions, relative to clean predictions"
-        if values == "kl-div":
-            xaxis_values = kl_div(logits_orig, logits_abl).flatten()
-            yaxis_values = kl_div(logits_orig, logits_cspa).flatten()
-        elif values == "kl-div-reversed":
-            xaxis_values = kl_div(logits_abl, logits_orig).flatten()
-            yaxis_values = kl_div(logits_cspa, logits_orig).flatten()
-
     elif values == "loss":
         l_orig = cspa_results["loss"].flatten()
         l_abl = cspa_results["loss_ablated"].flatten()
-        l_cspa = cspa_results["loss_projected"].flatten()
+        l_cspa = cspa_results["loss_cspa"].flatten()
         title = "Change in loss from ablation (relative to clean model)"
         xaxis_values = l_abl - l_orig
         yaxis_values = l_cspa - l_orig
@@ -125,7 +113,7 @@ def generate_scatter(
 ):
     # Get results
     l_orig = cspa_results["loss"]
-    l_cspa = cspa_results["loss_projected"]
+    l_cspa = cspa_results["loss_cspa"]
     l_abl = cspa_results["loss_ablated"]
     # Get the 2.5% cutoff examples, and the 5% cutoff examples
 
