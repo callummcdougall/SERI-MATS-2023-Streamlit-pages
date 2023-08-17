@@ -2,6 +2,17 @@
 import sys, os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
+# Stuff to make the page work on my local machine
+from pathlib import Path
+for p in [
+    Path(r"C:\Users\calsm\Documents\AI Alignment\SERIMATS_23\seri_mats_23_streamlit_pages"),
+    Path(r"/home/ubuntu/SERI-MATS-2023-Streamlit-pages"),
+]:
+    if os.path.exists(str_p := str(p.resolve())):
+        os.chdir(str_p)
+        if (sys.path[0] != str_p): sys.path.insert(0, str_p)
+        break
+
 import streamlit as st
 st.set_page_config(layout="wide")
 from streamlit.components.v1 import html
@@ -14,6 +25,7 @@ is_local = (platform.processor() != "")
 from transformer_lens.rs.callum2.st_page.streamlit_styling import styling
 from transformer_lens.rs.callum2.generate_st_html.generate_html_funcs import CSS
 from transformer_lens.rs.callum2.generate_st_html.utils import ST_HTML_PATH
+from transformer_lens.rs.callum2.st_page.Home import (NEGATIVE_HEADS, HTML_PLOTS_FILENAME)
 
 import torch as t
 t.set_grad_enabled(False)
@@ -22,7 +34,8 @@ styling()
 
 @st.cache_data(show_spinner=False, max_entries=1)
 def load_html():
-    filename = f"GZIP_HTML_PLOTS_b{200 if is_local else 51}_s61.pkl"
+    # filename = f"GZIP_HTML_PLOTS_b{200 if is_local else 51}_s61.pkl"
+    filename = HTML_PLOTS_FILENAME
     with gzip.open(ST_HTML_PATH / filename, "rb") as f:
         HTML_PLOTS = pickle.load(f)
     return HTML_PLOTS
@@ -31,7 +44,7 @@ HTML_PLOTS = load_html()
 
 BATCH_SIZE = len(HTML_PLOTS["LOGITS_ORIG"])
 
-NEG_HEADS = ["10.7", "11.10"]
+NEG_HEADS = [f"{layer}.{head}" for layer, head in NEGATIVE_HEADS]
 EFFECTS = ["direct", "indirect", "both"]
 LN_MODES = ["frozen", "unfrozen"]
 ABLATION_MODES = ["mean", "zero"]
@@ -145,7 +158,7 @@ mark {
 
 ## Loss difference from ablating negative head
 
-This visualisation shows the loss difference from ablating head 10.7 (for various different kinds of ablation).
+This visualisation shows the loss difference from ablating the attention head (for various different kinds of ablation).
 
 The sign is (loss with ablation) - (original loss), so <mark style="background-color:rgb(99,167,206)">&nbsp;blue</mark> (positive) means the loss increases when you ablate, i.e. the head is useful. <mark style="background-color:rgb(231,135,107)">&nbsp;Red</mark> means the head is harmful.
 

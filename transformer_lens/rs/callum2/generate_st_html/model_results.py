@@ -2,17 +2,25 @@
 
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
+import itertools
 from typing import Dict, Any, Tuple, List, Optional, Literal
 from transformer_lens import HookedTransformer, utils
 from functools import partial
 import einops
 from dataclasses import dataclass
+import gc
 from transformer_lens.hook_points import HookPoint
 from jaxtyping import Int, Float, Bool
 import torch as t
 from collections import defaultdict
 import time
+from tqdm import tqdm
 from torch import Tensor
+
+from transformer_lens.rs.callum2.cspa.cspa_utils import (
+    devices_are_equal,
+    kl_div,
+)
 
 Head = Tuple[int, int]
 
@@ -162,10 +170,14 @@ class HeadResults:
         return self.data.keys() # repetitive code, should improve
     def items(self):
         return self.data.items()
+    def to(self, device):
+        for key, value in self.items():
+            self[key] = value.to(device)
+        return self
 
 
 class LayerResults:
-    data: Dict[int, Any]
+    data: Dict[int, Tensor]
     '''
     Similar syntax to HeadResults, but the keys are ints (layers) not (layer, head) tuples.
     '''
@@ -179,6 +191,10 @@ class LayerResults:
         return self.data.keys() # repetitive code, should improve
     def items(self):
         return self.data.items()
+    def to(self, device):
+        for key, value in self.items():
+            self[key] = value.to(device)
+        return self
 
 
 class DictOfHeadResults:
@@ -200,6 +216,10 @@ class DictOfHeadResults:
         return self.data.keys() # repetitive code, should improve
     def items(self):
         return self.data.items()
+    def to(self, device):
+        for key, value in self.items():
+            self[key] = value.to(device)
+        return self
 
 
 class ModelResults:
@@ -227,20 +247,20 @@ class ModelResults:
         self.logits: DictOfHeadResults = DictOfHeadResults()
         self.dla: DictOfHeadResults = DictOfHeadResults()
         self.loss_diffs: DictOfHeadResults = DictOfHeadResults()
+        self.kl_divs: DictOfHeadResults = DictOfHeadResults()
 
         # We need the result vectors for each head, we'll use it for patching
+        self.z: HeadResults = HeadResults()
         self.result: HeadResults = HeadResults()
         self.result_mean: HeadResults = HeadResults()
-        self.z: HeadResults = HeadResults()
 
         # We need data for attn & weighted attn (and for projecting result at source token unembeds)
         self.pattern: HeadResults = HeadResults()
         self.v: HeadResults = HeadResults()
         self.out_norm: HeadResults = HeadResults()
 
-        # resid_pre for each head (to get unembed components), and resid_post the very end
+        # resid_pre for each head (to get unembed components)
         self.resid_pre: LayerResults = LayerResults()
-        self.resid_post: LayerResults = LayerResults()
         
         # Layernorm scaling factors, pre-attention layer for each head & at the very end
         self.scale_attn: LayerResults = LayerResults()
@@ -255,17 +275,65 @@ class ModelResults:
 
     def clear(self):
         """Empties all imtermediate results we don't need."""
-        del self.result
-        del self.result_mean
-        del self.resid_pre
-        del self.resid_post
-        del self.v
-        del self.scale_attn
+        if "result" in self.keys(): del self.result
+        if "result_mean" in self.keys(): del self.result_mean
+        if "resid_pre" in self.keys(): del self.resid_pre
+        if "v" in self.keys(): del self.v
+        if "scale_attn" in self.keys(): del self.scale_attn
         t.cuda.empty_cache()
+
+    def keys(self):
+        return self.__dict__.keys()
 
     def items(self):
         return self.__dict__.items()
 
+    def __getitem__(self, key):
+        return self.__dict__[key]
+
+    def __setitem__(self, key, value):
+        self.__dict__[key] = value
+
+    def to(self, device):
+        for key, value in self.items():
+            assert any([isinstance(value, cls) for cls in [Tensor, HeadResults, LayerResults, DictOfHeadResults, dict]]), f"Unknown type for {key}: {type(value)}"
+            if not isinstance(value, dict):
+                self[key] = value.to(device)
+        return self
+
+    def concat_results(self, other: "ModelResults", keep_logits: bool) -> "ModelResults":
+        '''
+        Given 2 model results objects, returns their concatenation along the batch dimension. Only keeps the non-cleared things.
+        '''
+        self.clear()
+        # Create new results, and make sure it's on the correct device (self.loss_orig will always be defined by this point)
+        new = ModelResults().to(self.loss_orig.device)
+        if not(keep_logits): # todo - find a better way to do this, it's janky as all hell right now 
+            del new.logits
+            del new.logits_orig
+            del new.dla
+        for k, v in self.items():
+            # All tensors have first dimension equal to batch dim; we concat along this
+            if isinstance(v, Tensor):
+                new[k] = t.cat([self[k], other[k]])
+            # All HeadResults or LayerResults are basically dicts where the values are tensors of shape (batch, ...)
+            elif isinstance(v, HeadResults):
+                new[k] = HeadResults({head: t.cat([v[head], other[k][head]]) for head in v.keys()})
+            elif isinstance(v, LayerResults):
+                new[k] = LayerResults({layer: t.cat([v[layer], other[k][layer]]) for layer in v.keys()})
+            # All DictOfHeadResults are dicts where the values are HeadResults
+            elif isinstance(v, DictOfHeadResults):
+                new[k] = DictOfHeadResults()
+                for key, headresults in v.items():
+                    new[k][key] = HeadResults({head: t.cat([results, other[k][key][head]]) for head, results in headresults.items()})
+            # Lastly, the misc dict!
+            elif isinstance(v, dict):
+                new[k] = {**v, **other[k]}
+            else:
+                raise ValueError(f"Unknown type for {k}: {type(v)}")
+        new.clear()
+        assert sorted(new.keys()) == sorted(self.keys()), f"Some keys were not concatenated. New - old = {set(new.keys())-set(self.keys())}, old - new = {set(self.keys())-set(new.keys())}."
+        return new
 
 
 
@@ -364,6 +432,7 @@ def model_fwd_pass_from_resid_pre(
     resid_pre: Float[Tensor, "batch seq d_model"],
     layer: int,
     return_type: Literal["logits", "resid_post", "both"] = "logits",
+    scale: Optional[Float[Tensor, "batch seq"]] = None,
 ) -> Float[Tensor, "batch seq d_vocab"]:
     '''
     Performs a forward pass starting from an intermediate point.
@@ -376,14 +445,18 @@ def model_fwd_pass_from_resid_pre(
     '''
     assert return_type in ["logits", "resid_post", "both"]
 
-    resid = resid_pre
+    resid = resid_pre.clone()
     for i in range(layer, model.cfg.n_layers):
         resid = model.blocks[i](resid)
     
     if (return_type == "resid_post"): return resid
 
-    resid_scaled = model.ln_final(resid)
-    logits = model.unembed(resid_scaled)
+    # Frozen or unfrozen layernorm?
+    if scale is None:
+        resid_scaled = model.ln_final(resid)
+        logits = model.unembed(resid_scaled)
+    else:
+        resid_scaled = (resid / resid.std(dim=-1, keepdim=True)) @ model.W_U + model.b_U
     
     return logits if (return_type == "logits") else (resid, logits)
 
@@ -426,14 +499,20 @@ def get_model_results(
     model: HookedTransformer,
     toks: Int[Tensor, "batch seq"],
     negative_heads: List[Tuple[int, int]],
+    result_mean: Optional[Dict[Tuple[int, int], Float[Tensor, "seq_plus d_model"]]] = None,
     use_cuda: bool = False,
     verbose: bool = False,
     effective_embedding: str = "W_E (including MLPs)",
-    result_mean: Optional[Dict[Tuple[int, int], Float[Tensor, "seq_plus d_model"]]] = None,
+    keep_logits: bool = True,
+    keep_seq_dim_when_mean_ablating: bool = True,
 ) -> ModelResults:
     '''
     result_mean is the vector we'll use for ablation, if supplied. It'll map e.g. (10, 7) to 
     the mean result vector for each seqpos (hopefully seqpos is larger than that for toks).
+
+    Logits take up the most space by far (because d_vocab dimension), so we can set keep_logits=False
+    to delete those from the model. Usually we don't actually want the logits; we want something that
+    is derived from them.
     '''
 
     W_EE_dict = get_effective_embedding(model)
@@ -481,15 +560,16 @@ def get_model_results(
     def cache_resid_pre(resid_pre: Float[Tensor, "batch seq d_model"], hook: HookPoint):
         model_results.resid_pre[hook.layer()] = resid_pre
 
-    def cache_resid_post(resid_post: Float[Tensor, "batch seq d_model"], hook: HookPoint, key: Any):
+    def cache_resid_post(resid_post: Float[Tensor, "batch seq d_model"], hook: HookPoint, key: str):
         hook.ctx[key] = resid_post
 
     def cache_scale_attn(scale: Float[Tensor, "batch seq *head 1"], hook: HookPoint):
         scale_corrected = scale.clone()
         if scale_corrected.ndim == 4:
-            scale_corrected = scale_corrected[:, :, 7]
+            # TODO - figure out exactly when we have 4 dims not 1 (I assume 1 per head, for causal interventions)
+            scale_corrected = scale_corrected[:, :, 0]
         model_results.scale_attn[hook.layer()] = scale_corrected
-    
+
 
     # To calculate the unembedding components, we need values per layer rather than per head
     all_layers = sorted(set([layer for layer, head in negative_heads]))
@@ -502,13 +582,16 @@ def get_model_results(
         model.add_hook(utils.get_act_name("v", layer), partial(cache_head_v, head=head))
         model.add_hook(utils.get_act_name("z", layer), partial(cache_head_z, head=head))
         model.add_hook(utils.get_act_name("pattern", layer), partial(cache_head_pattern, head=head))
+    # We'll eventually need to freeze head 11.10's output, even if it's not one of the ones we're measuring
+    if (11, 10) not in negative_heads:
+        model.add_hook(utils.get_act_name("z", 11), partial(cache_head_z, head=10))
     # We also need some things at the very end of the model
     model.add_hook(utils.get_act_name("resid_post", model.cfg.n_layers-1), partial(cache_resid_post, key="orig"))
     model.add_hook(utils.get_act_name("scale"), cache_scale)
 
     # Run the forward pass, to cache all values (and get original logits)
-    model_results.logits_orig, model_results.loss_orig = model(toks, return_type="both", loss_per_token=True)
-    model.reset_hooks(clear_contexts=False)
+    model_results.logits_orig, model_results.loss_orig = model.forward(toks, return_type="both", loss_per_token=True)
+    model.reset_hooks(including_permanent=True, clear_contexts=False)
 
 
     # ! Get all the tokens in context, and what unembeddings most attend to them, i.e. the pairs (S, Q)
@@ -538,36 +621,43 @@ def get_model_results(
         # Calculate the thing we'll be subbing in for mean ablation
         # * Note - we preserve the destination position when we take our mean, to preserve positional info, and for consistency with CSPA
         if result_mean is None:
-            model_results.result_mean[layer, head] = einops.reduce(
+            head_result_mean = einops.reduce(
                 model_results.result[layer, head], 
                 "batch seqQ d_model -> seqQ d_model", "mean"
             )
+            # If instructed, we also want to average over the sequence dimension
+            if not(keep_seq_dim_when_mean_ablating):
+                head_result_mean[:] = einops.reduce(
+                    head_result_mean,
+                    "seqQ d_model -> d_model", "mean"
+                )
         else:
-            assert result_mean[(layer, head)].shape[0] >= seq_len
-            model_results.result_mean[layer, head] = result_mean[(layer, head)][:seq_len]
+            head_result_mean = result_mean[(layer, head)]
+            if head_result_mean.ndim == 2:
+                # In this case, the result mean is shape (seq, d_model)
+                assert keep_seq_dim_when_mean_ablating, "Your `result_mean` vector has a sequence dimension, but you set `keep_seq_dim_when_mean_ablating=False`."
+                assert head_result_mean.shape[0] >= seq_len
+                head_result_mean = head_result_mean[:seq_len]
+            else:
+                # In this case, the result mean is shape (d_model,)
+                assert not(keep_seq_dim_when_mean_ablating), "Your `result_mean` vector has no sequence dimension, but you set `keep_seq_dim_when_mean_ablating=True`."
+                head_result_mean = einops.repeat(head_result_mean, "d_model -> seqQ d_model", seqQ=seq_len)
 
+        model_results.result_mean[layer, head] = head_result_mean
 
     # ! Now for the big ones: the logits, loss, and direct effects
+    # TODO - rewrite this big comment, it's a bit outdated
     # For each head, there are 12 different logit terms: 3 effects (direct/indirect/both), 2 ablation modes (mean/zero), 2 final layernorm modes (frozen/unfrozen)
     # I need to get the final value of the residual stream (pre-LN) for each of the 3*2*1 = 6 modes, then I can directly compute all 12 using model_results.scale / normalization
     # I calculate "both" by doing patching at the output of the head, "direct" by patching at resid_post final, and "indirect" by subtracting the two
     # What about DLA? For each head, there are 4 different kinds (mean/zero, frozen/unfrozen), and so I also store these at the same time
     # What about loss? We have 12 different losses, one for each of the 12 logit terms.
 
-    resid_post_orig = model.hook_dict[utils.get_act_name("resid_post", model.cfg.n_layers-1)].ctx.pop("orig")
+    resid_post_orig: Tensor = model.hook_dict[utils.get_act_name("resid_post", model.cfg.n_layers-1)].ctx.pop("orig")
 
-
-    def freeze_head_z(
-        z: Float[Tensor, "batch seq n_heads d_model"],
-        hook: HookPoint,
-        head: int,
-    ):
-        '''
-        Freeze a head's output to what it was before (we stored this in model results).
-        '''
+    def freeze_head_z(z: Float[Tensor, "batch seq n_heads d_model"], hook: HookPoint, head: int):
         z[:, :, head] = model_results.z[hook.layer(), head]
         return z
-
 
     def ablate_head_result(
         result: Float[Tensor, "batch seq n_heads d_model"],
@@ -578,82 +668,101 @@ def get_model_results(
         '''
         Simple form of ablation - we just replace the result at a particular head with the ablated values (either zero or
         the thing supplied by `ablation_values`).
+
+        Note, we'll be using the thing cached here as the vector to ablate with in the next block. It's either going to be 
+        the same as model_results.result_mean, or it'll be zero.
         '''
         assert ablation_type in ["mean", "zero"]
 
         if ablation_type == "zero":
             result[:, :, head] = t.zeros_like(result[:, :, head])
-        else:
+        elif ablation_type == "mean":
             result[:, :, head] = model_results.result_mean[hook.layer(), head]
 
         # Store in hook context, and return
-        hook.ctx[("result_ablated", head)] = result[:, :, head].clone()
+        hook.ctx[("result_ablated", head)] = result[:, :, head]
         return result
 
+
+    def get_logits(
+        resid: Float[Tensor, "batch seq d_model"],
+        ln_type: Literal["frozen", "unfrozen"],
+        bias: bool = True
+    ):
+        '''Helper function, because I find myself writing this equation out a lot.'''
+        assert ln_type in ["frozen", "unfrozen"]
+        scale = model_results.scale if (ln_type == "frozen") else resid.std(-1, keepdim=True)
+        bias = model.b_U if bias else 0.0
+        return (resid / scale) @ model.W_U + bias
 
 
     # For each head:
     for layer, head in negative_heads:
 
-        # For each ablation mode:
-        for ablation_type in ["mean"]: # , "zero"]:
+        # Get a list of all the ablation effects we're iterating through, so we can eventually calculate all the losses & KL divergences
+        effects = ["both", "direct", "indirect"]
+        # Always mean ablation (no longer doing "zero" too)
+        ablation_type = "mean"
+        # Get result hook name as shorthand
+        result_hook_name = utils.get_act_name("result", layer)
 
-            # ! Calculate new logits, for the "both" intervention effect
+        # ! Calculate new logits, for the "both" intervention effect
 
-            # Calculate "both" for unfrozen layernorm, by replacing this head's output with the ablated version and doing forward pass
-            # Also calculate "both" for frozen layernorm, by directly computing it from the ablated value of the residual stream (which we get from patching at attn head result)
-            model.add_hook(utils.get_act_name("result", layer), partial(ablate_head_result, head=head, ablation_type=ablation_type))
-            resid_post_both_ablated, logits_both_ablated = model_fwd_pass_from_resid_pre(model, model_results.resid_pre[layer], layer, return_type="both")
-            model_results.logits[("both", "unfrozen", ablation_type)][layer, head] = logits_both_ablated
-            model_results.logits[("both", "frozen", ablation_type)][layer, head] = (resid_post_both_ablated / model_results.scale) @ model.W_U + model.b_U
+        # We intervene at the head output, and use the `model_fwd_pass_from_resid_pre` function. Note that this returns logits and resid_post here;
+        # the former already has unfrozen layernorm applied, and the latter we manually apply frozen layernorm to get frozen logits
+        model.add_hook(result_hook_name, partial(ablate_head_result, head=head, ablation_type=ablation_type))
+        resid_post_both_ablated = model_fwd_pass_from_resid_pre(model, model_results.resid_pre[layer], layer, return_type="resid_post")
+        model.reset_hooks(clear_contexts=False)
+        model_results.logits[("both", "frozen", ablation_type)][layer, head] = get_logits(resid_post_both_ablated, "frozen")
+        model_results.logits[("both", "unfrozen", ablation_type)][layer, head] = get_logits(resid_post_both_ablated, "unfrozen")
 
-            # ! Calculate new logits & C-S classification, for the "direct" intervention effect, and calculate the DLA
+        # ! Calculate new logits for the "direct" intervention effect, and calculate the DLA
 
-            # Calculate "direct" for frozen layernorm, directly from the new value of the residual stream (resid_post_direct_ablated)
-            # Also calculate "direct" for unfrozen layernorm, again directly from this new value of the residual stream
-            resid_post_DLA = model_results.result[layer, head] - model.hook_dict[utils.get_act_name("result", layer)].ctx.pop(("result_ablated", head))
-            resid_post_direct_ablated = resid_post_orig - resid_post_DLA
-            logits_direct_ablated_frozen = (resid_post_direct_ablated / model_results.scale) @ model.W_U + model.b_U
-            logits_direct_ablated_unfrozen = (resid_post_direct_ablated / resid_post_direct_ablated.std(-1, keepdim=True)) @ model.W_U + model.b_U
-            model_results.logits[("direct", "frozen", ablation_type)][layer, head] = logits_direct_ablated_frozen
-            model_results.logits[("direct", "unfrozen", ablation_type)][layer, head] = logits_direct_ablated_unfrozen
+        # Rather than running forward passes, we manually compute the direct effect, and new layernorm scale factors
+        # `head_DLA_in_resid` is (residual stream direct contribution of this head) - (mean ablated direct contribution)
+        head_result_mean_ablated = model.hook_dict[result_hook_name].ctx.pop(("result_ablated", head))
+        head_DLA_in_resid: Tensor = model_results.result[layer, head] - head_result_mean_ablated
+        resid_post_direct_ablated = resid_post_orig - head_DLA_in_resid
+        logits_direct_ablated_frozen = get_logits(resid_post_direct_ablated, "frozen")
+        logits_direct_ablated_unfrozen = get_logits(resid_post_direct_ablated, "unfrozen")
+        model_results.logits[("direct", "frozen", ablation_type)][layer, head] = logits_direct_ablated_frozen
+        model_results.logits[("direct", "unfrozen", ablation_type)][layer, head] = logits_direct_ablated_unfrozen
+        # This is also where we compute the direct logit attribution for this head
+        model_results.dla[("frozen", ablation_type)][layer, head] = get_logits(head_DLA_in_resid, "frozen", bias=False)
+        model_results.dla[("unfrozen", ablation_type)][layer, head] = model_results.logits_orig - logits_direct_ablated_unfrozen
 
-            # This is also where we compute the direct logit attribution for this head
-            model_results.dla[("frozen", ablation_type)][layer, head] = (resid_post_DLA / model_results.scale) @ model.W_U
-            model_results.dla[("unfrozen", ablation_type)][layer, head] = model_results.logits_orig - logits_direct_ablated_unfrozen
+        # ! Calculate new logits for the "indirect" intervention effect
 
-            # ! Calculate new logits & C-S classification, for the "indirect" intervention effect
+        # We do this by taking the residual stream at the end (it's what we get when both are ablated, but with DLA added back in)
+        resid_post_indirect_ablated = resid_post_both_ablated + head_DLA_in_resid
+        model_results.logits[("indirect", "frozen", ablation_type)][layer, head] = get_logits(resid_post_indirect_ablated, "frozen")
+        model_results.logits[("indirect", "unfrozen", ablation_type)][layer, head] = get_logits(resid_post_indirect_ablated, "unfrozen")
 
-            # Calculate "indirect" for frozen layernorm, directly from the new value of the residual stream (resid_post_indirect_ablated)
-            # Also calculate "indirect" for unfrozen layernorm, again directly from this new value of the residual stream
-            resid_post_indirect_ablated = resid_post_orig + (resid_post_both_ablated - resid_post_direct_ablated)
-            model_results.logits[("indirect", "frozen", ablation_type)][layer, head] = (resid_post_indirect_ablated / model_results.scale) @ model.W_U + model.b_U
-            model_results.logits[("indirect", "unfrozen", ablation_type)][layer, head] = (resid_post_indirect_ablated / resid_post_indirect_ablated.std(-1, keepdim=True)) @ model.W_U + model.b_U
+        # ! Calculate the effect of ablating the indirect effect minus 11.10, i.e. ablating all indirect paths which DON'T involve head 11.10
 
-            # ! Calculate the effect of ablating the indirect effect minus 11.10, i.e. ablating all indirect paths which DON'T involve head 11.10
+        if layer < 11:
+            # Here, we ablate the head's indirect path, but freeze 11.10's output so we don't count this path. Then we add 10.7 back at the end, for the direct effect
+            later_layer, later_head = (11, 10)
+            effect = f"indirect (excluding {later_layer}.{later_head})"
+            effects.append(effect)
+            model.add_hook(result_hook_name, partial(ablate_head_result, head=head, ablation_type=ablation_type))
+            model.add_hook(utils.get_act_name("z", later_layer), partial(freeze_head_z, head=later_head))
+            # This gives us the result of ablating everything except indirect path -> 11.10, so we add back in DLA for 10.7 to ablate only (indirect excl. 11.10)
+            resid_post_both_excl_L11H10_ablated = model_fwd_pass_from_resid_pre(model, model_results.resid_pre[layer], layer, return_type="resid_post")
+            model.reset_hooks(clear_contexts=False)
+            resid_post_indirect_excl_L11H10_ablated = resid_post_both_excl_L11H10_ablated + head_DLA_in_resid
+            model_results.logits[(effect, "frozen", ablation_type)][layer, head] = get_logits(resid_post_indirect_excl_L11H10_ablated, "frozen")
+            model_results.logits[(effect, "unfrozen", ablation_type)][layer, head] = get_logits(resid_post_indirect_excl_L11H10_ablated, "unfrozen")
 
-            if (layer, head) == (10, 7):
-                # For this case, we perform 3 interventions: (1) ablate output of head 10.7 (i.e. actually change attn result), (2) freeze 11.10's input, (3) recover 10.7's full output at resid post
-                later_layer, later_head = (11, 10)
-                effect = f"indirect (excluding {later_layer}.{later_head})"
-                model.add_hook(utils.get_act_name("result", layer), partial(ablate_head_result, head=head, ablation_type=ablation_type)) # (1)
-                model.add_hook(utils.get_act_name("z", later_layer), partial(freeze_head_z, head=later_head)) # (2)
-                # Unlike the last 2 times we performed `model_fwd_pass_from_resid_pre`, we're calculating logits explicitly rather than returning them (cause we need to add DLA back in)
-                resid_post_pre_step3 = model_fwd_pass_from_resid_pre(model, model_results.resid_pre[layer], layer, return_type="resid_post") # (3) (and below)
-                resid_post_post_step3 = resid_post_pre_step3 + resid_post_DLA
-                model_results.logits[(effect, "frozen", ablation_type)][layer, head] = (resid_post_post_step3 / model_results.scale) @ model.W_U + model.b_U
-                model_results.logits[(effect, "unfrozen", ablation_type)][layer, head] = (resid_post_post_step3 / resid_post_post_step3.std(-1, keepdim=True)) @ model.W_U + model.b_U
+        # ! Calculate new loss (and while doing this, get all the tensors which tell us if this example is copy suppression)
 
-            # ! Calculate new loss (and while doing this, get all the tensors which tell us if this example is copy suppression)
-
-            # For each of these six logits, calculate loss differences (for regular ablation, and CS-preserving ablation)
-            for effect in ["both", "direct", "indirect"] + ([f"indirect (excluding {later_layer}.{later_head})"] if (layer, head) == (10, 7) else []):
-                for ln_mode in ["frozen", "unfrozen"]:
-
-                    # Get the logits, compute and store the corresponding loss
-                    logits = model_results.logits[(effect, ln_mode, ablation_type)][layer, head]
-                    loss_ablated = model.loss_fn(logits, toks, per_token=True)
-                    model_results.loss_diffs[(effect, ln_mode, ablation_type)][layer, head] = loss_ablated - model_results.loss_orig
+        # For each of these six logits, calculate loss differences
+        for effect, ln_mode in itertools.product(effects, ["frozen", "unfrozen"]):
+            # Get the logits, compute and store the corresponding loss
+            logits_ablated = model_results.logits[(effect, ln_mode, ablation_type)][layer, head]
+            loss_ablated = model.loss_fn(logits_ablated, toks, per_token=True)
+            model_results.loss_diffs[(effect, ln_mode, ablation_type)][layer, head] = loss_ablated - model_results.loss_orig
+            model_results.kl_divs[(effect, ln_mode, ablation_type)][layer, head] = kl_div(model_results.logits_orig, logits_ablated)
 
     if verbose:
         print(f"{'Computing model results':<24} ... {time.time()-t0:.2f}s")
@@ -665,4 +774,73 @@ def get_model_results(
     elif (not use_cuda) and current_device != "cpu":
         model = model.cuda()
 
+    if not(keep_logits):
+        del model_results.logits_orig
+        del model_results.logits
+        del model_results.dla
+
+    model.reset_hooks(including_permanent=True)
+    return model_results
+
+
+
+# TODO - remove all default arguments on the non-batched version of this function (don't let anything get missed)
+
+def get_model_results_batched(
+    model: HookedTransformer,
+    toks: Int[Tensor, "batch seq"],
+    max_batch_size: int,
+    negative_heads: List[Tuple[int, int]],
+    use_cuda: bool = False,
+    store_in_cuda: bool = False,
+    verbose: bool = False,
+    effective_embedding: str = "W_E (including MLPs)",
+    result_mean: Optional[Dict[Tuple[int, int], Float[Tensor, "seq_plus d_model"]]] = None,
+    keep_logits: bool = True,
+    keep_seq_dim_when_mean_ablating: bool = True,
+) -> ModelResults:
+    '''
+    Does same thing as `get_model_results`, but does it in a batched way (avoiding cuda errors).
+    '''
+    chunks = toks.shape[0] // max_batch_size
+
+    device = t.device("cuda" if use_cuda else "cpu")
+    result_mean = {k: v.to(device) for k, v in result_mean.items()}
+
+    orig_model_device = str(next(iter(model.parameters())).device)
+    orig_toks_device = str(toks.device)
+    target_device = "cuda" if use_cuda else "cpu"
+    if not devices_are_equal(orig_model_device, target_device):
+        model = model.to(target_device)
+    if not devices_are_equal(orig_toks_device, target_device):
+        toks = toks.to(target_device)
+
+    model_results = None
+
+    for i, _toks in enumerate(t.chunk(toks, chunks=chunks)):
+        if verbose:
+            if i == 0: bar = tqdm(total=chunks, desc=f"Batch {i+1}/{chunks}, shape {tuple(_toks.shape)}")
+            t0 = time.time()
+
+        model_results_new = get_model_results(
+            model,
+            _toks,
+            negative_heads,
+            use_cuda=use_cuda,
+            effective_embedding=effective_embedding,
+            result_mean=result_mean,
+            keep_logits=keep_logits,
+            keep_seq_dim_when_mean_ablating=keep_seq_dim_when_mean_ablating,
+        )
+        if not(store_in_cuda): model_results_new = model_results_new.to("cpu")
+        model_results = model_results_new if (model_results is None) else model_results.concat_results(model_results_new, keep_logits=keep_logits)
+
+        gc.collect()
+        t.cuda.empty_cache()
+
+        if verbose:
+            t0 = time.time() - t0
+            bar.update()
+            bar.set_description(f"Batch {i+1}/{chunks}, shape {tuple(_toks.shape)}, time {t0:.2f}s")
+    
     return model_results

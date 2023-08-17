@@ -15,6 +15,19 @@ import torch as t
 t.set_grad_enabled(False)
 # from transformers import AutoTokenizer
 
+import platform
+is_local = (platform.processor() != "")
+
+# Stuff to make the page work on my local machine
+for p in [
+    Path(r"C:\Users\calsm\Documents\AI Alignment\SERIMATS_23\seri_mats_23_streamlit_pages"),
+    Path(r"/home/ubuntu/SERI-MATS-2023-Streamlit-pages"),
+]:
+    if os.path.exists(str_p := str(p.resolve())):
+        os.chdir(str_p)
+        if (sys.path[0] != str_p): sys.path.insert(0, str_p)
+        break
+
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 st.set_page_config(layout="wide")
@@ -30,6 +43,16 @@ from transformer_lens.rs.callum2.generate_st_html.utils import ST_HTML_PATH
 #     "b_Q": model.b_Q[10, 7],
 #     "b_K": model.b_K[10, 7],
 # }
+
+if is_local:
+    NEGATIVE_HEADS = [(10, 1), (10, 7), (11, 10)]
+    FILENAME = "OV_QK_circuits_less_local.pkl"
+else:
+    NEGATIVE_HEADS = [(10, 7), (11, 10)]
+    FILENAME = "OV_QK_circuits_less_public.pkl"
+
+NEG_HEADS = [f"{layer}.{head}" for layer, head in NEGATIVE_HEADS]
+
 
 error_msg = """Token **`[{s}]`** (from {msg} token input) not in vocab!
 
@@ -49,19 +72,16 @@ def plot_full_matrix_histogram(
     dict_to_store_less: dict,
     src: Union[str, List[str]],
     dest: Union[str, List[str]],
-    k: int = 10,
-    head: str = "10.7",
-    neg: bool = True,
-    circuit: Literal["QK", "OV"] = "OV",
-    focus_on: Literal["source", "destination"] = "source",
+    k: int,
+    neg: bool,
+    circuit: Literal["QK", "OV"],
+    focus_on: Literal["source", "destination"],
 ):
     '''
     By default, this looks at what dest most attends to (QK) or what src causes to be most suppressed (OV).
 
     But if "flip" is True, then it looks at what things attend to src most (OV), or what causes dest to be most suppressed (OV).
     '''
-    _head = head.replace(".", "")
-    tokenizer = dict_to_store_less["tokenizer"]
     W_EE_V = dict_to_store_less["W_EE_V"]
     W_U_O = dict_to_store_less["W_U_O"]
     W_U_Q = dict_to_store_less["W_U_Q"]
@@ -118,7 +138,7 @@ def plot_full_matrix_histogram(
             # full_vector: Float[Tensor, "d_vocab"] = W_U_Q_toks_scaled @ W_EE_scaled.T / denom
             full_vector: Float[Tensor, "d_vocab"] = W_U_Q[dest_toks[0]] @ W_EE_K.T / denom
 
-        full_vector_topk = full_vector.topk(k, dim=-1, largest=True)
+        full_vector_topk = full_vector.topk(k, dim=-1, largest=not(neg))
     
     y = full_vector_topk.values.tolist()
     x = list(map(lambda x: repr(x.replace("Ġ", " ")), tokenizer.batch_decode(full_vector_topk.indices)))
@@ -140,13 +160,13 @@ def plot_full_matrix_histogram(
     
     title = f"<br><b style='font-size:22px;'>{circuit} circuit</b>:<br>"
     if (circuit, focus_on) == ("OV", "destination"):
-        title += customwrap(f"Which source tokens most suppress the prediction of <b>{dest[0].replace(' ', 'Ġ')!r}</b> ?")
+        title += f"Which source tokens most {'suppress' if neg else 'boost'} the prediction of <b>{dest[0].replace(' ', 'Ġ')!r}</b> ?" # customwrap(
     elif (circuit, focus_on) == ("OV", "source"):
-        title += customwrap(f"Which predictions does source token <b>{src[0].replace(' ', 'Ġ')!r}</b> suppress most, when attended to?")
+        title += f"Which predictions does source token <b>{src[0].replace(' ', 'Ġ')!r}</b> {'suppress' if neg else 'boost'} most, when attended to?"
     elif (circuit, focus_on) == ("QK", "source"):
-        title += customwrap(f"Which tokens' unembeddings most attend to source token <b>{src[0].replace(' ', 'Ġ')!r}</b> ?")
+        title += f"Which tokens' unembeddings {'least' if neg else 'most'} attend to source token <b>{src[0].replace(' ', 'Ġ')!r}</b> ?"
     elif (circuit, focus_on) == ("QK", "destination"):
-        title += customwrap(f"Which source tokens does the unembedding of <b>{dest[0].replace(' ', 'Ġ')!r}</b> attend to most?")
+        title += f"Which source tokens does the unembedding of <b>{dest[0].replace(' ', 'Ġ')!r}</b> attend to {'least' if neg else 'most'}?"
 
     df = pd.DataFrame({
         "x": x, "y": y, "color": color
@@ -176,10 +196,11 @@ def plot_full_matrix_histogram(
     return fig
 
 @st.cache_data(show_spinner=False, max_entries=1)
-def get_dict_to_store_less():
-    return pickle.load(gzip.open(ST_HTML_PATH / f"OV_QK_circuits_less.pkl", "rb"))
+def get_mega_dict() -> dict:
+    return pickle.load(gzip.open(ST_HTML_PATH / FILENAME))
 
-dict_to_store_less = get_dict_to_store_less()
+mega_dict = get_mega_dict()
+tokenizer = mega_dict.pop("tokenizer")
 
 st.markdown(
 r"""
@@ -291,7 +312,9 @@ def create_histograms(
     src_input: str,
     dest_input: str,
     k: int,
-    focus_on: Literal["source", "destination"]
+    focus_on: Literal["source", "destination"],
+    head_name: str,
+    flipped: bool,
 ):
     # Split by commas
     src_input_split = src_input.strip(" ,").split(",")
@@ -304,8 +327,6 @@ def create_histograms(
     if None in dest_str_toks: return None, None
     # Check if any are just whitespace, e.g. if input was {" pier",} then this might have accidentally created whitespace
 
-    tokenizer = dict_to_store_less["tokenizer"]
-
     for s, msg in zip(src_str_toks + dest_str_toks, ["source" for _ in src_str_toks] + ["destination" for _ in dest_str_toks]):
         _s = s if not s.startswith(" ") else "Ġ" + s[1:]
         if _s not in tokenizer.vocab:
@@ -313,25 +334,23 @@ def create_histograms(
             return None, None
 
     hist_QK = plot_full_matrix_histogram(
-        dict_to_store_less,
+        mega_dict[head_name],
         src=src_str_toks,
         dest=dest_str_toks,
         k=k,
-        circuit="QK",
         neg=False,
-        head="10.7",
+        circuit="QK",
         focus_on=focus_on,
     )
     if hist_QK is None: return None, None
 
     hist_OV = plot_full_matrix_histogram(
-        dict_to_store_less,
+        mega_dict[head_name],
         src=src_str_toks,
         dest=dest_str_toks,
         k=k,
+        neg=True if not(flipped) else False,
         circuit="OV",
-        neg=True,
-        head="10.7",
         focus_on=focus_on,
     )
     return hist_QK, hist_OV
@@ -346,10 +365,16 @@ if "waiting_to_display" not in st.session_state:
 
 
 # Widgets for defining histogram params. When these are changed, the page is reloaded, and the code to display the histograms is below this.
+head_name = st.sidebar.radio("Pick a head", NEG_HEADS, key="head_name", on_change=queue_up_histogram)
 cols = st.columns(2)
 with cols[1]:
     k = st.slider("Number of top tokens to show: ", min_value=5, max_value=30, value=15, key="k", on_change=queue_up_histogram)
     focus_on = st.radio("Which token to focus on?", ["source", "destination"], key="focus_on", on_change=queue_up_histogram)
+    if is_local:
+        flipped = st.checkbox("Flip order of OV circuit?", key="flipped", on_change=queue_up_histogram)
+    else:
+        flipped = False
+        st.session_state["flipped"] = flipped
 with cols[0]:
     src_input = st.text_input("Source token(s)", "' token'", key="src_input", on_change=queue_up_histogram)
     dest_input = st.text_input("Destination token(s)", "' token'", key="dest_input", on_change=queue_up_histogram)
@@ -362,10 +387,19 @@ st.markdown("<br>", unsafe_allow_html=True)
 cols2 = st.columns(2)
 if st.session_state.get("waiting_to_display", False):
     st.session_state["waiting_to_display"] = False
-    hist_QK, hist_OV = create_histograms(st.session_state.src_input, st.session_state.dest_input, st.session_state.k, st.session_state.focus_on)
+    hist_QK, hist_OV = create_histograms(
+        src_input = st.session_state.src_input,
+        dest_input = st.session_state.dest_input,
+        k = st.session_state.k,
+        focus_on = st.session_state.focus_on,
+        head_name = st.session_state.head_name,
+        flipped = st.session_state.flipped
+    )
     if hist_QK is not None:
         with cols2[0]: st.plotly_chart(hist_QK, use_container_width=True)
         with cols2[1]: st.plotly_chart(hist_OV, use_container_width=True)
+    else:
+        st.error("noo")
 
 st.markdown(
 r"""

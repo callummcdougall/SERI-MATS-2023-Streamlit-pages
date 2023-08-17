@@ -215,7 +215,7 @@ def generate_html_for_cspa_plots(
     it blue in situations where this isn't captured by CSPA (i.e. projected_diff / ablated_diff is close to 1).
     '''
     loss_ablated_minus_orig = cspa_results["loss_ablated"] - cspa_results["loss"]
-    loss_projected_minus_orig = cspa_results["loss_projected"] - cspa_results["loss"]
+    loss_cspa_minus_orig = cspa_results["loss_cspa"] - cspa_results["loss"]
 
     n_tokens = sum(map(len, str_toks_list))
     if n_tokens > 1000:
@@ -227,7 +227,7 @@ def generate_html_for_cspa_plots(
     
     html_plots = {}
 
-    for b, (str_toks, l_origs, l_abl_diffs, l_proj_diffs) in enumerate(zip(str_toks_list, cspa_results["loss"], loss_ablated_minus_orig, loss_projected_minus_orig)):
+    for b, (str_toks, l_origs, l_abl_diffs, l_proj_diffs) in enumerate(zip(str_toks_list, cspa_results["loss"], loss_ablated_minus_orig, loss_cspa_minus_orig)):
         
         importances = [None] * len(str_toks)
         hover_text_list = []
@@ -527,12 +527,13 @@ def generate_html_for_DLA_plot(
 
 def generate_4_html_plots(
     model: HookedTransformer,
-    data_toks: Float[Int, "batch seq_len"],
+    data_toks: Float[Tensor, "batch seq_len"],
     data_str_toks_parsed: List[List[str]],
-    negative_heads: List[Tuple[int, int]] = NEGATIVE_HEADS,
-    save_files: bool = False,
-    model_results: Optional[ModelResults] = None,
-    verbose: bool = False,
+    negative_heads: List[Tuple[int, int]],
+    save_files: bool,
+    model_results: Optional[ModelResults],
+    result_mean: Optional[Dict[Tuple[int, int], Float[Tensor, "seq_plus d_model"]]],
+    verbose: bool,
     restrict_computation: List[str] = ["LOSS", "LOGITS", "ATTN", "UNEMBEDDINGS"],
 ) -> Dict[str, Dict[Tuple, str]]:
     '''
@@ -557,7 +558,7 @@ def generate_4_html_plots(
     BATCH_SIZE = data_toks.shape[0]
 
     if model_results is None:
-        model_results = get_model_results(model, data_toks, negative_heads=negative_heads, verbose=verbose)
+        model_results = get_model_results(model, data_toks, negative_heads=negative_heads, result_mean=result_mean, verbose=verbose)
 
 
     # ! Calculate the loss diffs from ablating
@@ -573,7 +574,7 @@ def generate_4_html_plots(
                 for full_ablation_type_tuple, loss_diff_by_head in model_results.loss_diffs.items():
                     # Get the loss per token, and pad with zeros at the end (cause we don't know the last value!)
                     full_ablation_type_name = "+".join(full_ablation_type_tuple)
-                    if head_name not in full_ablation_type_name: # this makes sure "indirect excluding 11.10" isn't counted for head 11.10
+                    if not((layer == 11) and ("excluding 11.10" in full_ablation_type_name)):
                         loss_diff = loss_diff_by_head[layer, head][batch_idx]
                         loss_diff_padded = t.cat([loss_diff, t.zeros((1,))], dim=-1)
                         html_25, html_max = generate_html_for_loss_plot(
@@ -775,6 +776,7 @@ def generate_4_html_plots_batched(
     max_batch_size: int = 50,
     start_idx: int = 0,
     negative_heads: List[Tuple[int, int]] = NEGATIVE_HEADS,
+    result_mean: Optional[Dict[Tuple[int, int], Float[Tensor, "seq_plus d_model"]]] = None,
     verbose: bool = False,
 ) -> Dict[str, Dict[Tuple, str]]:
 
@@ -794,7 +796,10 @@ def generate_4_html_plots_batched(
                 data_toks=_toks,
                 data_str_toks_parsed=data_str_toks_parsed[lower: upper],
                 negative_heads=negative_heads,
+                result_mean=result_mean,
                 verbose=verbose,
+                save_files=False,
+                model_results=None,
             )
             with gzip.open(ST_HTML_PATH / f"_GZIP_HTML_PLOTS_{lower}_{upper}.pkl", "wb") as f:
                 pickle.dump(html_plots, f)

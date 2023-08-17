@@ -24,7 +24,11 @@ from transformer_lens.rs.callum2.generate_st_html.utils import (
     ST_HTML_PATH,
 )
 
-def generate_loss_based_scatter(cspa_results, nbins=200, values: Literal["kl-div", "kl-div-reversed", "loss"] = "loss"):
+def generate_loss_based_scatter(
+    cspa_results,
+    nbins: int = 200,
+    values: Literal["kl-div", "kl-div-reversed", "loss"] = "loss",
+):
     assert values in ["kl-div", "kl-div-reversed", "loss"]
 
     if values.startswith("kl-div"):
@@ -364,11 +368,12 @@ def add_cspa_to_streamlit_page(
         if verbose: print(f"{'Generating DLA plots':<22} ... {time.time()-t0:.2f}")
         if verbose: print(f"{'Generating logit plots':<22} ...", end="\r"); t0 = time.time()
 
-        # ! Get all logit visulisations (this looks janky because I like being able to compare different forms of CSPA!)
+        # ! Get all logit visulisations (this can look janky because I like being able to compare different forms of CSPA!)
+        if not isinstance(cspa_results, dict): cspa_results = {"": cspa_results}
         html_logits_list = {
             k: generate_html_for_logit_plot(
                 full_toks = toks_cpu,
-                full_logprobs = cspa_results[k]["logits"][:html_plots_batch_idx].log_softmax(-1),
+                full_logprobs = cspa_results[k]["logits_cspa"][:html_plots_batch_idx].log_softmax(-1),
                 full_non_ablated_logprobs = cspa_results[k]["logits_orig"][:html_plots_batch_idx].log_softmax(-1),
                 model = model,
             )

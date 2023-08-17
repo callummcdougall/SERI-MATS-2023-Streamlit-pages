@@ -17,6 +17,7 @@ import pandas as pd
 import numpy as np
 from copy import copy
 import math
+from tqdm import tqdm
 import pickle
 
 from transformer_lens.rs.callum2.cspa.cspa_semantic_similarity import (
@@ -26,6 +27,12 @@ from transformer_lens.rs.callum2.cspa.cspa_semantic_similarity import (
 )
 from transformer_lens.rs.callum2.generate_st_html.utils import (
     ST_HTML_PATH,
+)
+from transformer_lens.rs.callum2.cspa.cspa_utils import (
+    devices_are_equal,
+    first_occurrence_2d,
+    concat_dicts,
+    kl_div,
 )
 
 Head = Tuple[int, int]
@@ -162,24 +169,15 @@ FUNCTION_STR_TOKS =  [
 ]
 
 
-def first_occurrence(array_1D):
-    series = pd.Series(array_1D)
-    duplicates = series.duplicated(keep='first')
-    inverted = ~duplicates
-    return inverted.values
-
-def first_occurrence_2d(tensor_2D):
-    device = tensor_2D.device
-    array_2D = utils.to_numpy(tensor_2D)
-    return t.from_numpy(np.array([first_occurrence(row) for row in array_2D])).to(device)
 
 
 
-def gram_schmidt(vectors: Float[Tensor, "... d num"]) -> Float[Tensor, "... d num"]:
+
+def gram_schmidt(basis: Float[Tensor, "... d num"]) -> Float[Tensor, "... d num"]:
     '''
     Performs Gram-Schmidt orthonormalization on a batch of vectors, returning a basis.
 
-    `vectors` is a batch of vectors. If it was 2D, then it would be `num` vectors each with length
+    `basis` is a batch of vectors. If it was 2D, then it would be `num` vectors each with length
     `d`, and I'd want a basis for these vectors in d-dimensional space. If it has more dimensions 
     at the start, then I want to do the same thing for all of them (i.e. get multiple independent
     bases).
@@ -189,7 +187,7 @@ def gram_schmidt(vectors: Float[Tensor, "... d num"]) -> Float[Tensor, "... d nu
     is not equal.
     '''
     # Make a copy of the vectors
-    basis = vectors.clone()
+    basis = basis.clone()
     num_vectors = basis.shape[-1]
     
     # Iterate over each vector in the batch, starting from the zeroth
@@ -203,9 +201,9 @@ def gram_schmidt(vectors: Float[Tensor, "... d num"]) -> Float[Tensor, "... d nu
         # Normalize this vector (we can set it to zero if it's not linearly independent)
         basis_vec_norm = basis[..., i].norm(dim=-1, keepdim=True)
         basis[..., i] = t.where(
-            basis_vec_norm > 1e-4,
+            basis_vec_norm > 1e-6,
             basis[..., i] / basis_vec_norm,
-            t.zeros_like(basis[..., i])
+            0.0,
         )
     
     return basis
@@ -244,12 +242,10 @@ def project(
     )
     if return_coeffs: return components_in_proj_dir
     
-    if only_keep is not None:
-        components_in_proj_dir = t.where(
-            (components_in_proj_dir < 0) if (only_keep == "neg") else (components_in_proj_dir > 0),
-            components_in_proj_dir,
-            t.zeros_like(components_in_proj_dir)
-        )
+    if only_keep == "pos":
+        components_in_proj_dir = t.where(components_in_proj_dir > 0, components_in_proj_dir, 0.0)
+    elif only_keep == "neg":
+        components_in_proj_dir = t.where(components_in_proj_dir < 0, components_in_proj_dir, 0.0)
 
     vectors_projected = einops.einsum(
         components_in_proj_dir,
@@ -334,6 +330,11 @@ def get_effective_embedding(model: HookedTransformer) -> Float[Tensor, "d_vocab 
 
 
 
+    
+
+
+
+
 def get_cspa_results(
     model: HookedTransformer,
     toks: Int[Tensor, "batch seq"],
@@ -344,10 +345,16 @@ def get_cspa_results(
     only_keep_negative_components: bool = False,
     semantic_dict: dict = {},
     result_mean: Optional[Dict[Tuple[int, int], Float[Tensor, "seq_plus d_model"]]] = None,
-    use_cuda: bool = False,
+    return_dla: bool = False,
+    return_logits: bool = False,
+    verbose: bool = False,
+    keep_self_attn: bool = True,
 ) -> Tuple[
         Dict[str, Float[Tensor, "batch seq-1"]],
-        Dict[Tuple[str, str], List[Tuple[str, str]]],
+        Int[Tensor, "n 4"],
+        Float[Tensor, "n"],
+        Int[Tensor, "batch seqK K_semantic"],
+        float,
     ]:
     '''
     Short explpanation of the copy-suppression preserving ablation (hereby CSPA), with
@@ -392,36 +399,23 @@ def get_cspa_results(
 
         > A dictionary of the results, with "loss", "loss_ablated", and "loss_cspa", plus the
           logits & KL divergences, as keys.
-        > A dict mapping (batch_idx, d) to the list of (s, s*) which we preserve
-          in our ablation.
+        > A dict mapping (batch_idx, d) to the list of (s, s*) which we preserve in our
+          ablation.
     '''
 
     # ====================================================================
-    # STEP 0: Setup
+    # ! STEP 0: Define setup vars, move things onto the correct device, get semantically similar toks
     # ====================================================================
 
     LAYER, HEAD = negative_head
-
-    W_U = model.W_U
-
     batch_size, seq_len = toks.shape
-    
-    FUNCTION_TOKS = model.to_tokens(FUNCTION_STR_TOKS, prepend_bos=False).squeeze()
     
     model.reset_hooks(including_permanent=True)
     t.cuda.empty_cache()
+    
+    W_U = model.W_U
+    FUNCTION_TOKS = model.to_tokens(FUNCTION_STR_TOKS, prepend_bos=False).squeeze()
 
-    current_device = str(next(iter(model.parameters())).device)
-    if use_cuda and current_device == "cpu":
-        model = model.cuda()
-    elif (not use_cuda) and current_device != "cpu":
-        model = model.cpu()
-
-
-
-    # ====================================================================
-    # STEP 1: Get effective embeddings, and semantically similar unembeddings
-    # ====================================================================
 
     if K_semantic > 1:
         # Flatten all tokens, and convert them into str toks
@@ -436,9 +430,8 @@ def get_cspa_results(
 
 
 
-
     # ====================================================================
-    # STEP 2: Define hook functions to project or ablate
+    # ! STEP 1: Perform clean and ablated model forward passes (while caching clean activations, for use later)
     # ====================================================================
     
     # Get all hook names
@@ -452,16 +445,9 @@ def get_cspa_results(
     hook_name_scale_final = utils.get_act_name("scale")
     hook_names_to_cache = [hook_name_scale, hook_name_v, hook_name_pattern, hook_name_scale_final, hook_name_resid, hook_name_resid_final, hook_name_result]
 
+    t_clean_and_ablated = time.time()
 
-
-    # ==================================
-    # STEP 2D: q
-    # This is hard, because we need to actually recompute it from the resid pre.
-    # See archived code at the end of this doc.
-    # ==================================
-
-
-    # ! (1) Get clean results (also use this to get residual stream before layer 10)
+    # * Get clean results (also use this to get residual stream before layer 10)
     model.reset_hooks()
     logits, cache = model.run_with_cache(
         toks,
@@ -471,7 +457,7 @@ def get_cspa_results(
     loss = model.loss_fn(logits, toks, per_token=True)
     resid_post_final = cache[hook_name_resid_final] # [batch seqQ d_model]
     resid_pre = cache[hook_name_resid] # [batch seqK d_model]
-    # * Weird error which I should figure out; sometimes it seems like scale isn't recorded as different across heads
+    # TODO odd thing; sometimes it seems like scale isn't recorded as different across heads. why?
     scale = cache[hook_name_scale]
     if scale.ndim == 4:
         scale = cache[hook_name_scale][:, :, HEAD] # [batch seqK 1]
@@ -480,20 +466,26 @@ def get_cspa_results(
     v = cache[hook_name_v][:, :, HEAD] # [batch seqK d_head]
     pattern = cache[hook_name_pattern][:, HEAD] # [batch seqQ seqK]      
     del cache
-    
 
-    # ! (2) Perform complete ablation (via a direct calculation)
-    head_result_orig_mean_ablated = einops.reduce(head_result_orig, "batch seqQ d_model -> seqQ d_model", "mean")
+    # * Perform complete ablation (via a direct calculation)
     if batch_size * seq_len < 1000:
         assert result_mean is not None, "You should be using an externally supplied mean ablation vector for such a small dataset."
+    if result_mean is None:
+        head_result_orig_mean_ablated = einops.reduce(head_result_orig, "batch seqQ d_model -> seqQ d_model", "mean")
+    else:
         head_result_orig_mean_ablated = result_mean[(LAYER, HEAD)][:seq_len]
     resid_post_final_mean_ablated = resid_post_final + (head_result_orig_mean_ablated - head_result_orig) # [batch seq d_model]
     logits_mean_ablated = (resid_post_final_mean_ablated / final_scale) @ model.W_U + model.b_U
     loss_mean_ablated = model.loss_fn(logits_mean_ablated, toks, per_token=True)
     model.reset_hooks()
 
+    t_clean_and_ablated = time.time() - t_clean_and_ablated
 
-    # ! (3) Get CSPA results (this is the long part!)
+
+
+    # ====================================================================
+    # ! STEP 3: Get CSPA results (this is the hard part!)
+    # ====================================================================
 
     # Multiply by output matrix, then by attention probabilities
     output = v @ model.W_O[LAYER, HEAD] # [batch seqK d_model]
@@ -503,18 +495,25 @@ def get_cspa_results(
     if result_mean is None:
         output_attn_mean_ablated = einops.reduce(output_attn, "batch seqQ seqK d_model -> seqQ 1 d_model", "mean")
     else:
-        output_attn_pre_mean_ablation = einops.einsum(
+        # output_attn_pre_mean_ablation = einops.einsum(
+        #     result_mean[(LAYER, HEAD)][:seq_len], pattern,
+        #     "seqQ d_model, batch seqQ seqK -> batch seqQ seqK d_model"
+        # )
+        # # TODO - which of these two below is more principled? Doesn't really matter; they get approximately the same results.
+        # # output_attn_mean_ablated = einops.reduce(output_attn_pre_mean_ablation, "batch seqQ seqK d_model -> seqQ 1 d_model", "mean")
+        # output_attn_mean_ablated = einops.reduce(output_attn_pre_mean_ablation, "batch seqQ seqK d_model -> seqQ seqK d_model", "mean")
+
+        output_attn_mean_ablated = einops.einsum(
             result_mean[(LAYER, HEAD)][:seq_len], pattern,
             "seqQ d_model, batch seqQ seqK -> batch seqQ seqK d_model"
         )
-        output_attn_mean_ablated = einops.reduce(output_attn_pre_mean_ablation, "batch seqQ seqK d_model -> seqQ 1 d_model", "mean")
-        # TODO - if I'm taking mean over `seqK` (i.e. over source tokens), then do I even need to multiply by attention probs? Should I?!
 
     # If we ablate QK, this means we need to get the top predicted semantically similar tokens
     if "qk" in interventions:
         # Get the unembeddings we'll be projecting onto (also get the dict of (s, s*) pairs and store in context)
+        # Most of the elements in `semantically_similar_unembeddings` will be zero
         t0 = time.time()
-        semantically_similar_unembeddings, s_sstar_pairs, top_K_and_Ksem_mask = get_top_predicted_semantically_similar_tokens(
+        semantically_similar_unembeddings, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, top_K_and_Ksem_mask = get_top_predicted_semantically_similar_tokens(
             toks=toks,
             resid_pre=resid_pre,
             semantically_similar_toks=semantically_similar_toks,
@@ -522,10 +521,13 @@ def get_cspa_results(
             function_toks=FUNCTION_TOKS,
             model=model,
             final_scale=final_scale,
+            keep_self_attn=keep_self_attn,
         )
+        if verbose: print(f"Fraction of unembeddings we keep = {(semantically_similar_unembeddings.abs() > 1e-6).float().mean():.4f}")
         time_for_sstar = time.time() - t0
     else:
         time_for_sstar = 0.0
+        # In this case, s_s_u will be like the thing above, but without basically all of its elements masked to zero
         semantically_similar_unembeddings = einops.repeat(
             W_U.T[semantically_similar_toks],
             "batch seqK K_semantic d_model -> batch seqQ seqK d_model K_semantic",
@@ -543,20 +545,18 @@ def get_cspa_results(
             only_keep = "neg" if only_keep_negative_components else None
         ) + output_attn_mean_ablated
     else:
-        # In this case, we assume we are filtering for QK (cause we're doing at least one). We want to set the output to
-        # be the mean-ablated output at all source positions which are not in the top predicted semantically similar tokens.
+        # In this case, we assume we are filtering for QK (cause we're doing at least one). We want to set the output to be the mean-ablated
+        # output at all source positions which are not in the top predicted semantically similar tokens.
+        def any_reduction(tensor: Tensor, dims: tuple):
+            assert dims == (3,)
+            return tensor.any(dims[0])
         top_K_and_Ksem_mask_any = einops.reduce(
             top_K_and_Ksem_mask, 
             "batch seqQ seqK K_semantic -> batch seqQ seqK",
-            reduction = lambda tensor, dims: tensor.any(dims[0])
-        )
-        top_K_and_Ksem_mask_any_repeated = einops.repeat(
-            top_K_and_Ksem_mask_any,
-            "batch seqQ seqK -> batch seqQ seqK d_model",
-            d_model = model.cfg.d_model,
+            reduction = any_reduction # dims will be supplied as (3,) I think
         )
         output_attn_cspa = t.where(
-            top_K_and_Ksem_mask_any_repeated,
+            top_K_and_Ksem_mask_any.unsqueeze(-1),
             output_attn,
             output_attn_mean_ablated,
         )
@@ -573,24 +573,25 @@ def get_cspa_results(
     logits_cspa = (resid_post_final_cspa / final_scale) @ model.W_U + model.b_U
     loss_cspa = model.loss_fn(logits_cspa, toks, per_token=True)
 
-    if use_cuda and current_device == "cpu":
-        model = model.cpu()
-    elif (not use_cuda) and current_device != "cpu":
-        model = model.cuda()
-
     cspa_results = {
         "loss": loss,
         "loss_cspa": loss_cspa,
         "loss_ablated": loss_mean_ablated,
-        "dla": dla_cspa,
-        "logits": logits_cspa,
-        "logits_orig": logits,
-        "logits_ablated": logits_mean_ablated,
+        # "dla": dla_cspa,
+        # "logits": logits_cspa,
+        # "logits_orig": logits,
+        # "logits_ablated": logits_mean_ablated,
         "kl_div_ablated_to_orig": kl_div(logits, logits_mean_ablated),
         "kl_div_cspa_to_orig": kl_div(logits, logits_cspa),
     }
+    if return_dla: 
+        cspa_results["dla"] = dla_cspa
+    if return_logits:
+        cspa_results["logits_cspa"] = logits_cspa
+        cspa_results["logits_orig"] = logits
+        cspa_results["logits_ablated"] = logits_mean_ablated
 
-    return cspa_results, s_sstar_pairs, time_for_sstar
+    return cspa_results, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, semantically_similar_toks, time_for_sstar
 
 
 
@@ -607,7 +608,10 @@ def get_cspa_results_batched(
     result_mean: Optional[Dict[Tuple[int, int], Float[Tensor, "seq_plus d_model"]]] = None,
     use_cuda: bool = False,
     verbose: bool = False,
-    start_idx: int = 0,
+    compute_s_sstar_dict: bool = False,
+    return_dla: bool = False,
+    return_logits: bool = False,
+    keep_self_attn: bool = True,
 ) -> Dict[str, Float[Tensor, "batch seq-1"]]:
     '''
     Gets results from CSPA, by splitting the tokens along batch dimension and running it several 
@@ -615,23 +619,33 @@ def get_cspa_results_batched(
 
     See the `get_cspa_results` docstring for more info.
     '''
+    batch_size, seq_len = toks.shape
     chunks = toks.shape[0] // max_batch_size
-    lower_upper_list = []
 
     device = t.device("cuda" if use_cuda else "cpu")
     result_mean = {k: v.to(device) for k, v in result_mean.items()}
 
-    for i, _toks in enumerate(t.chunk(toks, chunks=chunks)):
+    orig_model_device = str(next(iter(model.parameters())).device)
+    orig_toks_device = str(toks.device)
+    target_device = "cuda" if use_cuda else "cpu"
+    if not devices_are_equal(orig_model_device, target_device):
+        model = model.to(target_device)
+    if not devices_are_equal(orig_toks_device, target_device):
+        toks = toks.to(target_device)
 
-        # Set the values of `lower` and `upper`, i.e. batch sizes (useful for saving files)
-        lower, upper = i*max_batch_size, (i+1)*max_batch_size
-        lower_upper_list.append((lower, upper))
-        # We only start saving results from `start_idx` onwards (so we don't waste what we've already saved)
-        if lower < start_idx: continue
-        if verbose: print(f"Running batch {i+1}/{chunks} of size {_toks.shape[0]} ... ", end="\r"); t0 = time.time()
+    CSPA_RESULTS = {}
+    TOP_K_AND_KSEM_PER_DEST_TOKEN = t.empty((0, 4), dtype=t.long, device=target_device)
+    LOGIT_LENS_FOR_TOP_K_KSEM = t.empty((0,), dtype=t.float, device=target_device)
+    SEMANTICALLY_SIMILAR_TOKS = t.empty((0, seq_len, K_semantic), dtype=t.long, device=target_device)
+
+
+    for i, _toks in enumerate(t.chunk(toks, chunks=chunks)):
+        if verbose and i == 0:
+            bar = tqdm(total=chunks, desc=f"Batch {i+1}/{chunks}, shape {_toks.shape}")
         
         # Get new results
-        cspa_results, s_sstar_pairs, time_for_sstar = get_cspa_results(
+        t_get = time.time()
+        cspa_results, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, semantically_similar_toks, t_sstar = get_cspa_results(
             model = model,
             toks = _toks,
             negative_head = negative_head,
@@ -641,46 +655,46 @@ def get_cspa_results_batched(
             only_keep_negative_components = only_keep_negative_components,
             semantic_dict = semantic_dict,
             result_mean = result_mean,
-            use_cuda = use_cuda,
+            keep_self_attn = keep_self_attn,
+            return_dla = return_dla,
+            return_logits = return_logits,
         )
+        t_get = time.time() - t_get
 
-        # Save results, and clear cache
-        with open(ST_HTML_PATH / f"_CSPA_and_S_SSTAR_{lower}_{upper}.pkl", "wb") as f:
-            pickle.dump((cspa_results, s_sstar_pairs), f)
-        del cspa_results, s_sstar_pairs
+        # Add them to all accumulated results
+        t_agg = time.time()
+        CSPA_RESULTS = concat_dicts(CSPA_RESULTS, cspa_results)
+        TOP_K_AND_KSEM_PER_DEST_TOKEN = t.cat([TOP_K_AND_KSEM_PER_DEST_TOKEN, top_K_and_Ksem_per_dest_token], dim=0)
+        LOGIT_LENS_FOR_TOP_K_KSEM = t.cat([LOGIT_LENS_FOR_TOP_K_KSEM, logit_lens_for_top_K_Ksem], dim=0)
+        SEMANTICALLY_SIMILAR_TOKS = t.cat([SEMANTICALLY_SIMILAR_TOKS, semantically_similar_toks], dim=0)
+        del cspa_results, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, semantically_similar_toks
         t.cuda.empty_cache()
-        if verbose: print(f"Running batch {i+1}/{chunks} of size {_toks.shape[0]} ... {time.time()-t0:.2f} (get s* time = {time_for_sstar:.2f})")
+        t_agg = time.time() - t_agg
 
-    # Load all results from where they are saved
-    if verbose:
-        print("\nLoading all results from where they were saved ...", end="\r")
-        t0 = time.time()
-    for (lower, upper) in lower_upper_list:
-        _cspa_results, _s_sstar_pairs = pickle.load(open(ST_HTML_PATH / f"_CSPA_and_S_SSTAR_{lower}_{upper}.pkl", "rb"))
-        if lower == 0:
-            # This is the first batch, so just set the results to be the thing you read
-            s_sstar_pairs = _s_sstar_pairs
-            cspa_results = {k: v.cpu() for k, v in _cspa_results.items()}
-        else:
-            # Concatenate the results tensors (for loss, ablated loss, and CSPA (projected) loss)
-            for key in cspa_results:
-                cspa_results[key] = t.concat([cspa_results[key], _cspa_results[key].cpu()], dim=0)
-            # Add the (s, s*) pairs, making sure to increment by the appropriate batch index
-            if _s_sstar_pairs is not None:
-                for (b, sQ), v in _s_sstar_pairs.items():
-                    s_sstar_pairs[(b+upper, sQ)] = v
+        if verbose:
+            bar.update()
+            bar.set_description(f"Batch {i+1}/{chunks}, shape = {tuple(_toks.shape)}, times = [get = {t_get-t_sstar:.2f}, s* = {t_sstar:.2f}, aggregate = {t_agg:.2f}]")
 
-    if verbose:
-        print(f"Loading all results from where they were saved ... {time.time()-t0:.2f}")
-        print("Deleting HTML plots we no longer need ... ", end="\r")
-        t0 = time.time()
-    for (lower, upper) in lower_upper_list:
-        os.remove(ST_HTML_PATH / f"_CSPA_and_S_SSTAR_{lower}_{upper}.pkl")
-    if verbose:
-        print(f"Deleting HTML plots we no longer need ... {time.time()-t0:.2f}")
+    if compute_s_sstar_dict:
+        if verbose: print("Converting top K and Ksem to dict ...", end="\r"); t0 = time.time()
+        S_SSTAR_PAIRS = convert_top_K_and_Ksem_to_dict(
+            top_K_and_Ksem_per_dest_token = TOP_K_AND_KSEM_PER_DEST_TOKEN,
+            logit_lens_for_top_K_Ksem = LOGIT_LENS_FOR_TOP_K_KSEM,
+            toks = toks,
+            semantically_similar_toks = SEMANTICALLY_SIMILAR_TOKS,
+            model = model,
+        )
+        if verbose: print(f"Converting top K and Ksem to dict ... {time.time()-t0:.2f}")
+        to_return = (CSPA_RESULTS, S_SSTAR_PAIRS)
+    else:
+        to_return = CSPA_RESULTS
 
-    return cspa_results, s_sstar_pairs
-
+    if not devices_are_equal(orig_model_device, target_device):
+        model = model.to(orig_model_device)
+    if not devices_are_equal(orig_toks_device, target_device):
+        toks = toks.to(orig_toks_device)
+    
+    return to_return
 
 
 
@@ -692,10 +706,11 @@ def get_top_predicted_semantically_similar_tokens(
     function_toks: Int[Tensor, "tok"],
     model: HookedTransformer,
     final_scale: Optional[Float[Tensor, "batch seqQ 1"]] = None,
-    s_sstar_contains_indices: bool = False,
+    keep_self_attn: bool = True,
 ) -> Tuple[
     Float[Tensor, "batch seqQ seqK d_model K_semantic"], 
-    Dict[tuple, list],
+    Int[Tensor, "n 4"], 
+    Float[Tensor, "n"], 
     Bool[Tensor, "batch seqQ seqK K_semantic"],
 ]:
     '''
@@ -720,17 +735,19 @@ def get_top_predicted_semantically_similar_tokens(
             The unembeddings of the semantically similar tokens, with all the vectors except the
             ones we're actually using set to zero.
         
-        s_sstar_pairs: defaultdict(list)
-            Keys are (b, sQ) indices, values are lists of (s, s*) str_tok pairs which are preserved
-            in CSPA, where s is a source token and s* is a semantically similar token that is predicted
-            at the destination position.
+        top_K_and_Ksem_per_dest_token: [n 4]
+            The i-th row is the (b, sQ, sK, K_s) indices of the i-th top predicted semantically similar
+            token.
+
+        logit_lens_for_top_K_and_Ksem_per_dest_token: [n]
+            The i-th element is the logits for the corresponding prediction in the previous tensor. This
+            is used to make sure that the eventual s_star dictionary we create is sorted correctly.
         
         mask: [batch seqQ seqK K_semantic]
             The mask which we'll be applying once we project the unembeddings.
     '''
     semantically_similar_unembeddings = model.W_U.T[semantically_similar_toks].transpose(-1, -2) # [batch seqK d_model K_semantic]
     batch_size, seq_len = toks.shape
-    s_sstar_pairs = defaultdict(list)
     
     # If K_unembeddings is None, then we have no restrictions, and we use all the top K_semantic toks for each seqK
     if K_unembeddings is None:
@@ -750,14 +767,15 @@ def get_top_predicted_semantically_similar_tokens(
             "batch seqQ d_model, batch seqK d_model K_semantic -> batch seqQ seqK K_semantic",
         )
 
-        # MASK: make sure function words are never the source token (because we've observed that the QK circuit has managed to learn this)
+        # * MASK: make sure function words are never the source token (because we've observed that the QK circuit has managed to learn this)
         is_fn_word = (toks[:, :, None] == function_toks).any(dim=-1) # [batch seqK]
         logit_lens = t.where(einops.repeat(is_fn_word, "batch seqK -> batch 1 seqK 1"), -1e9, logit_lens)
-        # MASK: apply causal mask
+        # * MASK: apply causal mask (this might be strict if keep_self_attn is False)
         seqQ_idx = einops.repeat(t.arange(seq_len), "seqQ -> 1 seqQ 1 1").to(logit_lens.device)
         seqK_idx = einops.repeat(t.arange(seq_len), "seqK -> 1 1 seqK 1").to(logit_lens.device)
-        logit_lens = t.where(seqQ_idx < seqK_idx, -1e9, logit_lens)
-        # MASK: each source token should only be counted at its first instance
+        causal_mask = (seqQ_idx < seqK_idx) if keep_self_attn else (seqQ_idx <= seqK_idx)
+        logit_lens = t.where(causal_mask, -1e9, logit_lens)
+        # * MASK: each source token should only be counted at its first instance
         # Note, we apply this mask to get our topk values (so no repetitions), but we don't want to apply it when we're choosing pairs to keep
         first_occurrence_mask = einops.repeat(first_occurrence_2d(toks), "batch seqK -> batch 1 seqK 1")
         logit_lens_for_topk = t.where(~first_occurrence_mask, -1e9, logit_lens)
@@ -771,26 +789,53 @@ def get_top_predicted_semantically_similar_tokens(
             for dest_posn in range(seq_len):
                 K_u_dest = math.ceil(K_unembeddings * (dest_posn + 1))
                 top_K_and_Ksem_per_dest_token_values[:, dest_posn] = logit_lens_for_topk[:, dest_posn].flatten(-2, -1).topk(K_u_dest, dim=-1).values[..., [[-1]]]
-        # We also want to get the list of (s, s*) for analysis afterwards
+        
+        # Later we'll be computing the list of (s, s*) for analysis afterwards
         top_K_and_Ksem_mask = (logit_lens + 1e-6 >= top_K_and_Ksem_per_dest_token_values) # [batch seqQ seqK K_s]
-        top_K_and_Ksem_per_dest_token = t.nonzero(top_K_and_Ksem_mask) # [n batch_seqQ_seqK_K_s], n >= batch * seqQ * K_u (more if we're double-counting source tokens)
-        for b, sQ, sK, K_s in top_K_and_Ksem_per_dest_token.tolist():
-            s = (f"[{sK}] " if s_sstar_contains_indices else "") + repr(model.to_single_str_token(toks[b, sK].item()))
-            sstar = repr(model.to_single_str_token(semantically_similar_toks[b, sK, K_s].item()))
-            LL = logit_lens[b, sQ, sK, K_s].item() # for sorting with (and maybe I'll add it to the visualization too)
-            # Make sure we only count each (s, s*) pair once (since this dict is for the HTML visualisations)
-            if (s, sstar) not in list(map(lambda x: x[1:], s_sstar_pairs[(b, sQ)])):
-                s_sstar_pairs[(b, sQ)].append((LL, s, sstar))
-        # Make sure we rank order the entries in each dictionary by how much they're being predicted
-        for (b, sQ), s_star_list in s_sstar_pairs.items():
-            s_sstar_pairs[(b, sQ)] = sorted(s_star_list, key = lambda x: x[0], reverse=True)
+        top_K_and_Ksem_per_dest_token = t.nonzero(top_K_and_Ksem_mask) # [n 4 = (batch, seqQ, seqK, K_s)], n >= batch * seqQ * K_u (more if we're double-counting source tokens)
+        b, sQ, sK, K_s = top_K_and_Ksem_per_dest_token.T.tolist()
+        logit_lens_for_top_K_and_Ksem_per_dest_token = logit_lens[b, sQ, sK, K_s]
 
         # Use this boolean mask to set some of the unembedding vectors to zero
         unembeddings = einops.repeat(semantically_similar_unembeddings, "batch seqK d_model K_semantic -> batch 1 seqK d_model K_semantic")
         top_K_and_Ksem_mask_repeated = einops.repeat(top_K_and_Ksem_mask, "batch seqQ seqK K_semantic -> batch seqQ seqK 1 K_semantic")
         semantically_similar_unembeddings = unembeddings * top_K_and_Ksem_mask_repeated.float()
 
-    return semantically_similar_unembeddings, s_sstar_pairs, top_K_and_Ksem_mask
+    return semantically_similar_unembeddings, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_and_Ksem_per_dest_token, top_K_and_Ksem_mask
+
+
+
+
+def convert_top_K_and_Ksem_to_dict(
+    top_K_and_Ksem_per_dest_token: Int[Tensor, "n 4"], # each row is (batch, seqQ, seqK, K_s)
+    logit_lens_for_top_K_Ksem: Float[Tensor, "n"], # each element is logits (we keep it for sorting purposes)
+    toks: Int[Tensor, "batch seq"],
+    semantically_similar_toks: Int[Tensor, "batch seq s_K"],
+    model: HookedTransformer,
+):
+    '''
+    Making this function because it's more efficient to do this all at once (model.to_str_tokens is slow!).
+    '''
+    s_sstar_pairs = defaultdict(list)
+
+    # Get all batch indices, dest pos indices, src pos indices, and semantically similar indices
+    b, sQ, sK, K_s = top_K_and_Ksem_per_dest_token.T.tolist()
+
+    # Get the string representations of (s, s*) that we'll be using in the html viz (s comes with its position)
+    s_str_toks = model.to_str_tokens(toks[b, sK], prepend_bos=False)
+    s_repr = [f"[{s_posn}] {repr(s_str_tok)}" for s_posn, s_str_tok in zip(sK, s_str_toks)]
+    sstar_str_toks = model.to_str_tokens(semantically_similar_toks[b, sK, K_s], prepend_bos=False)
+    sstar_repr = [repr(sstar_str_tok) for sstar_str_tok in sstar_str_toks]
+
+    # Add them all to our dict
+    for _b, _sQ, _s, _sstar, _LL in zip(b, sQ, s_repr, sstar_repr, logit_lens_for_top_K_Ksem):
+        s_sstar_pairs[(_b, _sQ)].append((_LL, _s, _sstar))
+    
+    # Make sure we rank order the entries in each dictionary by how much they're being predicted
+    for (b, sQ), s_star_list in s_sstar_pairs.items():
+        s_sstar_pairs[(b, sQ)] = sorted(s_star_list, key = lambda x: x[0], reverse=True)
+    
+    return s_sstar_pairs
 
 
 
@@ -877,29 +922,3 @@ def get_top_predicted_semantically_similar_tokens(
 #     pattern[:, HEAD] = new_pattern
 #     return pattern
 
-
-
-
-def kl_div(
-    logits1: Float[Tensor, "... d_vocab"],
-    logits2: Float[Tensor, "... d_vocab"],
-):
-    '''
-    Estimates KL divergence D_KL( logits1 || logits2 ), i.e. where logits1 is the "ground truth".
-
-    Each tensor is assumed to have all dimensions be the batch dimension, except for the last one
-    (which is a distribution over the vocabulary).
-
-    In our use-cases, logits1 will be the non-ablated version of the model.
-    '''
-
-    logprobs1 = logits1.log_softmax(dim=-1)
-    logprobs2 = logits2.log_softmax(dim=-1)
-    logprob_diff = logprobs1 - logprobs2
-    probs1 = logits1.softmax(dim=-1)
-
-    return einops.reduce(
-        probs1 * logprob_diff,
-        "... d_vocab -> ...",
-        reduction = "sum",
-    )

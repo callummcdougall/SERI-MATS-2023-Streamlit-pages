@@ -3,11 +3,25 @@ import os, sys
 from pathlib import Path
 
 # Stuff to make the page work on my local machine
-p = Path(r"C:\Users\calsm\Documents\AI Alignment\SERIMATS_23\seri_mats_23_streamlit_pages")
-if os.path.exists(str_p := str(p.resolve())):
-    os.chdir(str_p)
-    if (sys.path[0] != str_p):
-        sys.path.insert(0, str_p)
+for p in [
+    Path(r"C:\Users\calsm\Documents\AI Alignment\SERIMATS_23\seri_mats_23_streamlit_pages"),
+    Path(r"/home/ubuntu/SERI-MATS-2023-Streamlit-pages"),
+]:
+    if os.path.exists(str_p := str(p.resolve())):
+        os.chdir(str_p)
+        if (sys.path[0] != str_p): sys.path.insert(0, str_p)
+        break
+
+import platform
+is_local = (platform.processor() != "")
+if is_local:
+    NEGATIVE_HEADS = [(10, 7), (11, 10), (10, 1)]
+    HTML_PLOTS_FILENAME = "GZIP_HTML_PLOTS_b48_s61.pkl"
+else:
+    NEGATIVE_HEADS = [(10, 7), (11, 10)]
+    HTML_PLOTS_FILENAME = "GZIP_HTML_PLOTS_b51_s61.pkl"
+
+NEGATIVE_HEADS = sorted(NEGATIVE_HEADS)
 
 st.markdown(
 r"""

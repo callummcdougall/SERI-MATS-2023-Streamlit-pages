@@ -2,3 +2,4 @@ __pycache__*
 *.ipynb
 !**/callum2/**/*.ipynb
 *settings.json
+**/callum2/**/*.pkl

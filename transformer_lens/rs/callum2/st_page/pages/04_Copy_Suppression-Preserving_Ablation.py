@@ -10,6 +10,17 @@ import gzip
 import platform
 is_local = (platform.processor() != "")
 
+# Stuff to make the page work on my local machine
+from pathlib import Path
+for p in [
+    Path(r"C:\Users\calsm\Documents\AI Alignment\SERIMATS_23\seri_mats_23_streamlit_pages"),
+    Path(r"/home/ubuntu/SERI-MATS-2023-Streamlit-pages"),
+]:
+    if os.path.exists(str_p := str(p.resolve())):
+        os.chdir(str_p)
+        if (sys.path[0] != str_p): sys.path.insert(0, str_p)
+        break
+
 from transformer_lens.rs.callum2.st_page.streamlit_styling import styling
 from transformer_lens.rs.callum2.generate_st_html.utils import ST_HTML_PATH
 from transformer_lens.rs.callum2.cspa.cspa_plots import (
