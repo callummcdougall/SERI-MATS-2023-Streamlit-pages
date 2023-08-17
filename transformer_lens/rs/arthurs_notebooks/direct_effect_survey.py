@@ -29,7 +29,7 @@ USE_RANDOM_SAMPLE = False
 INDIRECT = True # disable for orig funcitonality
 
 # Should we calculate KL to some model? Set to `None` if instead just considering loss reducing effects
-GPT2_MODEL_FOR_KL = Optional[Literal["gpt2", "gpt2-xl"]] = "gpt2"
+GPT2_MODEL_FOR_KL: Optional[Literal["gpt2", "gpt2-xl"]] = "gpt2"
 
 # %%
 
@@ -57,25 +57,20 @@ mytargets = torch.LongTensor(targets[:BATCH_SIZE])
 
 #%%
 
-if GPT2_MODEL_FOR_KL is not None:
+if GPT2_MODEL_FOR_KL is not None: # TODO check this is working
     gpt2_for_kl = HookedTransformer.from_pretrained(GPT2_MODEL_FOR_KL)
-
-#%%
-
-if GPT2_MODEL_FOR_KL is not None:
     gpt2_for_kl_probs = t.zeros((BATCH_SIZE, max_seq_len, model.cfg.d_vocab))
     print("Starting GPT2-XL stuff")
-    assert model.cfg.d_vocab == gpt2xl.cfg.d_vocab, "Probably incompatible"
+    assert model.cfg.d_vocab == gpt2_for_kl.cfg.d_vocab, "Probably incompatible"
     for batch_idx in tqdm(range(BATCH_SIZE)):
-        logits = gpt2xl(mybatch[batch_idx : batch_idx + 1].to(DEVICE))[0]
-        assert list(logits.shape) == [max_seq_len, gpt2xl.cfg.d_vocab]
-        log_xl_probs[batch_idx] = t.nn.functional.log_softmax(logits, dim=-1).cpu()
+        logits = gpt2_for_kl(mybatch[batch_idx : batch_idx + 1].to(DEVICE))[0]
+        assert list(logits.shape) == [max_seq_len, gpt2_for_kl.cfg.d_vocab]
+        gpt2_for_kl_probs[batch_idx] = t.nn.functional.log_softmax(logits, dim=-1).cpu()
         gc.collect()
         t.cuda.empty_cache()
-    del gpt2xl
+    del gpt2_for_kl
     gc.collect()
     t.cuda.empty_cache()
-    # xl_probs = log_xl_probs.cuda()
     print("Done GPT2-XL stuff")
 
 # %%
@@ -136,10 +131,21 @@ torch.testing.assert_close(
 
 results_log = {}
 
-tl_path = Path(__file__)
-assert "/TransformerLens/" in str(tl_path), "This is a hacky way to get the path"
-while tl_path.stem!="TransformerLens" and str(tl_path.parent)!=str(tl_path):
-    tl_path = tl_path.parent
+def setter_hook(z, hook, setting_value, setter_head_idx=None, intended_shape=None): # TODO unify assertions so adding signal to them is easier
+
+    if setter_head_idx is not None:
+        assert list(z.shape) == [BATCH_SIZE, max_seq_len, model.cfg.n_heads, model.cfg.d_model]
+        z[:, :, setter_head_idx] = mean_output[None, None]
+
+    else: 
+        if intended_shape is None:
+            assert list(z.shape) == [BATCH_SIZE, max_seq_len, model.cfg.d_model] == list(setting_value.shape), f"{z.shape=}, {setting_value.shape=} {[BATCH_SIZE, max_seq_len, model.cfg.d_model]}; {hook.name=}"
+        else:
+            assert list(z.shape) == intended_shape, (z.shape, intended_shape)
+
+        z[:] = setting_value
+
+    return z
 
 def resetter_hook(z, hook, reset_value):
     assert list(z.shape) == [BATCH_SIZE, max_seq_len, model.cfg.d_model]
@@ -174,18 +180,18 @@ for FREEZE_LN in [False, True]:
         gc.collect()
         t.cuda.empty_cache()
         
-        if USE_GPT2XL:
+        if GPT2_MODEL_FOR_KL is not None:
             gc.collect()
             t.cuda.empty_cache()
 
             # also do a GPT2-XL experiment
-            gpt2xl_kl = get_metric_from_end_state(
+            gpt2_kl = get_metric_from_end_state(
                 model=model,
                 end_state=end_state.cpu(),
                 targets=None,
                 return_logits=False,
                 mode="kl",
-                log_probs_reference=log_xl_probs,
+                log_probs_reference=gpt2_for_kl_probs,
                 device="cuda",
                 frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
             )
@@ -196,7 +202,7 @@ for FREEZE_LN in [False, True]:
                 targets=None,
                 return_logits=False,
                 mode="kl",
-                log_probs_reference=log_xl_probs,
+                log_probs_reference=gpt2_for_kl_probs,
                 device="cuda",
                 frozen_ln_scale = cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
             )
@@ -258,7 +264,7 @@ for FREEZE_LN in [False, True]:
             for hook_name in [f"blocks.{layer_idx}.ln2.hook_scale" for layer_idx in range(NEGATIVE_LAYER_IDX, model.cfg.n_layers)] + [f"blocks.{layer_idx}.ln1.hook_scale" for layer_idx in range(NEGATIVE_LAYER_IDX+1, model.cfg.n_layers)]: # add freezing LN on the input hooks to the downstream MLPs and attention heads. We deal with the final LN in the get_metric function.
                 model.add_hook(
                     hook_name,
-                    partial(setter_hook, setting_value=cache[hook_name].to(DEVICE), setter_head_idx=None),
+                    partial(setter_hook, setting_value=cache[hook_name].to(DEVICE), setter_head_idx=None, intended_shape=[BATCH_SIZE, max_seq_len, model.cfg.n_heads, 1] if "ln1" in hook_name else [BATCH_SIZE, max_seq_len, 1]),
                 )
             
             _, indirect_freeze_intermediate_cache = model.run_with_cache(
@@ -284,9 +290,12 @@ for FREEZE_LN in [False, True]:
                 ]:
                     setting_value = cache[cache_hook_name] - head_output + mean_output
 
+                    if "attn_in" in dest_hook_name:
+                        setting_value = setting_value[:, :, None]
+
                     model.add_hook(
                         dest_hook_name,
-                        partial(setter_hook, setting_value=setting_value),
+                        partial(setter_hook, setting_value=setting_value, intended_shape=[BATCH_SIZE, max_seq_len, model.cfg.n_heads, model.cfg.d_model] if "attn_in" in dest_hook_name else None), # Need to deal with some broadcasting (alternatively could einops.repeat above)
                     )
                 _, controlled_indirect_cache = model.run_with_cache(
                     mybatch.to("cuda:0"),
@@ -319,7 +328,7 @@ for FREEZE_LN in [False, True]:
 
                 total_control_11_loss = get_metric_from_end_state(
                     model=model,
-                    end_state=total_control_11[END_STATE_HOOK], # + head_output.to(DEVICE) - mean_output.to(DEVICE),
+                    end_state=total_control_11[END_STATE_HOOK],
                     targets=mytargets,
                     return_logits=False,
                     frozen_ln_scale=cache[final_ln_scale_hook_name].to(DEVICE) if FREEZE_LN else None,
@@ -346,8 +355,8 @@ for FREEZE_LN in [False, True]:
                 all_losses["total_control_11_loss"+ ("_freeze" if FREEZE_LN else "")]=total_control_11_loss
                 all_losses["controlled_indirect_loss"+ ("_freeze" if FREEZE_LN else "")]=controlled_indirect_loss
 
-            if USE_GPT2XL:
-                all_losses["gpt2xl_kl"+ ("_freeze" if FREEZE_LN else "")] = gpt2xl_kl
+            if GPT2_MODEL_FOR_KL is not None:
+                all_losses["gpt2_kl"+ ("_freeze" if FREEZE_LN else "")] = gpt2_kl
                 all_losses["mean_ablation_kl"+ ("_freeze" if FREEZE_LN else "")] = mean_ablation_kl
 
 all_losses_keys = list(all_losses.keys())
@@ -394,8 +403,8 @@ fig.show()
 #%%
 
 if SHOW_PLOT:
-    filtered_all_losses = {key: all_losses[key] for key in all_losses_keys if any([key.startswith(thing) for thing in ["clean", "mean_ablate_indirect_effects", "mean_ablate_direct_effect"]])}
-    # filtered_all_losses = deepcopy(all_losses)
+    # filtered_all_losses = {key: all_losses[key] for key in all_losses_keys if any([key.startswith(thing) for thing in ["clean", "mean_ablate_indirect_effects", "mean_ablate_direct_effect"]])}
+    filtered_all_losses = deepcopy(all_losses)
 
     sorted_losses = dict(sorted(filtered_all_losses.items(), key=lambda x: x[1].mean()))
 
@@ -452,20 +461,20 @@ results_log[(layer_idx, head_idx)] = {
     "mean_ablation_loss": mean_ablation_loss.cpu(),
 }
 
-if USE_GPT2XL:
-    results_log[(layer_idx, head_idx)]["gpt2xl_kl"] = gpt2xl_kl.cpu()
+if GPT2_MODEL_FOR_KL is not None:
+    results_log[(layer_idx, head_idx)]["gpt2_kl"] = gpt2_kl.cpu()
     results_log[(layer_idx, head_idx)]["mean_ablation_kl"] = mean_ablation_kl.cpu()
-    results_log[(layer_idx, head_idx)]["gpt2xl_kl_change"] = (mean_ablation_kl - gpt2xl_kl).cpu()
+    results_log[(layer_idx, head_idx)]["gpt2_kl_change"] = (mean_ablation_kl - gpt2_kl).cpu()
 
 print(list(results_log.items())[-1])
 
 #%%
 
-if not USE_GPT2XL:
+if GPT2_MODEL_FOR_KL is None:
     warnings.warn("There may be a crash here, but it is intended as below here the file is only GPT2-XL KL Divergence experiments")
     sys.exit(0) # rest of this file is for GPT2-XL...!
 
-all_kls = (gpt2xl_kl).flatten()[:20000]
+all_kls = (gpt2_kl).flatten()[:20000]
 all_losses = (mean_ablation_loss - my_loss).flatten()[:20000]
 
 indices = torch.argsort(all_losses)[:len(all_kls)//20]
@@ -474,7 +483,7 @@ px.scatter(
     x = all_kls[indices],
     y = all_losses[indices],
     labels = {
-        "x": "KL Divergence to GPT-2 XL",
+        "x": "KL Divergence to GPT-2",
         "y": "Change in GPT-2 Small loss when mean ablating 10.7",
     }
 ).show()
@@ -482,8 +491,8 @@ px.scatter(
 
 #%%
 
-thing_used_as_mean_ablation = mean_ablation_loss if not USE_GPT2XL else mean_ablation_kl
-thing_used_as_my_metric = my_loss if not USE_GPT2XL else gpt2xl_kl
+thing_used_as_mean_ablation = mean_ablation_loss if GPT2_MODEL_FOR_KL is None else mean_ablation_kl
+thing_used_as_my_metric = my_loss if GPT2_MODEL_FOR_KL is None else gpt2_kl
 
 # How much EV is explained by the direct effect of the head?
 sorted_loss_change = torch.tensor(sorted(
@@ -503,7 +512,7 @@ assert number_useful > len(sorted_loss_change) // FRACTION_DENOM, "Calcs won't m
 
 proportion_of_loss = useful_loss_changes[:len(sorted_loss_change)//FRACTION_DENOM].sum() / useful_loss_changes.sum()
 
-if USE_GPT2XL:
+if GPT2_MODEL_FOR_KL is not None:
     warnings.warn("We often say `loss` here when we're discussing KL divergence, essentially")
 
 print(f"Average increase in loss from mean ablation of 10.7 direct effect *conditional on mean ablation being harmful* is\n{useful_loss_changes.sum().item() / number_useful=}\n")
@@ -520,12 +529,12 @@ fig = px.scatter(
     y=100 * cumulative_useful_loss_changes / cumulative_useful_loss_changes[-1].item(),
 )
 fig.update_layout(
-    title=f"Cumulative percentage of useful {'loss' if not USE_GPT2XL else 'KL divergence'} reduction explained by the direct effect of 10.7",
+    title=f"Cumulative percentage of useful {'loss' if GPT2_MODEL_FOR_KL is None else 'KL divergence'} reduction explained by the direct effect of 10.7",
     xaxis_title="Percentage of tokens",
     yaxis_title="Percentage of loss explained",
 )
 fig.add_annotation(x=90, y=90,
-    text=f"On these token completions, 10.7's direct effect increases {'loss' if not USE_GPT2XL else 'KL divergence'}",
+    text=f"On these token completions, 10.7's direct effect increases {'loss' if GPT2_MODEL_FOR_KL is None else 'KL divergence'}",
     showarrow=True,
     arrowhead=1,
     ax=-10,
@@ -653,251 +662,6 @@ torch.testing.assert_close(
     rtol=1e-3,
 )
 
-# %%
+#%%
 
-gc.collect()
-torch.cuda.empty_cache()
-
-# In the max importance examples, which token does the head have the most effect on?
-datab = {}
-
-USE_TOP5P_SAMPLE = True
-DO_MEAN_TOP_THINGS = True
-
-model.set_use_split_qkv_input(True)
-for layer_idx, head_idx in [(NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX)] + list(
-    itertools.product(range(11, 8, -1), range(model.cfg.n_heads))
-):
-    print("-"*50)
-    print(layer_idx, head_idx)
-
-
-    # for layer_idx, head_idx in [(10, 7)]:
-    max_importance_examples = sorted(
-        [
-            (
-                batch_idx,
-                seq_idx,
-                (results_log[(layer_idx, head_idx)]["gpt2xl_kl_change"] if USE_GPT2XL else results_log[(layer_idx, head_idx)]["loss_changes"])
-                [
-                    batch_idx, seq_idx
-                ].item(),
-            )
-            for batch_idx, seq_idx in itertools.product(
-                range(BATCH_SIZE), range(max_seq_len)
-            )
-        ],
-        key=lambda x: x[2],
-        reverse=True,
-    )
-
-    head_output_hook = f"blocks.{layer_idx}.attn.hook_result"
-    head_output = cache[head_output_hook][
-        :, :, head_idx
-    ].to("cuda")  # shape (batch_size, seq_len, hidden_size)
-    mean_output = einops.reduce(
-        head_output,
-        "batch seq_len hidden_size -> hidden_size",
-        reduction="mean",
-    )
-
-    mals = []
-    new_losses = []
-    orig_losses = []
-
-    random_indices = np.random.choice(len(max_importance_examples), NUM_THINGS, replace=False).tolist()
-    top5p_indices = np.random.choice(len(max_importance_examples)//20, NUM_THINGS, replace=False).tolist()
-
-    progress_bar = tqdm(random_indices) if USE_RANDOM_SAMPLE else tqdm(max_importance_examples[:NUM_THINGS])
-    if USE_TOP5P_SAMPLE:
-        assert not USE_RANDOM_SAMPLE
-        progress_bar = tqdm(top5p_indices)
-
-    log_probs_reference = {"xl": defaultdict(list), "small":defaultdict(list), "small_mean_ablation": defaultdict(list), "top_unembeds": defaultdict(list)}
-
-    for current_iter_element in progress_bar:
-        if USE_RANDOM_SAMPLE or USE_TOP5P_SAMPLE:
-            batch_idx, seq_idx, change_in_loss = max_importance_examples[current_iter_element]
-        else:
-            batch_idx, seq_idx, change_in_loss = current_iter_element
-
-        cur_output = (head_output-mean_output)[batch_idx, seq_idx]
-
-        unembed = einops.einsum(
-            cur_output,
-            model.W_U,
-            "d_model_out, d_model_out d_vocab -> d_vocab",
-        )
-        k=3 
-        topk = torch.topk(-unembed, k=k).indices
-        print([model.to_string([tk]) for tk in topk])
-        print("|".join([model.to_string([j]).replace("\n", "<|NEWLINE|>") for j in mybatch[batch_idx, max(0, seq_idx-100000):seq_idx+1]]))
-        print(model.to_string([mytargets[batch_idx, seq_idx]]))
-
-        if DO_MEAN_TOP_THINGS:
-            for topk_reference in ["top_unembeds", "xl", "small", "small_mean_ablation"]:
-                if topk_reference == "top_unembeds":
-                    pass
-                elif topk_reference == "xl":
-                    topk = torch.topk(log_xl_probs[batch_idx, seq_idx], k=k).indices
-                elif topk_reference == "small":
-                    topk = torch.topk(full_log_probs[batch_idx, seq_idx], k=k).indices
-                elif topk_reference == "small_mean_ablation":
-                    topk = torch.topk(mean_ablation_log_probs[batch_idx, seq_idx], k=k).indices
-                else:
-                    assert False             
-
-                for tok_idx in topk:
-                    log_probs_reference[topk_reference]["mean_ablation"].append(
-                        mean_ablation_log_probs[batch_idx, seq_idx, tok_idx]
-                    )
-                    log_probs_reference[topk_reference]["xl"].append(
-                        log_xl_probs[batch_idx, seq_idx, tok_idx]
-                    )
-                    log_probs_reference[topk_reference]["small"].append(
-                        full_log_probs[batch_idx, seq_idx, tok_idx]
-                    )
-
-            continue
-        names_filter2 = lambda name: name.endswith("hook_v") or name.endswith(
-            "hook_pattern"
-        )
-        model.reset_hooks()
-        _, cache2 = model.run_with_cache(
-            mybatch[batch_idx : batch_idx + 1, : seq_idx + 1],
-            names_filter=names_filter2,
-        )
-
-        vout = cache2[f"blocks.{layer_idx}.attn.hook_v"][
-            0, :, head_idx
-        ]  # (seq_len, d_head)
-        att_pattern = cache2[f"blocks.{layer_idx}.attn.hook_pattern"][
-            0, head_idx, seq_idx
-        ]  # shape (seq_len)
-        ovout = einops.einsum(
-            vout,
-            model.W_O[layer_idx, head_idx],
-            "s d_head, d_head d_model_out -> s d_model_out",
-        )
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        for ovout_idx in range(len(ovout)):
-            projected, _ = project(ovout[ovout_idx], model.W_U[:, mybatch[batch_idx, seq_idx]])
-            if einops.einsum(
-                ovout[ovout_idx],
-                projected,
-                "d_model_out, d_model_out -> ",
-            ).item()>0: # only include negative components
-                ovout[ovout_idx] = projected
-
-        att_out = einops.einsum(
-            att_pattern,
-            ovout,
-            "s, s d_model_out -> d_model_out",
-        )
-
-        # add in orthogonal component
-        parallel_component, orthogonal_component = project(
-            att_out, 
-            mean_output.to(DEVICE),
-        )
-        att_out += orthogonal_component
-
-        # print([model.to_string([tk]) for tk in topk])
-        # print(
-        #     [
-        #         model.to_string([j])
-        #         for j in mybatch[batch_idx, max(0, seq_idx - 10) : seq_idx + 1]
-        #     ]
-        # )
-        # torch.testing.assert_close(
-        #     att_out.cpu(),
-        #     cache[f"blocks.{layer_idx}.attn.hook_result"][batch_idx, seq_idx, head_idx],
-        #     atol=1e-3,
-        #     rtol=1e-3,
-        # )
-
-        new_loss = get_metric_from_end_state(
-            model,
-            end_state=(
-                end_state[batch_idx : batch_idx + 1, seq_idx : seq_idx + 1]
-                - head_output[
-                    batch_idx : batch_idx + 1, seq_idx : seq_idx + 1, head_idx
-                ]
-                + att_out[None, None]
-            ),
-            targets=mytargets[batch_idx : batch_idx + 1, seq_idx : seq_idx + 1],
-        ).item()
-
-    break
-
-        # mal = mean_ablation_loss[batch_idx, seq_idx]
-        # orig_loss = my_loss[batch_idx, seq_idx]
-
-        # mals.append(mal.item())
-        # new_losses.append(new_loss)
-        # orig_losses.append(orig_loss.item())
-
-        # print(f"{mal.item():.2f} {orig_loss.item():.2f} {new_loss:.2f}")
-    # datab[(layer_idx, head_idx)] = {
-    #     "mals_mean": np.mean(mals),
-    #     "mals_std": np.std(mals),
-    #     "new_losses_mean": np.mean(new_losses),
-    #     "new_losses_std": np.std(new_losses),
-    #     "orig_losses_mean": np.mean(orig_losses),
-    #     "orig_losses_std": np.std(orig_losses),
-    #     "mals": mals,
-    #     "new_losses": new_losses,
-    #     "orig_losses": orig_losses,
-    # }
-
-    # for k in datab[(layer_idx, head_idx)]:
-    #     if k.endswith("mean") or k.endswith("std"):
-    #         print(k, datab[(layer_idx, head_idx)][k], end="/")
-    # print()
-
-# %%
-
-fig = go.Figure()
-CAP = 100_000
-
-for reference in ["xl", "small", "small_mean_ablation", "top_unembeds"]:
-    mean_abl_results = torch.tensor(log_probs_reference[reference]["mean_ablation"][:CAP]) - torch.tensor(log_probs_reference[reference]["xl"][:CAP])
-    small_results = torch.tensor(log_probs_reference[reference]["small"][:CAP]) - torch.tensor(log_probs_reference[reference]["xl"][:CAP])
-    print(f"{mean_abl_results.mean().item()=}, {small_results.mean().item()=}")
-
-    fig = hist(
-        [
-            mean_abl_results,
-            small_results,
-        ],
-        labels={"variable": "Version", "value": (f"Log prob difference                           *On the Top {k} predictions per token completion from the {reference} forward pass" if reference!="top_unembeds" else f"Log prob difference                          *On the Top {k} negative unembeddings from 10.7 per token completion")},
-        opacity=0.7,
-        # marginal="box",
-        template="simple_white",
-        names = ["Mean ablation of 10.7", "Normal GPT-2 Small"],
-        title = "Histogram of (GPT-2 Small Log Probs) - (GPT-2 XL Log Probs)",
-        return_fig = True,
-    )
-
-    # add a line at x = 0
-
-    fig.add_trace(
-        go.Scatter(
-            x=[0, 0],
-            y=[0, 200],
-            mode="lines",
-            name="y=0",
-            marker=dict(color="black"),
-        )
-    )
-
-    fig.show()
-
- #%%
-
-# TODO speed this up and do Callum's proposed experiment with one component in unembed direction 
-
-# %%
-
+# (Deprecated some extra GPT-2 KL experiments...)
