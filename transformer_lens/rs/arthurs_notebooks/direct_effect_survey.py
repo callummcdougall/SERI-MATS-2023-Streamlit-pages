@@ -27,7 +27,9 @@ BATCH_SIZE = 20 # seems to be about the limit of what this box can handle
 NUM_THINGS = 300
 USE_RANDOM_SAMPLE = False
 INDIRECT = True # disable for orig funcitonality
-USE_GPT2XL = False
+
+# Should we calculate KL to some model? Set to `None` if instead just considering loss reducing effects
+GPT2_MODEL_FOR_KL = Optional[Literal["gpt2", "gpt2-xl"]] = "gpt2"
 
 # %%
 
@@ -55,13 +57,13 @@ mytargets = torch.LongTensor(targets[:BATCH_SIZE])
 
 #%%
 
-if USE_GPT2XL:
-    gpt2xl = HookedTransformer.from_pretrained("gpt2-xl")
+if GPT2_MODEL_FOR_KL is not None:
+    gpt2_for_kl = HookedTransformer.from_pretrained(GPT2_MODEL_FOR_KL)
 
 #%%
 
-if USE_GPT2XL:
-    log_xl_probs = t.zeros((BATCH_SIZE, max_seq_len, model.cfg.d_vocab))
+if GPT2_MODEL_FOR_KL is not None:
+    gpt2_for_kl_probs = t.zeros((BATCH_SIZE, max_seq_len, model.cfg.d_vocab))
     print("Starting GPT2-XL stuff")
     assert model.cfg.d_vocab == gpt2xl.cfg.d_vocab, "Probably incompatible"
     for batch_idx in tqdm(range(BATCH_SIZE)):
