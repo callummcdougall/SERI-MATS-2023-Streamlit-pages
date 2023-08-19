@@ -180,12 +180,20 @@ def process_webtext(
     model: HookedTransformer = None,
     verbose: bool = False,
 ):
-    DATA_STR = get_webtext(seed=seed)
-    if indices is None:
-        DATA_STR = DATA_STR[:batch_size]
+    DATA_STR_ALL = get_webtext(seed=seed)
+    DATA_STR_ALL = [parse_str(s) for s in DATA_STR_ALL]
+    DATA_STR = []
+
+    count = 0
+    for i in range(len(DATA_STR_ALL)):
+        num_toks = len(model.to_tokens(DATA_STR_ALL[i]).squeeze())
+        if num_toks > seq_len:
+            DATA_STR.append(DATA_STR_ALL[i])
+            count += 1
+        if count == batch_size:
+            break
     else:
-        DATA_STR = [DATA_STR[i] for i in indices]
-    DATA_STR = [parse_str(s) for s in DATA_STR]
+        raise Exception("Couldn't find enough sequences of sufficient length.")
 
     DATA_TOKS = model.to_tokens(DATA_STR)
     DATA_STR_TOKS = model.to_str_tokens(DATA_STR)
@@ -202,3 +210,5 @@ def process_webtext(
         print("First prompt:\n" + "".join(DATA_STR_TOKS[0]))
 
     return DATA_TOKS, DATA_STR_TOKS_PARSED
+
+
