@@ -17,7 +17,7 @@ import time
 from tqdm import tqdm
 from torch import Tensor
 
-from transformer_lens.rs.callum2.cspa.cspa_utils import (
+from transformer_lens.rs.callum2.utils import (
     devices_are_equal,
     kl_div,
 )
@@ -424,6 +424,39 @@ def project(
 
     return vectors_projected
 
+
+def get_result_mean(
+    head_list: List[Tuple[int, int]],
+    toks: Int[Tensor, "batch seq"],
+    model: HookedTransformer,
+    minibatch_size: int = 10,
+    keep_seq_dim: bool = True,
+    verbose: bool = False
+) -> Dict[Tuple[int, int], Float[Tensor, "*seq d_model"]]:
+
+    batch_size, seq_len = toks.shape
+    layers = list(set([head[0] for head in head_list]))
+    result_mean = {head: t.empty((0, seq_len, model.cfg.d_model)) for head in head_list}
+
+    assert batch_size % minibatch_size == 0
+
+    iterator = range(0, batch_size, minibatch_size)
+    iterator = tqdm(iterator) if verbose else iterator
+    for i in iterator:
+        _, cache = model.run_with_cache(
+            toks[i: i+minibatch_size],
+            return_type=None,
+            names_filter=lambda name: name in [utils.get_act_name("result", layer) for layer in layers]
+        )
+        for layer, head in head_list:
+            result = cache["result", layer][:, :, head].mean(0, keepdim=True).cpu() # [1 seq d_model]
+            result_mean[(layer, head)] = t.cat([result_mean[(layer, head)], result], dim=0)
+
+    # Remove batch dim, also seq dim if keep_seq_dim is False
+    result_mean = {k: v.mean(0) for k, v in result_mean.items()}
+    if not keep_seq_dim: result_mean = {k: v.mean(0) for k, v in result_mean.items()}
+    
+    return result_mean
 
 
 
