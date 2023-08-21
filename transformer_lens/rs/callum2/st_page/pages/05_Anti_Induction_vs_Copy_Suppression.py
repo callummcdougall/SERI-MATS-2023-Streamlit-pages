@@ -18,7 +18,7 @@ for p in [
         break
 
 from transformer_lens.rs.callum2.st_page.streamlit_styling import styling
-from transformer_lens.rs.callum2.generate_st_html.utils import ST_HTML_PATH
+from transformer_lens.rs.callum2.utils import ST_HTML_PATH
 styling()
 
 import pandas as pd

@@ -32,7 +32,7 @@ os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 st.set_page_config(layout="wide")
 
-from transformer_lens.rs.callum2.generate_st_html.utils import ST_HTML_PATH
+from transformer_lens.rs.callum2.utils import ST_HTML_PATH
 
 # dict_to_store_less = {
 #     "tokenizer": model.tokenizer,

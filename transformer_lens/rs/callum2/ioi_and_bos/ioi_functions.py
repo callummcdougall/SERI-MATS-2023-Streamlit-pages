@@ -1,40 +1,9 @@
-from torch import native_dropout
 from transformer_lens.cautils.utils import *
-# from transformer_lens.rs.callum.generate_bag_of_words_quad_plot import get_effective_embedding
 
-
-def get_effective_embedding_2(model: HookedTransformer) -> Float[Tensor, "d_vocab d_model"]:
-
-    # TODO - make this consistent (i.e. change the func in `generate_bag_of_words_quad_plot` to also return W_U and W_E separately)
-
-    W_E = model.W_E.clone()
-    W_U = model.W_U.clone()
-    # t.testing.assert_close(W_E[:10, :10], W_U[:10, :10].T)  NOT TRUE, because of the center unembed part!
-
-    resid_pre = W_E.unsqueeze(0)
-    pre_attention = model.blocks[0].ln1(resid_pre)
-    attn_out = einops.einsum(
-        pre_attention, 
-        model.W_V[0],
-        model.W_O[0],
-        "b s d_model, num_heads d_model d_head, num_heads d_head d_model_out -> b s d_model_out",
-    )
-    resid_mid = attn_out + resid_pre
-    normalized_resid_mid = model.blocks[0].ln2(resid_mid)
-    mlp_out = model.blocks[0].mlp(normalized_resid_mid)
-    
-    W_EE = mlp_out.squeeze()
-    W_EE_full = resid_mid.squeeze() + mlp_out.squeeze()
-
-    t.cuda.empty_cache()
-
-    return {
-        "W_E (no MLPs)": W_E,
-        "W_U": W_U.T,
-        # "W_E (raw, no MLPs)": W_E,
-        "W_E (including MLPs)": W_EE_full,
-        "W_E (only MLPs)": W_EE
-    }
+from transformer_lens.rs.callum2.utils import (
+    get_effective_embedding,
+    project,
+)
 
 
 
@@ -68,7 +37,7 @@ def attn_scores_as_linear_func_of_queries(
         keys_S1 = keys_all[batch_idx, ioi_dataset.word_idx["S1"][batch_idx]]
     else:
         assert only_effective_embeddings in ["W_E (no MLPs)", "W_E (including MLPs)", "W_E (only MLPs)"]
-        effective_embeddings = get_effective_embedding_2(model)[only_effective_embeddings] # shape (d_vocab, d_model)
+        effective_embeddings = get_effective_embedding(model)[only_effective_embeddings] # shape (d_vocab, d_model)
         keys_IO = effective_embeddings[ioi_dataset.io_tokenIDs][batch_idx]
         keys_S1 = effective_embeddings[ioi_dataset.s_tokenIDs][batch_idx]
         keys_IO = (keys_IO / keys_IO.std(dim=-1, keepdim=True)) @ model.W_K[layer, head_idx] + model.b_K[layer, head_idx] # shape (all_batch, d_head)
@@ -228,7 +197,7 @@ def get_attn_scores_as_linear_func_of_keys_for_histogram(
     model: HookedTransformer,
     subtract_S1_attn_scores: bool = False,
 ):
-    effective_embeddings = get_effective_embedding_2(model) 
+    effective_embeddings = get_effective_embedding(model) 
 
     W_E = effective_embeddings["W_E (no MLPs)"]
     W_EE = effective_embeddings["W_E (including MLPs)"]
@@ -405,7 +374,7 @@ def decompose_attn_scores(
 
     # * Get the MLP0 output (note that we need to be careful here if we're subtracting the S1 baseline, because we actually need the 2 different MLP0s)
     if use_effective_embedding:
-        W_EE_dict = get_effective_embedding_2(model)
+        W_EE_dict = get_effective_embedding(model)
         W_EE = (W_EE_dict["W_E (including MLPs)"] - W_EE_dict["W_E (no MLPs)"]) if use_layer0_heads else W_EE_dict["W_E (only MLPs)"]
         MLP0_output = W_EE[ioi_dataset.io_tokenIDs]
         MLP0_output_S1 = W_EE[ioi_dataset.s_tokenIDs]
@@ -459,7 +428,7 @@ def decompose_attn_scores(
             elif IO_projection_type == (False, False):
                 projection_dirs = [unembeddings]
             projection_dirs = t.stack(projection_dirs, dim=-1)
-            resid_pre_in_unembed_dir, resid_pre_in_unembed_perpdir = project_new(resid_pre_normalised_slice_end, projection_dirs)
+            resid_pre_in_unembed_dir, resid_pre_in_unembed_perpdir = project(resid_pre_normalised_slice_end, projection_dirs, return_perp=True)
 
             # Overwrite the query-side vector in the cache with the projection in the unembedding direction
             q_new = einops.einsum(resid_pre_in_unembed_dir, W_Q, "batch d_model, d_model d_head -> batch d_head")
@@ -613,7 +582,7 @@ def decompose_attn_scores(
                 einops.repeat(projection_dir, "b d_m -> b heads d_m", heads=model.cfg.n_heads) if (component_name == "result") else projection_dir
                 for projection_dir in projection_dirs
             ], dim=-1)
-            component_output_scaled = t.stack(project_new(component_output_scaled, projection_dirs))
+            component_output_scaled = t.stack(project(component_output_scaled, projection_dirs, return_perp=True))
         # ! (1B)
         # * This is where we decompose the key-side output of each component, by possibly projecting it onto the ||MLP0 and ⟂MLP0 directions
         elif (decompose_by == "keys") and (intervene_on_key == "project_to_MLP0"):
@@ -769,183 +738,6 @@ def plot_contribution_to_attn_scores(
 
 
 
-
-def project(
-    x: Float[Tensor, "... dim"],
-    dir: Union[List[Float[Tensor, "... dim"]], Float[Tensor, "... dim"]],
-    test: bool = False,
-    return_type: Literal["projections", "coeffs", "both"] = "projections",
-):
-    '''
-    x: 
-        Shape (*batch_dims, d), or list of such shapes
-        Batch of vectors
-    
-    dir:
-        Shape (*batch_dims, d)
-        Batch of vectors (which will be normalized)
-
-    test:
-        If true, runs a bunch of sanity-check-style tests, and prints out the output
-
-    Returns:
-        Two batches of vectors: x_dir and x_perp, such that:
-            x_dir + x_perp = x
-            x_dir is the component of x in the direction dir (or in the subspace
-            spanned by the vectors in dir, if dir is a list).
-
-    Notes:
-        Make sure x and dir (or each element in dir) have the same shape, I don't want to
-        mess up broadcasting by accident! Do einops.repeat on dir if you have to.
-    '''
-    assert return_type in ["projections", "coeffs", "both"]
-    device = x.device
-    if isinstance(dir, Tensor): dir = [dir]
-    assert all([x.shape == dir_.shape for dir_ in dir]), [x.shape, [d.shape for d in dir]]
-    dir = t.stack(dir, dim=-1)
-
-    # Get the SVD of the stack of matrices we're projecting in the direction of
-    # So U tells us directions, and V tells us linear combinations (which we don't need)
-    svd = t.svd(dir)
-    if test:
-        t.testing.assert_close(svd.U @ t.diag_embed(svd.S) @ svd.V.mH, dir)
-        U_norms = svd.U.norm(dim=-2) # norm of columns
-        t.testing.assert_close(U_norms, t.ones_like(U_norms))
-        # print("Running tests for projection function:")
-        # print("\tSVD tests passed")
-
-    # Calculate the component of x along the different directions of svd.U
-    x_coeffs = einops.einsum(
-        x, svd.U,
-        "... dim, ... dim directions -> ... directions"
-    )
-    if return_type == "coeffs":
-        return x_coeffs
-
-    # Project x onto these directions (summing over each of the directional projections)
-    x_dir = einops.einsum(
-        x_coeffs, svd.U,
-        "... directions, ... dim directions -> ... dim"
-    )
-
-    if test:
-        # First, test all the projections are orthogonal to each other
-        x_dir_projections = einops.einsum(
-            x_coeffs, svd.U,
-            "... directions, ... dim directions -> ... dim directions"
-        )
-        x_dir_projections_normed = x_dir_projections / x_dir_projections.norm(dim=-2, keepdim=True)
-        x_dir_cos_sims = einops.einsum(
-            x_dir_projections_normed, x_dir_projections_normed,
-            "... dim directions_left, ... dim directions_right -> ... directions_left directions_right"
-        )
-        
-        x_dir_cos_sims_expected = t.eye(x_dir_cos_sims.shape[-1]).to(device)
-        diff = t.where(x_dir_cos_sims_expected.bool(), t.tensor(0.0).to(device), x_dir_cos_sims - x_dir_cos_sims_expected).abs().max().item()
-        assert diff < 1e-4, diff
-        # print(f"\tCos sim test passed: max cos sim diff = {diff:.4e}")
-
-        # Second, test that the sum of norms equals the original norm
-        x_dir_norms = x_dir.norm(dim=-1).pow(2)
-        x_dir_perp_norms = (x - x_dir).norm(dim=-1).pow(2)
-        x_norms = x.norm(dim=-1).pow(2)
-        diff = (x_dir_norms + x_dir_perp_norms - x_norms).abs().max().item()
-        assert diff < 1e-4, diff
-        # print(f"\tNorms test passed: max norm diff = {diff:.4e}")
-
-    if return_type == "both":
-        return x_dir, x - x_dir, x_coeffs
-    elif return_type == "projections":
-        return x_dir, x - x_dir
-
-
-
-
-def gram_schmidt(vectors: Float[Tensor, "... d num"]) -> Float[Tensor, "... d num"]:
-    '''
-    Performs Gram-Schmidt orthonormalization on a batch of vectors, returning a basis.
-
-    `vectors` is a batch of vectors. If it was 2D, then it would be `num` vectors each with length
-    `d`, and I'd want a basis for these vectors in d-dimensional space. If it has more dimensions 
-    at the start, then I want to do the same thing for all of them (i.e. get multiple independent
-    bases).
-
-    If the vectors aren't linearly independent, then some of the basis vectors will be zero (this is
-    so we can still batch our projections, even if the subspace rank for each individual projection
-    is not equal.
-    '''
-    # Make a copy of the vectors
-    basis = vectors.clone()
-    num_vectors = basis.shape[-1]
-    
-    # Iterate over each vector in the batch, starting from the zeroth
-    for i in range(num_vectors):
-
-        # Project the i-th vector onto the space orthogonal to the previous ones
-        for j in range(i):
-            projection = einops.einsum(basis[..., i], basis[..., j], "... d, ... d -> ...")
-            basis[..., i] = basis[..., i] - einops.einsum(projection, basis[..., j], "..., ... d -> ... d")
-        
-        # Normalize this vector (we can set it to zero if it's not linearly independent)
-        basis_vec_norm = basis[..., i].norm(dim=-1, keepdim=True)
-        basis[..., i] = t.where(
-            basis_vec_norm > 1e-4,
-            basis[..., i] / basis_vec_norm,
-            t.zeros_like(basis[..., i])
-        )
-    
-    return basis
-
-
-
-def project_new(
-    vectors: Float[Tensor, "... d"],
-    proj_directions: Float[Tensor, "... d num"],
-    only_keep: Optional[Literal["pos", "neg"]] = None,
-    gs: bool = True,
-    return_coeffs: bool = False,
-):
-    '''
-    `vectors` is a batch of vectors, with last dimension `d` and all earlier dimensions as batch dims.
-
-    `proj_directions` is either the same shape as `vectors`, or has an extra dim at the end.
-
-    If they have the same shape, we project each vector in `vectors` onto the corresponding direction
-    in `proj_directions`. If `proj_directions` has an extra dim, then the last dimension is another 
-    batch dim, i.e. we're projecting each vector onto a subspace rather than a single vector.
-    '''
-    assert proj_directions.shape[:-1] == vectors.shape
-    assert proj_directions.shape[-1] <= 30, "Shouldn't do too many vectors, GS orth might be computationally heavy I think?"
-
-    # We might want to have done G-S orthonormalization first
-    proj_directions_basis = gram_schmidt(proj_directions) if gs else proj_directions
-
-    components_in_proj_dir = einops.einsum(
-        vectors, proj_directions_basis,
-        "... d, ... d num -> ... num"
-    )
-    if return_coeffs: return components_in_proj_dir
-    
-    if only_keep is not None:
-        components_in_proj_dir = t.where(
-            (components_in_proj_dir < 0) if (only_keep == "neg") else (components_in_proj_dir > 0),
-            components_in_proj_dir,
-            t.zeros_like(components_in_proj_dir)
-        )
-
-    vectors_projected = einops.einsum(
-        components_in_proj_dir,
-        proj_directions_basis,
-        "... num, ... d num -> ... d"
-    )
-
-    return vectors_projected, vectors - vectors_projected
-
-
-
-
-
-
 def decompose_attn_scores_full(
     batch_size: int,
     seed: int,
@@ -1016,7 +808,7 @@ def decompose_attn_scores_full(
 
     # * Get the MLP0 output (note that we need to be careful here if we're subtracting the S1 baseline, because we actually need the 2 different MLP0s)
     if use_effective_embedding:
-        W_EE_dict = get_effective_embedding_2(model)
+        W_EE_dict = get_effective_embedding(model)
         W_EE = (W_EE_dict["W_E (including MLPs)"] - W_EE_dict["W_E (no MLPs)"]) if use_layer0_heads else W_EE_dict["W_E (only MLPs)"]
         MLP0_output = W_EE[ioi_dataset.io_tokenIDs]
         MLP0_output_S1 = W_EE[ioi_dataset.s_tokenIDs]

@@ -2,7 +2,6 @@
 
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
-
 import gzip
 from typing import Tuple, List, Any, Optional, Dict
 import torch as t
@@ -19,9 +18,10 @@ import numpy as np
 import time
 import itertools
 
-from transformer_lens.rs.callum2.generate_st_html.utils import (
+from transformer_lens.rs.callum2.utils import (
     ST_HTML_PATH,
-    NEGATIVE_HEADS
+    NEGATIVE_HEADS,
+    first_occurrence_2d
 )
 from transformer_lens.rs.callum2.generate_st_html.model_results import (
     ModelResults,
@@ -29,7 +29,6 @@ from transformer_lens.rs.callum2.generate_st_html.model_results import (
 )
 from transformer_lens.rs.callum2.cspa.cspa_functions import (
     FUNCTION_STR_TOKS,
-    first_occurrence_2d,
 )
 
 CSS = """
@@ -533,7 +532,7 @@ def generate_4_html_plots(
     save_files: bool,
     model_results: Optional[ModelResults],
     result_mean: Optional[Dict[Tuple[int, int], Float[Tensor, "seq_plus d_model"]]],
-    verbose: bool,
+    verbose: bool = False,
     restrict_computation: List[str] = ["LOSS", "LOGITS", "ATTN", "UNEMBEDDINGS"],
 ) -> Dict[str, Dict[Tuple, str]]:
     '''

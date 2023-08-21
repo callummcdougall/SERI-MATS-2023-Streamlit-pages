@@ -20,7 +20,7 @@ from transformer_lens.rs.callum2.generate_st_html.generate_html_funcs import (
     generate_html_for_DLA_plot,
     CSS,
 )
-from transformer_lens.rs.callum2.generate_st_html.utils import (
+from transformer_lens.rs.callum2.utils import (
     ST_HTML_PATH,
 )
 

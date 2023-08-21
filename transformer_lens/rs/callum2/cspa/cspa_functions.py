@@ -25,10 +25,8 @@ from transformer_lens.rs.callum2.cspa.cspa_semantic_similarity import (
     make_list_correct_length,
     get_list_with_no_repetitions,
 )
-from transformer_lens.rs.callum2.generate_st_html.utils import (
+from transformer_lens.rs.callum2.utils import (
     ST_HTML_PATH,
-)
-from transformer_lens.rs.callum2.cspa.cspa_utils import (
     devices_are_equal,
     first_occurrence_2d,
     concat_dicts,

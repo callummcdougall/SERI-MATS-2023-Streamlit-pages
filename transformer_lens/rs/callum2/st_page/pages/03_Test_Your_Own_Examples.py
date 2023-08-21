@@ -22,7 +22,7 @@ import pickle
 
 from transformer_lens.rs.callum2.st_page.streamlit_styling import styling
 from transformer_lens.rs.callum2.generate_st_html.model_results import get_model_results
-from transformer_lens.rs.callum2.generate_st_html.utils import parse_str_tok_for_printing, ST_HTML_PATH
+from transformer_lens.rs.callum2.utils import parse_str_tok_for_printing, ST_HTML_PATH
 from transformer_lens.rs.callum2.generate_st_html.generate_html_funcs import CSS, generate_4_html_plots
 from transformer_lens.rs.callum2.cspa.cspa_functions import get_cspa_results
 from transformer_lens.rs.callum2.cspa.cspa_plots import add_cspa_to_streamlit_page

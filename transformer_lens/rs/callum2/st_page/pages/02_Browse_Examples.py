@@ -24,7 +24,7 @@ is_local = (platform.processor() != "")
 
 from transformer_lens.rs.callum2.st_page.streamlit_styling import styling
 from transformer_lens.rs.callum2.generate_st_html.generate_html_funcs import CSS
-from transformer_lens.rs.callum2.generate_st_html.utils import ST_HTML_PATH
+from transformer_lens.rs.callum2.utils import ST_HTML_PATH
 from transformer_lens.rs.callum2.st_page.Home import (NEGATIVE_HEADS, HTML_PLOTS_FILENAME)
 
 import torch as t

@@ -6,9 +6,9 @@ from typing import Optional
 # %pip install nltk
 # %pip install --no-deps pattern
 
-
-def concat_lists(list_of_lists):
-    return [item for sublist in list_of_lists for item in sublist]
+from transformer_lens.rs.callum2.utils import (
+    concat_lists,
+)
 
 
 def verb_to_ing(verb):

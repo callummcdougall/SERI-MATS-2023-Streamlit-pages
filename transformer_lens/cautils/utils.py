@@ -19,7 +19,7 @@ import gzip
 from datasets import load_dataset
 from copy import copy, deepcopy
 from jaxtyping import Float, Int, Bool, jaxtyped
-from typing import Union, List, Dict, Tuple, Callable, Optional, Any, Sequence, Iterable, Mapping, TypeVar, Generic, NamedTuple, Literal
+from typing import Union, List, Dict, Tuple, Callable, Optional, Any, Sequence, Iterable, Mapping, TypeVar, Generic, NamedTuple, Literal, cast
 from torch import Tensor
 import itertools
 from torch.utils.data import Dataset, DataLoader

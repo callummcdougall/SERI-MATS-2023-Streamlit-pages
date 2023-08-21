@@ -20,6 +20,7 @@ from torch import Tensor
 from transformer_lens.rs.callum2.utils import (
     devices_are_equal,
     kl_div,
+    project,
 )
 
 Head = Tuple[int, int]
@@ -381,50 +382,6 @@ def gram_schmidt(vectors: Float[Tensor, "... d num"]) -> Float[Tensor, "... d nu
 
 
 
-def project(
-    vectors: Float[Tensor, "... d"],
-    proj_directions: Float[Tensor, "... d num"],
-    only_keep: Optional[Literal["pos", "neg"]] = None,
-    gs: bool = True,
-    return_coeffs: bool = False,
-):
-    '''
-    `vectors` is a batch of vectors, with last dimension `d` and all earlier dimensions as batch dims.
-
-    `proj_directions` is either the same shape as `vectors`, or has an extra dim at the end.
-
-    If they have the same shape, we project each vector in `vectors` onto the corresponding direction
-    in `proj_directions`. If `proj_directions` has an extra dim, then the last dimension is another 
-    batch dim, i.e. we're projecting each vector onto a subspace rather than a single vector.
-    '''
-    assert proj_directions.shape[:-1] == vectors.shape
-    assert proj_directions.shape[-1] <= 30, "Shouldn't do too many vectors, GS orth might be computationally heavy I think?"
-
-    # We might want to have done G-S orthonormalization first
-    proj_directions_basis = gram_schmidt(proj_directions) if gs else proj_directions
-
-    components_in_proj_dir = einops.einsum(
-        vectors, proj_directions_basis,
-        "... d, ... d num -> ... num"
-    )
-    if return_coeffs: return components_in_proj_dir
-    
-    if only_keep is not None:
-        components_in_proj_dir = t.where(
-            (components_in_proj_dir < 0) if (only_keep == "neg") else (components_in_proj_dir > 0),
-            components_in_proj_dir,
-            t.zeros_like(components_in_proj_dir)
-        )
-
-    vectors_projected = einops.einsum(
-        components_in_proj_dir,
-        proj_directions_basis,
-        "... num, ... d num -> ... d"
-    )
-
-    return vectors_projected
-
-
 def get_result_mean(
     head_list: List[Tuple[int, int]],
     toks: Int[Tensor, "batch seq"],
@@ -433,6 +390,11 @@ def get_result_mean(
     keep_seq_dim: bool = True,
     verbose: bool = False
 ) -> Dict[Tuple[int, int], Float[Tensor, "*seq d_model"]]:
+    '''
+    Returns the mean result vector for a given set of inputs. 
+
+    Useful for doing mean ablation, because we need the mean over the entire batch before we run any forward passes.
+    '''
 
     batch_size, seq_len = toks.shape
     layers = list(set([head[0] for head in head_list]))
