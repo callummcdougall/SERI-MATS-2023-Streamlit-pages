@@ -174,26 +174,32 @@ while len(bags_of_words) < OUTER_LEN:
 
 # In[10]:
 
-
 embeddings_dict = get_effective_embedding_2(model)
-# TODO append some more embeddings to this dict to see how well they do
 
-# In[11]:
+#%%
 
+output = model.W_E + model.blocks[0].mlp(model.blocks[0].ln2(model.W_E).unsqueeze(0)).squeeze()
 
-# embeddings_dict_keys
+#%%
 
+embeddings_dict["W_PE"] = output # Cody's embedding
+
+# In[12]:
+
+# TODO should really make this outer_len and inner_len, but I forgot
+assert all([len(b)==len(bags_of_words[0]) for b in bags_of_words])
+
+#%%
+ 
 better_labels = {
     'W_E (including MLPs)': 'Att_0 + W_E + MLP0', 
     'W_E (no MLPs)': 'W_E',
     'W_E (only MLPs)': 'MLP0',
     'W_U': 'W_U',
 }
-
-# In[12]:
-
-# TODO should really make this outer_len and inner_len, but I forgot
-assert all([len(b)==len(bags_of_words[0]) for b in bags_of_words])
+for embedding_dict_key in embeddings_dict.keys():
+    if embedding_dict_key not in better_labels:
+        better_labels[embedding_dict_key] = embedding_dict_key
 
 # In[18]:
 
@@ -265,22 +271,17 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
 # In[21]:
 
 imshow(
-    einops.rearrange(torch.tensor(lines), "(height width) -> height width", height=3),
+    einops.rearrange(torch.tensor(lines), "(height width) -> height width", height=4),
     text_auto=True,
-    title="Average token self-attention in static QK circuit",
+    title=f"Average token self-attention in static QK circuit with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
     labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Self-Attention"},
-    x = ["W_EE", "W_E", "MLP0"], # x y sorta reversed with imshow
-    y = ["W_EE", "W_E", "W_U"],
+    x = ["W_EE", "W_E", "MLP0", "W_PE"], # x y sorta reversed with imshow
+    y = ["W_EE", "W_E", "W_PE", "W_U"],
 )
 
 # In[23]:
 
 model.W_U.norm()
-
-# In[ ]:
-
-
-
 
 
 # In[17]:
