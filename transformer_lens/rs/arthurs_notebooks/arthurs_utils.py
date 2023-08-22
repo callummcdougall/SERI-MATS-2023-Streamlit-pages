@@ -1,4 +1,3 @@
-#%%
 
 from transformer_lens.cautils.utils import *
 import pytest

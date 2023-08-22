@@ -6,7 +6,7 @@ direct effect of NMS
 """
 
 from transformer_lens.cautils.notebook import *
-from transformer_lens.rs.arthurs_notebooks.arthur_utils import dot_with_query
+from transformer_lens.rs.arthurs_notebooks.arthurs_utils import dot_with_query
 
 model = HookedTransformer.from_pretrained(
     "gpt2-small",

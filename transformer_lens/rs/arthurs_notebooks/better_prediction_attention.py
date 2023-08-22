@@ -7,7 +7,7 @@ Cribbed from key_and_query_projection.py
 import ast
 from transformer_lens.cautils.notebook import *
 from transformer_lens.rs.callum.keys_fixed import project, get_effective_embedding_2
-from transformer_lens.rs.arthurs_notebooks.arthur_utils import *
+from transformer_lens.rs.arthurs_notebooks.arthurs_utils import *
 import argparse
 
 #%%
