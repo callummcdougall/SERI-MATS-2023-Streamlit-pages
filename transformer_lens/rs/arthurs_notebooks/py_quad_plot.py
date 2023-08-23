@@ -166,7 +166,8 @@ if OVERWRITE_WITH_ALL_VOCAB:
     assert OUTER_LEN == 1
     assert INNER_LEN == model.cfg.d_vocab
     bags_of_words = [torch.arange(model.cfg.d_vocab)]
-    bags_of_words = raw_tokens # [raw_tokens for _ in range()]
+    bags_of_words = raw_tokens # ! This was hacked together and so doesn't really represent a bag of words well now
+    bags_of_words = torch.randint(0, model.cfg.d_vocab, (200,))
 
 else:
     assert INNER_LEN <= model.cfg.n_ctx
@@ -257,7 +258,7 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
 
     results = []
 
-    for outer_idx in tqdm(list(range(OUTER_LEN))):
+    for outer_idx in tqdm(range(len(bags_of_words))):
         if DO_TWO_DIMENSIONS:
             unnormalized_queries = einops.repeat(
                 embeddings_dict[q_side_matrix][bags_of_words[outer_idx]], # [d_model]
@@ -287,6 +288,25 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
             add_query_bias = USE_QUERY_BIAS,
             # normalize_keys = True, # True by default            
         )
+
+        # Compute these manually
+
+        queryside_vector = embeddings_dict[q_side_matrix][bags_of_words[outer_idx]]
+        queryside_normalized = queryside_vector / (queryside_vector.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
+        query = model.W_Q[LAYER, HEAD].T @ queryside_normalized
+        query += model.b_Q[LAYER, HEAD]
+
+        keyside_vectors = embeddings_dict[k_side_matrix][torch.arange(model.cfg.d_vocab)]
+        keyside_normalized = keyside_vectors / (keyside_vectors.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
+        key = keyside_normalized @ model.W_K[LAYER, HEAD]
+        key += model.b_K[LAYER, HEAD]
+
+        attention_scores = query @ key.T / np.sqrt(model.cfg.d_head)
+
+        torch.testing.assert_allclose(attention_scores, attn_scores, atol=1e-4, rtol=1e-4)
+
+        # Done!
+
         assert len(attn_scores.shape) == 1 + int(DO_TWO_DIMENSIONS), attn_scores
         # TODO sort out the fact we have inner len and outer len now...
 
@@ -294,7 +314,8 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
         #     log_attentions_to_self[outer_idx] = attn[torch.arange(INNER_LEN), torch.arange(INNER_LEN)]
         # else:
 
-        log_attentions_to_self[outer_idx] = (attn_scores >= attn_scores[bags_of_words[outer_idx]]).int().sum()
+        log_attentions_to_self[outer_idx] = (attn_scores >= (attn_scores[bags_of_words[outer_idx]] - 1e-5)).int().sum()
+        print(log_attentions_to_self[outer_idx])
 
     lines.append(log_attentions_to_self.mean())
     print(lines[-1])
