@@ -309,7 +309,7 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
 imshow(
     einops.rearrange(torch.tensor(lines).long(), "(height width) -> height width", height=4),
     text_auto=True,
-    title=f"Average rank of tokens in static QK circuit with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
+    title=f"Average rank of tokens in static QK circuit", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
     labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Average Rank"},
     x = ["W_EE", "W_E", "MLP0", "W_PE"], # x y sorta reversed with imshow
     y = ["W_EE", "W_E", "W_PE", "W_U"],
