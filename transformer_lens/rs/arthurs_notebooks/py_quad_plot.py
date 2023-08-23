@@ -1,5 +1,7 @@
 # In[1]:
 
+"""Quad plots but I pivoted away from dot_with_query"""
+
 from transformer_lens.cautils.notebook import *
 from transformer_lens.cautils.utils import lock_attn
 from transformer_lens.rs.callum.keys_fixed import get_effective_embedding_2
@@ -314,99 +316,4 @@ imshow(
     x = ["W_EE", "W_E", "MLP0", "W_PE"], # x y sorta reversed with imshow
     y = ["W_EE", "W_E", "W_PE", "W_U"],
 )
-
-# In[23]:
-
-model.W_U.norm()
-
-
-# In[17]:
-
-
-imshow(
-    all_results,
-    facet_col=0,
-    facet_col_wrap=len(embeddings_dict)-1,
-    facet_labels=labels,
-    title=f"Sample of average log softmax for attention approximations with different effective embeddings: head {LAYER}.{HEAD}",
-    labels={"x": "Key", "y": "Query"},
-    height=900, width=900
-)
-
-
-# In[ ]:
-
-
-scores = t.zeros(12, 12).float().to(device)
-
-for layer, head in tqdm(list(itertools.product(range(12), range(12)))):
-    results = []
-    for idx in range(OUTER_LEN):
-        softmaxed_attn = get_EE_QK_circuit(
-            layer,
-            head,
-            model,
-            show_plot=False,
-            random_seeds=None,
-            bags_of_words=bags_of_words[idx:idx+1],
-            mean_version=False,
-            W_E_query_side=embeddings_dict["W_U (or W_E, no MLPs)"],
-            W_E_key_side=embeddings_dict["W_E (including MLPs)"],  # "W_E (only MLPs)"
-        )
-
-        # now sort each 
-
-        results.append(softmaxed_attn.diag().mean())
-
-    results = sum(results) / len(results)
-
-    scores[layer, head] = results
-
-imshow(scores, width=750, labels={"x": "Head", "y": "Layer"}, title="Prediction-attn scores for bag of words (including MLPs in embedding)")
-
-
-# In[ ]:
-
-
-scores = t.zeros(12, 12).float().to(device)
-
-for layer, head in tqdm(list(itertools.product(range(12), range(12)))):
-    results = []
-    for idx in range(OUTER_LEN):
-        softmaxed_attn = get_EE_QK_circuit(
-            layer,
-            head,
-            model,
-            show_plot=False,
-            random_seeds=None,
-            bags_of_words=bags_of_words[idx:idx+1],
-            mean_version=False,
-            W_E_query_side=embeddings_dict["W_U (or W_E, no MLPs)"],
-            W_E_key_side=embeddings_dict["W_E (only MLPs)"],  # 
-        )
-        results.append(softmaxed_attn.diag().mean())
-
-    results = sum(results) / len(results)
-
-    scores[layer, head] = results
-
-imshow(scores, width=750, labels={"x": "Head", "y": "Layer"}, title="Prediction-attn scores for bag of words (only MLPs in embedding)")
-
-
-# In[ ]:
-
-
-print("Do a thing where we make the softmax denominator the same???")
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
 
