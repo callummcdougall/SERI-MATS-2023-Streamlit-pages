@@ -168,13 +168,10 @@ all_raw_tokens = []
 if OVERWRITE_WITH_ALL_VOCAB:
     assert OUTER_LEN == 1
     assert INNER_LEN == model.cfg.d_vocab
-    bags_of_words = [torch.arange(model.cfg.d_vocab)]
-    bags_of_words = raw_tokens # ! This was hacked together and so doesn't really represent a bag of words well now
-    bags_of_words = torch.randint(0, model.cfg.d_vocab, (2000,)) # TODO upgrade this!
 
 # In[10]:
 
-embeddings_dict = get_effective_embedding_2(model, use_codys_without_attention_changes=False)
+embeddings_dict = get_effective_embedding_2(model, use_codys_without_attention_changes=True)
 
 #%%
 
@@ -207,7 +204,10 @@ rankings = (unembedded <= unembedded.diag()[:, None]).int().sum(dim=-1) # ie rep
 
 #%%
 
-print((rankings<=10).int().sum())
+ranking_top_10 = (rankings<=10)
+print(ranking_top_10.int().sum())
+print(ranking_top_10.int().sum()/model.cfg.d_vocab)
+bags_of_words = ranking_top_10.int().nonzero()[:, 0]
 
 # In[12]:
 
