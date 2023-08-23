@@ -234,8 +234,8 @@ labels = []
 data = []
 lines = []
 
-USE_QUERY_BIAS = True
-USE_KEY_BIAS = True
+USE_QUERY_BIAS = False
+USE_KEY_BIAS = False
 DO_TWO_DIMENSIONS = False # this means doing things like 2D Attention Matrices
 
 for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_keys, embeddings_dict_keys))):
@@ -278,44 +278,28 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
             )
             unnormalized_keys = embeddings_dict[k_side_matrix][torch.arange(model.cfg.d_vocab)] # [inner_len, d_model]
 
-        attn_scores = dot_with_query(
-            unnormalized_keys = unnormalized_keys,
-            unnormalized_queries = unnormalized_queries,
-            model = model,
-            layer_idx = LAYER,
-            head_idx = HEAD,
-            add_key_bias = USE_KEY_BIAS,
-            add_query_bias = USE_QUERY_BIAS,
-            # normalize_keys = True, # True by default            
-        )
-
-        # Compute these manually
-
         queryside_vector = embeddings_dict[q_side_matrix][bags_of_words[outer_idx]]
         queryside_normalized = queryside_vector / (queryside_vector.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
         query = model.W_Q[LAYER, HEAD].T @ queryside_normalized
-        query += model.b_Q[LAYER, HEAD]
+        if USE_QUERY_BIAS:
+            query += model.b_Q[LAYER, HEAD]
 
         keyside_vectors = embeddings_dict[k_side_matrix][torch.arange(model.cfg.d_vocab)]
         keyside_normalized = keyside_vectors / (keyside_vectors.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
         key = keyside_normalized @ model.W_K[LAYER, HEAD]
-        key += model.b_K[LAYER, HEAD]
+        if USE_KEY_BIAS:
+            key += model.b_K[LAYER, HEAD]
 
         attention_scores = query @ key.T / np.sqrt(model.cfg.d_head)
 
-        torch.testing.assert_allclose(attention_scores, attn_scores, atol=1e-4, rtol=1e-4)
-
-        # Done!
-
-        assert len(attn_scores.shape) == 1 + int(DO_TWO_DIMENSIONS), attn_scores
+        assert len(attention_scores.shape) == 1 + int(DO_TWO_DIMENSIONS), attention_scores.shape
         # TODO sort out the fact we have inner len and outer len now...
 
         # if DO_TWO_DIMENSIONS:
         #     log_attentions_to_self[outer_idx] = attn[torch.arange(INNER_LEN), torch.arange(INNER_LEN)]
         # else:
 
-        log_attentions_to_self[outer_idx] = (attn_scores >= (attn_scores[bags_of_words[outer_idx]] - 1e-5)).int().sum()
-        print(log_attentions_to_self[outer_idx])
+        log_attentions_to_self[outer_idx] = (attention_scores >= (attention_scores[bags_of_words[outer_idx]] - 1e-5)).int().sum()
 
     lines.append(log_attentions_to_self.mean())
     print(lines[-1])
@@ -323,10 +307,10 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
 # In[21]:
 
 imshow(
-    einops.rearrange(torch.tensor(lines), "(height width) -> height width", height=4),
+    einops.rearrange(torch.tensor(lines).long(), "(height width) -> height width", height=4),
     text_auto=True,
-    title=f"Average token self-attention in static QK circuit with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
-    labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Self-Attention"},
+    title=f"Average rank of tokens in static QK circuit with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
+    labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Average Rank"},
     x = ["W_EE", "W_E", "MLP0", "W_PE"], # x y sorta reversed with imshow
     y = ["W_EE", "W_E", "W_PE", "W_U"],
 )
