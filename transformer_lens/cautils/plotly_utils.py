@@ -18,14 +18,12 @@ UPDATE_LAYOUT_SET = {
     "xaxis_range", "yaxis_range", "hovermode", "xaxis_title", "yaxis_title", "colorbar", "colorscale", "coloraxis", "title_x", "bargap", "bargroupgap", "xaxis_tickformat",
     "yaxis_tickformat", "title_y", "legend_title_text", "xaxis_showgrid", "xaxis_gridwidth", "xaxis_gridcolor", "yaxis_showgrid", "yaxis_gridwidth", "yaxis_gridcolor",
     "showlegend", "xaxis_tickmode", "yaxis_tickmode", "xaxis_tickangle", "yaxis_tickangle", "margin", "xaxis_visible", "yaxis_visible", "bargap", "bargroupgap", "font",
-    "modebar_add", "legend_traceorder", "autosize"
+    "modebar_add", "legend_traceorder", "autosize",
 }
 # Gives options to draw on plots, and remove plotly logo
 CONFIG = {'displaylogo': False}
 CONFIG_STATIC = {'displaylogo': False, 'staticPlot': True}
 MODEBAR_ADD = ['drawline', 'drawopenpath', 'drawclosedpath', 'drawcircle', 'drawrect', 'eraseshape']
-
-    
 
 
 def imshow(tensor, renderer=None, **kwargs):
@@ -42,6 +40,8 @@ def imshow(tensor, renderer=None, **kwargs):
     facet_labels = kwargs_pre.pop("facet_labels", None)
     facet_label_size = kwargs_pre.pop("facet_label_size", None)
     animation_labels = kwargs_pre.pop("animation_labels", None)
+    color_continuous_midpoint = kwargs_pre.pop("color_continuous_midpoint", 0.0) # Added by Arthur so that you can override this to None if wanted
+ 
     if "aspect" not in kwargs_pre:
         kwargs_pre["aspect"] = "auto"
     if "color_continuous_scale" not in kwargs_pre:
@@ -50,7 +50,7 @@ def imshow(tensor, renderer=None, **kwargs):
         kwargs_post["margin"] = dict.fromkeys(list("tblr"), kwargs_post["margin"])
     if "modebar_add" not in kwargs_post:
         kwargs_post["modebar_add"] = ['drawline', 'drawopenpath', 'drawclosedpath', 'drawcircle', 'drawrect', 'eraseshape']
-    fig = px.imshow(to_numpy(tensor), color_continuous_midpoint=0.0, **kwargs_pre)
+    fig = px.imshow(to_numpy(tensor), color_continuous_midpoint=color_continuous_midpoint, **kwargs_pre)
     if facet_labels:
         if kwargs_pre.get("facet_col_wrap", None) is not None:
             facet_labels = reorder_list_in_plotly_way(facet_labels, kwargs_pre["facet_col_wrap"])
