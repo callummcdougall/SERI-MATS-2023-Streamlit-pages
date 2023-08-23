@@ -35,9 +35,6 @@ LAYER_IDX, HEAD_IDX = {
 }[model.cfg.model_name]
 
 
-warnings.warn("Changing to duplicate token")
-LAYER_IDX, HEAD_IDX = 3, 0
-
 W_U = model.W_U
 W_Q_negative = model.W_Q[LAYER_IDX, HEAD_IDX]
 W_K_negative = model.W_K[LAYER_IDX, HEAD_IDX]
@@ -164,43 +161,65 @@ bags_of_words = []
 OUTER_LEN = 1
 INNER_LEN = model.cfg.d_vocab
 
+t.manual_seed(1243)
+
+all_raw_tokens = []
+
 if OVERWRITE_WITH_ALL_VOCAB:
     assert OUTER_LEN == 1
     assert INNER_LEN == model.cfg.d_vocab
     bags_of_words = [torch.arange(model.cfg.d_vocab)]
     bags_of_words = raw_tokens # ! This was hacked together and so doesn't really represent a bag of words well now
-    bags_of_words = torch.randint(0, model.cfg.d_vocab, (200,))
+    bags_of_words = torch.randint(0, model.cfg.d_vocab, (2000,))
 
-else:
-    assert INNER_LEN <= model.cfg.n_ctx
 
-    idx = -1
-    while len(bags_of_words) < OUTER_LEN:
-        idx += 1
-        cur_tokens = model.tokenizer.encode(dataset[idx])
-        cur_bag = []
-        
-        for i in range(len(cur_tokens)):
-            if len(cur_bag) == INNER_LEN:
-                break
-            if cur_tokens[i] not in cur_bag:
-                cur_bag.append(cur_tokens[i])
-
+idx = -1
+while idx < 1000: # say
+    idx += 1
+    cur_tokens = model.tokenizer.encode(dataset[idx])
+    cur_bag = []
+    
+    for i in range(len(cur_tokens)):
         if len(cur_bag) == INNER_LEN:
-            bags_of_words.append(cur_bag)
+            break
+        if cur_tokens[i] not in all_raw_tokens:
+            all_raw_tokens.append(cur_tokens[i])
 
+    bags_of_words = torch.tensor(all_raw_tokens).long()
 
 # In[10]:
 
-embeddings_dict = get_effective_embedding_2(model)
+embeddings_dict = get_effective_embedding_2(model, use_codys_without_attention_changes=True)
 
 #%%
 
-output = model.W_E + model.blocks[0].mlp(model.blocks[0].ln2(model.W_E).unsqueeze(0)).squeeze()
+# Do the OV circuit stuff
+embedding = embeddings_dict["W_E (including MLPs)"]
 
 #%%
 
-embeddings_dict["W_PE"] = output # Cody's embedding
+ten_seven_OV = einops.einsum(
+    embedding,
+    model.W_V[LAYER_IDX, HEAD_IDX],
+    model.W_O[LAYER_IDX, HEAD_IDX],
+    "batch d_model, d_model d_head, d_head d_model2 -> batch d_model2",
+)
+
+#%%
+
+unembedded = einops.einsum( # Is this too slow ???
+    ten_seven_OV.cpu(),
+    model.W_U.cpu(),
+    "batch d_model2, d_model2 d_vocab -> batch d_vocab",
+)
+
+#%%
+
+rankings = (unembedded >= unembedded.diag()).int().sum(dim=-1)
+
+#%%
+
+
 
 # In[12]:
 
@@ -239,6 +258,8 @@ lines = []
 USE_QUERY_BIAS = False
 USE_KEY_BIAS = False
 DO_TWO_DIMENSIONS = False # this means doing things like 2D Attention Matrices
+
+all_log_attentions_to_self = []
 
 for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_keys, embeddings_dict_keys))):
 
@@ -295,33 +316,46 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
         attention_scores = query @ key.T / np.sqrt(model.cfg.d_head)
 
         assert len(attention_scores.shape) == 1 + int(DO_TWO_DIMENSIONS), attention_scores.shape
-        # TODO sort out the fact we have inner len and outer len now...
-
-        # if DO_TWO_DIMENSIONS:
-        #     log_attentions_to_self[outer_idx] = attn[torch.arange(INNER_LEN), torch.arange(INNER_LEN)]
-        # else:
 
         log_attentions_to_self[outer_idx] = (attention_scores >= (attention_scores[bags_of_words[outer_idx]] - 1e-5)).int().sum()
 
+    all_log_attentions_to_self.append(log_attentions_to_self.cpu())
     lines.append(log_attentions_to_self.mean())
     print(lines[-1])
 
 # In[21]:
 
-imshow(
-    einops.rearrange(torch.tensor(lines).long(), "(height width) -> height width", height=4).log(),
-    text_auto=True,
+square_of_values = einops.rearrange(torch.tensor(lines), "(height width) -> height width", height=3)
+labels = square_of_values.tolist()
+
+fig = imshow(
+    square_of_values.log(),
+    # text_auto=True,
     title=f"Average rank of tokens in static QK circuit", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
     labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Average Rank"},
-    x = ["W_EE", "W_E", "MLP0", "W_PE"], # x y sorta reversed with imshow
-    y = ["W_EE", "W_E", "W_PE", "W_U"],
+    x = ["W_EE", "W_E", "MLP0"], # x y sorta reversed with imshow
+    y = ["W_EE", "W_E", "W_U"],
     color_continuous_midpoint=None,
+    range_color=(0, 10), # This manually defines the range of things
     coloraxis=dict(
         colorbar=dict(
-        tickvals=np.log(np.array([1, 10, 100, 10000])),
-        ticktext=['1', '10', '100', '10000']
+        tickvals=np.log(np.array([1, 10, 100, 1000, 10000])),
+        ticktext=['1', '10', '100', '1000', '10000']
     )),
+    color_continuous_scale="Blues_r",
+    return_fig=True,
 )
 
+for i, row in enumerate(labels):
+    for j, label in enumerate(row):
+        fig.add_annotation(
+            x=j, # x-coordinate of the annotation
+            y=i, # y-coordinate of the annotation
+            text=str(round(label, 2)), # text label
+            showarrow=False, # don't show an arrow pointing to the annotation
+            # color="white",
+        )
+
+fig.show()
 
 # %%
