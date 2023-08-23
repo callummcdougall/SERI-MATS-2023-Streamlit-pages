@@ -209,6 +209,26 @@ print(ranking_top_10.int().sum())
 print(ranking_top_10.int().sum()/model.cfg.d_vocab)
 bags_of_words = ranking_top_10.int().nonzero()[:, 0]
 
+#%%
+
+worst = rankings.argsort(
+    descending=True,
+)
+
+#%%
+
+failures = model.to_str_tokens(
+    worst[:-46533],
+)
+
+#%%
+
+# np.random.shuffle(failures)
+
+#%%
+
+print(failures[:100])
+
 # In[12]:
 
 # TODO should really make this outer_len and inner_len, but I forgot
@@ -243,8 +263,8 @@ labels = []
 data = []
 lines = []
 
-USE_QUERY_BIAS = False
-USE_KEY_BIAS = False
+USE_QUERY_BIAS = True
+USE_KEY_BIAS = True
 DO_TWO_DIMENSIONS = False # this means doing things like 2D Attention Matrices
 
 all_log_attentions_to_self = []
@@ -305,7 +325,7 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
 
         assert len(attention_scores.shape) == 1 + int(DO_TWO_DIMENSIONS), attention_scores.shape
 
-        log_attentions_to_self[outer_idx] = (attention_scores >= (attention_scores[bags_of_words[outer_idx]] - 1e-5)).int().sum()
+        log_attentions_to_self[outer_idx] = (attention_scores >= (attention_scores[bags_of_words[outer_idx]] - 1e-5)).int().sum() # TODO I don't think that the 1e-5 is necessary
 
     all_log_attentions_to_self.append(log_attentions_to_self.cpu())
     lines.append(log_attentions_to_self.mean())
@@ -342,8 +362,31 @@ for i, row in enumerate(labels):
             text=str(round(label, 2)), # text label
             showarrow=False, # don't show an arrow pointing to the annotation
             # color="white",
+            font=dict(
+                color="white" if label < 10 else "black",
+            ),
         )
 
+# Make it exactly square
+fig.update_layout(
+    width=400,
+    height=400,
+    margin=dict(
+        l=0,
+        r=0,
+        b=0,
+        # t=0,
+        pad=0
+    ),
+)
+
 fig.show()
+
+# %%
+
+# Save as JSON
+fig.write_json("quad_plot.json")
+
+fig.write_image("quad_plot.pdf")
 
 # %%
