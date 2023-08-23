@@ -151,25 +151,33 @@ NEGATIVE_NAME_MOVERS = {
 # Prep some bags of words...
 # OVERLY LONG because it really helps to have the bags of words the same length
 
+OVERWRITE_WITH_ALL_VOCAB = True
 bags_of_words = []
+OUTER_LEN = 1
+INNER_LEN = model.cfg.d_vocab
 
-OUTER_LEN = 50
-INNER_LEN = 100
+if OVERWRITE_WITH_ALL_VOCAB:
+    assert OUTER_LEN == 1
+    assert INNER_LEN == model.cfg.d_vocab
+    bags_of_words = [torch.arange(model.cfg.d_vocab)]
 
-idx = -1
-while len(bags_of_words) < OUTER_LEN:
-    idx += 1
-    cur_tokens = model.tokenizer.encode(dataset[idx])
-    cur_bag = []
-    
-    for i in range(len(cur_tokens)):
+else:
+    assert INNER_LEN <= model.cfg.n_ctx
+
+    idx = -1
+    while len(bags_of_words) < OUTER_LEN:
+        idx += 1
+        cur_tokens = model.tokenizer.encode(dataset[idx])
+        cur_bag = []
+        
+        for i in range(len(cur_tokens)):
+            if len(cur_bag) == INNER_LEN:
+                break
+            if cur_tokens[i] not in cur_bag:
+                cur_bag.append(cur_tokens[i])
+
         if len(cur_bag) == INNER_LEN:
-            break
-        if cur_tokens[i] not in cur_bag:
-            cur_bag.append(cur_tokens[i])
-
-    if len(cur_bag) == INNER_LEN:
-        bags_of_words.append(cur_bag)
+            bags_of_words.append(cur_bag)
 
 
 # In[10]:
@@ -220,6 +228,9 @@ lines = []
 
 USE_QUERY_BIAS = True
 USE_KEY_BIAS = True
+DO_TWO_DIMENSIONS = False # this means doing things like 2D Attention Matrices
+
+john_token = model.to_single_token(" John")
 
 for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_keys, embeddings_dict_keys))):
 
@@ -239,16 +250,25 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
     results = []
 
     for outer_idx in tqdm(list(range(OUTER_LEN))):
-        unnormalized_queries = einops.repeat(
-            embeddings_dict[q_side_matrix][bags_of_words[outer_idx]],
-            "inner_len d_model -> inner_len another_inner_len d_model",
-            another_inner_len=INNER_LEN,
-        )
-        unnormalized_keys = einops.repeat(
-            embeddings_dict[k_side_matrix][bags_of_words[outer_idx]], # [inner_len, d_model],
-            "inner_len d_model -> another_inner_len inner_len d_model",
-            another_inner_len=INNER_LEN,
-        )
+        if DO_TWO_DIMENSIONS:
+            unnormalized_queries = einops.repeat(
+                embeddings_dict[q_side_matrix][john_token], # [d_model]
+                "inner_len d_model -> inner_len another_inner_len d_model",
+                another_inner_len=INNER_LEN,
+            )
+            unnormalized_keys = einops.repeat(
+                embeddings_dict[k_side_matrix][bags_of_words[outer_idx]], # [inner_len, d_model],
+                "inner_len d_model -> another_inner_len inner_len d_model",
+                another_inner_len=INNER_LEN,
+            )
+        else:
+            unnormalized_queries = einops.repeat(
+                embeddings_dict[q_side_matrix][john_token],
+                "d_model -> inner_len d_model",
+                inner_len=INNER_LEN,
+            )
+            unnormalized_keys = embeddings_dict[k_side_matrix][bags_of_words[outer_idx]] # [inner_len, d_model]
+
         attn_scores = dot_with_query(
             unnormalized_keys = unnormalized_keys,
             unnormalized_queries = unnormalized_queries,
@@ -259,11 +279,19 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
             add_query_bias = USE_QUERY_BIAS,
             # normalize_keys = True, # True by default            
         )
-        assert len(attn_scores.shape) == 2, attn_scores
+        assert len(attn_scores.shape) == 1 + int(DO_TWO_DIMENSIONS), attn_scores
         # TODO sort out the fact we have inner len and outer len now...
 
         attn = attn_scores.softmax(dim=-1)
-        log_attentions_to_self[outer_idx] = attn[torch.arange(INNER_LEN), torch.arange(INNER_LEN)]
+        if DO_TWO_DIMENSIONS:
+            log_attentions_to_self[outer_idx] = attn[torch.arange(INNER_LEN), torch.arange(INNER_LEN)]
+        else:
+            log_attentions_to_self[outer_idx] = attn
+            print(
+                torch.argsort(
+                    log_attentions_to_self,
+                )[0][john_token]
+            )
 
     lines.append(log_attentions_to_self.mean())
     print(lines[-1])
