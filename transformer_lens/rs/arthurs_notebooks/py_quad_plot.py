@@ -170,26 +170,11 @@ if OVERWRITE_WITH_ALL_VOCAB:
     assert INNER_LEN == model.cfg.d_vocab
     bags_of_words = [torch.arange(model.cfg.d_vocab)]
     bags_of_words = raw_tokens # ! This was hacked together and so doesn't really represent a bag of words well now
-    bags_of_words = torch.randint(0, model.cfg.d_vocab, (2000,))
-
-
-idx = -1
-while idx < 1000: # say
-    idx += 1
-    cur_tokens = model.tokenizer.encode(dataset[idx])
-    cur_bag = []
-    
-    for i in range(len(cur_tokens)):
-        if len(cur_bag) == INNER_LEN:
-            break
-        if cur_tokens[i] not in all_raw_tokens:
-            all_raw_tokens.append(cur_tokens[i])
-
-    bags_of_words = torch.tensor(all_raw_tokens).long()
+    bags_of_words = torch.randint(0, model.cfg.d_vocab, (2000,)) # TODO upgrade this!
 
 # In[10]:
 
-embeddings_dict = get_effective_embedding_2(model, use_codys_without_attention_changes=True)
+embeddings_dict = get_effective_embedding_2(model, use_codys_without_attention_changes=False)
 
 #%%
 
@@ -207,7 +192,7 @@ ten_seven_OV = einops.einsum(
 
 #%%
 
-unembedded = einops.einsum( # Is this too slow ???
+unembedded = einops.einsum( # Is this too slow ??? Not really. Takes 10 seconds but works. I think it will
     ten_seven_OV.cpu(),
     model.W_U.cpu(),
     "batch d_model2, d_model2 d_vocab -> batch d_vocab",
@@ -215,11 +200,11 @@ unembedded = einops.einsum( # Is this too slow ???
 
 #%%
 
-rankings = (unembedded >= unembedded.diag()).int().sum(dim=-1)
+rankings = (unembedded <= unembedded.diag()).int().sum(dim=-1)
 
 #%%
 
-
+print((rankings<=10).int().sum())
 
 # In[12]:
 
