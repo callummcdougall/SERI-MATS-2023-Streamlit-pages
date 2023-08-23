@@ -193,14 +193,17 @@ ten_seven_OV = einops.einsum(
 #%%
 
 unembedded = einops.einsum( # Is this too slow ??? Not really. Takes 10 seconds but works. I think it will
-    ten_seven_OV.cpu(),
-    model.W_U.cpu(),
+    ten_seven_OV,
+    model.W_U,
     "batch d_model2, d_model2 d_vocab -> batch d_vocab",
 )
 
 #%%
 
-rankings = (unembedded <= unembedded.diag()).int().sum(dim=-1)
+unembedded = unembedded.to("cpu")
+gc.collect()
+torch.cuda.empty_cache()
+rankings = (unembedded <= unembedded.diag()[:, None]).int().sum(dim=-1) # ie repressed even harder!
 
 #%%
 
