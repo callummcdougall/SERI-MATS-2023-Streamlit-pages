@@ -184,6 +184,14 @@ def first_occurrence_2d(tensor_2D):
 def concat_lists(list_of_lists):
     return [item for sublist in list_of_lists for item in sublist]
 
+def update_mean(current_value: Tensor, new_value: Tensor, num_samples_so_far: int, num_new_samples: int):
+    '''
+    Updates a running mean.
+    '''
+    assert current_value.shape == new_value.shape, f"Shapes mismatch: old = {current_value.shape}, new = {new_value.shape}"
+    return (num_samples_so_far * current_value + num_new_samples * new_value) / (num_samples_so_far + num_new_samples)
+
+
 
 
 # =============================================================================
@@ -283,6 +291,9 @@ def project(
     in `proj_directions`. If `proj_directions` has an extra dim, then the last dimension is another 
     batch dim, i.e. we're projecting each vector onto a subspace rather than a single vector.
     '''
+    # Sometimes proj_directions will be same shape as vectors, i.e. num=1
+    if proj_directions.shape == vectors.shape:
+        proj_directions = proj_directions.unsqueeze(-1)
     assert proj_directions.shape[:-1] == vectors.shape
     assert proj_directions.shape[-1] <= 30, "Shouldn't do too many vectors, GS orth might be computationally heavy I think?"
 

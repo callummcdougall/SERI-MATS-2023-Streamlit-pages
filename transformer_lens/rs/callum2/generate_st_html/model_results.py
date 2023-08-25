@@ -3,7 +3,7 @@
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
 import itertools
-from typing import Dict, Any, Tuple, List, Optional, Literal
+from typing import Dict, Any, Tuple, List, Optional, Literal, Iterable
 from transformer_lens import HookedTransformer, utils
 from functools import partial
 import einops
@@ -383,39 +383,64 @@ def gram_schmidt(vectors: Float[Tensor, "... d num"]) -> Float[Tensor, "... d nu
 
 
 def get_result_mean(
-    head_list: List[Tuple[int, int]],
+    head_list: Optional[List[Tuple[int, int]]],
     toks: Int[Tensor, "batch seq"],
     model: HookedTransformer,
     minibatch_size: int = 10,
     keep_seq_dim: bool = True,
-    verbose: bool = False
+    include_mlps: bool = False,
+    verbose: bool = False,
 ) -> Dict[Tuple[int, int], Float[Tensor, "*seq d_model"]]:
     '''
     Returns the mean result vector for a given set of inputs. 
 
     Useful for doing mean ablation, because we need the mean over the entire batch before we run any forward passes.
     '''
-
+    # Get list of heads to iterate through, and list of all layers we need
     batch_size, seq_len = toks.shape
+    if head_list is None:
+        head_list = list(itertools.product(range(model.cfg.n_layers), range(model.cfg.n_heads)))
     layers = list(set([head[0] for head in head_list]))
-    result_mean = {head: t.empty((0, seq_len, model.cfg.d_model)) for head in head_list}
+    
+    # Get dict to store results in: all heads, and possibly MLPs
+    result_mean = {head: t.zeros((seq_len, model.cfg.d_model)).to(toks.device) for head in head_list}
+    if include_mlps:
+        for layer in layers: result_mean[layer] = t.zeros((seq_len, model.cfg.d_model)).to(toks.device)
 
-    assert batch_size % minibatch_size == 0
+    # Get tokens to iterate through
+    toks_chunked = toks.split(minibatch_size, dim=0)
+    toks_chunked_wrapper: Iterable[Tensor] = tqdm(toks_chunked) if verbose else toks_chunked
+    num_seq_seen = 0
 
-    iterator = range(0, batch_size, minibatch_size)
-    iterator = tqdm(iterator) if verbose else iterator
-    for i in iterator:
+    # Get names of activations we want to cache
+    hook_names = [utils.get_act_name("result", layer) for layer in layers]
+    if include_mlps: hook_names += [utils.get_act_name("mlp_out", layer) for layer in layers]
+
+    # Go through the iterator, and cache them
+    for _toks in toks_chunked_wrapper:
+        batch_size, seq_len = _toks.shape
+        
+        # Run with cache, getting all the activations we need
         _, cache = model.run_with_cache(
-            toks[i: i+minibatch_size],
+            _toks,
             return_type=None,
-            names_filter=lambda name: name in [utils.get_act_name("result", layer) for layer in layers]
+            names_filter=lambda name: name in hook_names
         )
-        for layer, head in head_list:
-            result = cache["result", layer][:, :, head].mean(0, keepdim=True).cpu() # [1 seq d_model]
-            result_mean[(layer, head)] = t.cat([result_mean[(layer, head)], result], dim=0)
 
-    # Remove batch dim, also seq dim if keep_seq_dim is False
-    result_mean = {k: v.mean(0) for k, v in result_mean.items()}
+        # Get mean for every head
+        for layer, head in head_list:
+            new_result_mean = cache["result", layer][:, :, head].mean(0) # [seq d_model]
+            # Update formula for mean, e.g. R -> R first time, then R -> (R+R_new)/2, then R -> (2*R+R_new)/3, etc
+            result_mean[(layer, head)] = (num_seq_seen * result_mean[(layer, head)] + batch_size * new_result_mean) / (num_seq_seen + batch_size)
+
+        # If required, also get mean for MLP
+        if include_mlps:
+            new_mlp_out_mean = cache["mlp_out", layer].mean(0) # [seq d_model]
+            result_mean[layer] = (num_seq_seen * result_mean[layer] + batch_size * new_mlp_out_mean) / (num_seq_seen + batch_size)
+
+        num_seq_seen += batch_size
+
+    # Possibly take mean over sequence dimension
     if not keep_seq_dim: result_mean = {k: v.mean(0) for k, v in result_mean.items()}
     
     return result_mean

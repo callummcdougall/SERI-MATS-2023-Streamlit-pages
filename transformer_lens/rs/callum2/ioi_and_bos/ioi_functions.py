@@ -118,11 +118,20 @@ def get_attn_scores_as_linear_func_of_queries_for_histogram(
     name_tokens: List[int],
     subtract_S1_attn_scores: bool = False,
     only_effective_embeddings: bool = False,
+    names_to_return = ["W_U_tuned[IO]", "W_U[IO]", "NMH 9.9 output", "NMH 9.9, ⟂ W_U[IO]", "NMH 9.9, ⟂ W_U_tuned[IO]", "NMH 9.9, ⟂ W_U[all six]", "W_U[S]", "W_U[random name]", "W_U[random]", "No patching"]
 ):
-    names = ["W_U[IO]", "NMH 9.9 output", "NMH 9.9, ⟂ W_U[IO]", "NMH 9.9, ⟂ W_U[all six]", "W_U[S]", "W_U[random name]", "W_U[random]", "No patching"]
+    names = ["W_U_tuned[IO]", "W_U[IO]", "NMH 9.9 output", "NMH 9.9, ⟂ W_U[IO]", "NMH 9.9, ⟂ W_U_tuned[IO]", "NMH 9.9, ⟂ W_U[all six]", "W_U[S]", "W_U[random name]", "W_U[random]", "No patching"]
 
     attn_scores = {k: t.empty((0,)).to(device) for k in names}
     attn_probs = {k: t.empty((0,)).to(device) for k in names}
+
+    # ! Compute tuned lens
+    path = Path("/root/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/ov_qk_circuits/params.pt")
+    params: Dict[str, Tensor] = t.load(path)
+    W_U = model.W_U
+    id = t.eye(model.cfg.d_model)
+    tuned_lens = params["10.weight"]
+    W_U_tuned = (id + tuned_lens).to(device) @ W_U
 
     for seed in tqdm(range(num_batches)):
 
@@ -134,6 +143,7 @@ def get_attn_scores_as_linear_func_of_queries_for_histogram(
         # Has to be manual, because apparently `apply_ln_to_stack` doesn't allow it to be applied at different sequence positions
         nmh_99_output = einops.einsum(ioi_cache["z", 9][range(batch_size), ioi_dataset.word_idx["end"], 9], model.W_O[9, 9], "batch d_head, d_head d_model -> batch d_model")
 
+        # Construct list of 3 variants of IO name, and 3 variants of S name (e.g. " Mary", "Mary", "mary")
         name_tokens_list = [
             ioi_dataset.io_tokenIDs,
             get_nonspace_name_tokenIDs(model, ioi_dataset.io_tokenIDs),
@@ -143,16 +153,21 @@ def get_attn_scores_as_linear_func_of_queries_for_histogram(
             get_lowercase_name_tokenIDs(model, ioi_dataset.s_tokenIDs),
         ]
         W_U_all = [model.W_U.T[name_tokens] for name_tokens in name_tokens_list]
+        W_U_tuned_all = [W_U_tuned.T[name_tokens] for name_tokens in name_tokens_list]
 
-        nmh_99_par, nmh_99_perp = project(nmh_99_output, W_U_all[0], return_type="projections")
-        nmh_99_par_all, nmh_99_perp_all = project(nmh_99_output, W_U_all, return_type="projections")
+        # Project onto various directions, and construct all the different versions of residual stream vectors
+        nmh_99_par, nmh_99_perp = project(nmh_99_output, W_U_all[0], return_perp=True)
+        nmh_99_tuned_par, nmh_99_tuned_perp = project(nmh_99_output, W_U_tuned_all[0], return_perp=True)
+        nmh_99_par_all, nmh_99_perp_all = project(nmh_99_output, t.stack(W_U_all, -1), return_perp=True)
         resid_vectors = {
+            "W_U_tuned[IO]": W_U_tuned.T[name_tokens_list[0]],
             "W_U[IO]": model.W_U.T[name_tokens_list[0]],
             "W_U[S]": model.W_U.T[name_tokens_list[3]],
             "W_U[random]": model.W_U.T[t.randint(size=(batch_size,), low=0, high=model.cfg.d_vocab)],
             "W_U[random name]": model.W_U.T[np.random.choice(name_tokens, size=(batch_size,))],
             "NMH 9.9 output": nmh_99_output,
             "NMH 9.9, ⟂ W_U[IO]": nmh_99_perp,
+            "NMH 9.9, ⟂ W_U_tuned[IO]": nmh_99_tuned_perp,
             "NMH 9.9, ⟂ W_U[all six]": nmh_99_perp_all,
             "No patching": ioi_cache["resid_pre", NNMH[0]][range(batch_size), ioi_dataset.word_idx["end"]]
         }
@@ -185,7 +200,10 @@ def get_attn_scores_as_linear_func_of_queries_for_histogram(
             all_probs = all_attn_scores.softmax(dim=-1)[range(batch_size), ioi_dataset.word_idx["IO"]]
             attn_probs[k] = t.cat([attn_probs[k], all_probs])
 
-    return attn_scores, attn_probs
+    return (
+        {k: v for k, v in attn_scores.items() if k in names_to_return},
+        {k: v for k, v in attn_probs.items() if k in names_to_return},
+    )
 
 
 
