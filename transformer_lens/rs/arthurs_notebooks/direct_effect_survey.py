@@ -7,7 +7,7 @@ direct effect of NMS
 
 from transformer_lens.cautils.notebook import *
 from transformer_lens.rs.callum.keys_fixed import project
-from transformer_lens.rs.arthurs_notebooks.arthur_utils import get_metric_from_end_state
+from transformer_lens.rs.arthurs_notebooks.arthurs_utils import get_metric_from_end_state
 import argparse
 
 model: HookedTransformer = HookedTransformer.from_pretrained(
@@ -110,7 +110,7 @@ my_loss = get_metric_from_end_state(model, end_state.to(DEVICE), mytargets).cpu(
 
 # %%
 
-# see also the full test in arthur_utils file
+# see also the full test in arthurs_utils file
 their_loss = model(
     mybatch.to(DEVICE),
     return_type="loss",

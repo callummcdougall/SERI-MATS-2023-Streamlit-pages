@@ -5,7 +5,7 @@ Mixing key_and_query_projection and arthur_signal_owt here
 """
 
 from transformer_lens.cautils.notebook import *
-from transformer_lens.rs.arthurs_notebooks.arthur_utils import *
+from transformer_lens.rs.arthurs_notebooks.arthurs_utils import *
 from transformer_lens.rs.callum.keys_fixed import (
     project,
     get_effective_embedding_2,

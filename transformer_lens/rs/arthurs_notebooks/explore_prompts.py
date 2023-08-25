@@ -38,7 +38,7 @@ from transformer_lens.rs.callum2.explore_prompts.copy_suppression_classification
     plot_full_matrix_histogram,
 )
 
-from transformer_lens.rs.arthurs_notebooks.arthur_utils import get_metric_from_end_state, dot_with_query, set_to_value
+from transformer_lens.rs.arthurs_notebooks.arthurs_utils import get_metric_from_end_state, dot_with_query, set_to_value
 from transformer_lens.rs.callum2.what_even_is_the_freaking_query.keys_fixed import project as original_project # some other project function defined somewhere yikes
 clear_output()
 
