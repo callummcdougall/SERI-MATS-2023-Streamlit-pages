@@ -1,10 +1,6 @@
 #%%
 
 from transformer_lens.cautils.notebook import *
-from transformer_lens.rs.callum2.generate_st_html.utils import (
-    ST_HTML_PATH,
-    parse_str_tok_for_printing,
-)
 from transformer_lens.rs.callum2.generate_st_html.model_results import (
     get_model_results,
 )
@@ -44,47 +40,6 @@ model = HookedTransformer.from_pretrained(
     refactor_factored_attn_matrices=False,
 )
 model.set_use_attn_result(True)
-
-#%%
-
-cspa_semantic_dict = pickle.load(open(ST_HTML_PATH.parent.parent / "cspa/cspa_semantic_dict_full.pkl", "rb"))
-
-#%%
-
-fpath = ST_HTML_PATH.parent.parent / "cspa/cspa_semantic_dict_full_token_idx_version.pkl"
-
-if not fpath.exists():
-    token_idx_version = {}
-    succ = 0
-    fails = 0
-
-    for k in tqdm(cspa_semantic_dict):
-        try:
-            token_idx = model.to_single_token(k)
-        except Exception:
-            fails += 1
-            continue
-        assert token_idx not in token_idx_version
-
-        token_idx_version[token_idx] = set()
-
-        for lis in cspa_semantic_dict[k]:
-            for tok in lis:
-                try:
-                    child_token_idx = model.to_single_token(tok)
-                except Exception:
-                    fails += 1
-                    continue
-
-                if child_token_idx not in token_idx_version[token_idx]:
-                    token_idx_version[token_idx].add(child_token_idx)
-                    succ += 1
-
-    input("Sure you want to save this 8MB file?")
-    torch.save(token_idx_version, fpath) # hopefully not too beefy
-
-else:
-    token_idx_version = torch.load(fpath)
 
 #%%
 
@@ -435,29 +390,29 @@ for batch_idx in range(31): #range(len(top_unembeds_per_position)):
         normalize_queries = False,
     )
 
-    try:
-        cur_string = model.to_single_str_token(top_attention_weight_token)
+    # try:
+    #     cur_string = model.to_single_str_token(top_attention_weight_token)
 
-        assert top_attention_weight_token in token_idx_version[top_attention_weight_token]
+    #     assert top_attention_weight_token in token_idx_version[top_attention_weight_token]
 
-        # if top_attention_weight_token in topk_model_predictions:
+    #     # if top_attention_weight_token in topk_model_predictions:
 
-        is_sem_sim = [str(topk_model_prediction.item() in token_idx_version[top_attention_weight_token]) for topk_model_prediction in topk_model_predictions]
-        if top_attention_weight_token in topk_model_predictions:
-            is_sem_sim[topk_model_predictions.tolist().index(top_attention_weight_token)] = "Exact same token"
+    #     is_sem_sim = [str(topk_model_prediction.item() in token_idx_version[top_attention_weight_token]) for topk_model_prediction in topk_model_predictions]
+    #     if top_attention_weight_token in topk_model_predictions:
+    #         is_sem_sim[topk_model_predictions.tolist().index(top_attention_weight_token)] = "Exact same token"
 
-        px.bar(
-            x = [f"{i}: `{model.to_single_str_token(topk_model_prediction.item())}`" for i, topk_model_prediction in enumerate(topk_model_predictions)],
-            y = top_attention_scores.tolist(),
-            color=is_sem_sim,
-            labels = {"x": "Model prediction", "y": "Attention score", "color": "Semantically similar?"},
-            title = f"10.7 Attention Scores for `{cur_string}`",
-        ).show()
+    #     px.bar(
+    #         x = [f"{i}: `{model.to_single_str_token(topk_model_prediction.item())}`" for i, topk_model_prediction in enumerate(topk_model_predictions)],
+    #         y = top_attention_scores.tolist(),
+    #         color=is_sem_sim,
+    #         labels = {"x": "Model prediction", "y": "Attention score", "color": "Semantically similar?"},
+    #         title = f"10.7 Attention Scores for `{cur_string}`",
+    #     ).show()
 
-    except Exception as e:
-        print(e)
-        print("Couldn't find token in semantic dict???")
-        continue
+    # except Exception as e:
+    #     print(e)
+    #     print("Couldn't find token in semantic dict???")
+    #     continue
 
     print("\nTop model predictions before 10.7:")
     cur_ten_probs = logit_lens_top_pre_ten_probs[top5p_batch_indices[batch_idx]]

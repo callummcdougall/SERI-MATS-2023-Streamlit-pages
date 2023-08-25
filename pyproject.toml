@@ -36,6 +36,7 @@ nltk = "^3.8.1"
 
 # pattern has a stupid dependency on mysqllib which requires extra linux package installs so breaks streamlit. This guy's fork is an open PR that avoids this crap <3
 pattern = {git = "https://github.com/uob-vil/pattern.git", rev = "3b77852c51d1e80b17d9abba0be5efad6a2fd7a5"}
+kaleido = "0.2.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.2.0"
