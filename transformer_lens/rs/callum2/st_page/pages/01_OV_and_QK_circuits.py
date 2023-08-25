@@ -2,6 +2,7 @@ import sys, os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 import streamlit as st
+st.write(os.getcwd())
 import gzip
 import pickle
 from pathlib import Path
