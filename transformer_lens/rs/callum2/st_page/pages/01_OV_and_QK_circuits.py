@@ -18,16 +18,16 @@ t.set_grad_enabled(False)
 import platform
 is_local = (platform.processor() != "")
 
-# Stuff to make the page work on my local machine
-for p in [
-    Path(r"C:\Users\calsm\Documents\AI Alignment\SERIMATS_23\seri_mats_23_streamlit_pages"),
-    Path(r"/home/ubuntu/SERI-MATS-2023-Streamlit-pages"),
-    Path(r"/mount/src/seri-mats-2023-streamlit-pages"),
-]:
-    if os.path.exists(str_p := str(p.resolve())):
-        os.chdir(str_p)
-        if (sys.path[0] != str_p): sys.path.insert(0, str_p)
-        break
+# # Stuff to make the page work on my local machine
+# for p in [
+#     Path(r"C:\Users\calsm\Documents\AI Alignment\SERIMATS_23\seri_mats_23_streamlit_pages"),
+#     Path(r"/home/ubuntu/SERI-MATS-2023-Streamlit-pages"),
+#     Path(r"/mount/src/seri-mats-2023-streamlit-pages"),
+# ]:
+#     if os.path.exists(str_p := str(p.resolve())):
+#         os.chdir(str_p)
+#         if (sys.path[0] != str_p): sys.path.insert(0, str_p)
+#         break
 
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
