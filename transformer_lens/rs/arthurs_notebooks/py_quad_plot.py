@@ -264,11 +264,24 @@ labels = []
 data = []
 lines = []
 
-USE_QUERY_BIAS = True
-USE_KEY_BIAS = True
+USE_QUERY_BIAS = False
+USE_KEY_BIAS = False
 DO_TWO_DIMENSIONS = False # this means doing things like 2D Attention Matrices
 
 all_log_attentions_to_self = []
+
+b_K = model.b_K[LAYER, HEAD]
+b_Q = model.b_Q[LAYER, HEAD]
+W_Q = model.W_Q[LAYER, HEAD]
+W_K = model.W_K[LAYER, HEAD]
+eps = model.cfg.eps
+d_vocab = model.cfg.d_vocab
+d_head = model.cfg.d_head
+del model 
+gc.collect()
+t.cuda.empty_cache()
+
+#%%
 
 for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_keys, embeddings_dict_keys))):
 
@@ -290,43 +303,22 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
 
     results = []
 
-    for outer_idx in tqdm(range(len(bags_of_words))):
-        if DO_TWO_DIMENSIONS:
-            unnormalized_queries = einops.repeat(
-                embeddings_dict[q_side_matrix][bags_of_words[outer_idx]], # [d_model]
-                "inner_len d_model -> inner_len another_inner_len d_model",
-                another_inner_len=INNER_LEN,
-            )
-            unnormalized_keys = einops.repeat(
-                embeddings_dict[k_side_matrix][bags_of_words[outer_idx]], # [inner_len, d_model],
-                "inner_len d_model -> another_inner_len inner_len d_model",
-                another_inner_len=INNER_LEN,
-            )
-        else:
-            unnormalized_queries = einops.repeat(
-                embeddings_dict[q_side_matrix][bags_of_words[outer_idx]], # [d_model]
-                "d_model -> inner_len d_model",
-                inner_len=INNER_LEN,
-            )
-            unnormalized_keys = embeddings_dict[k_side_matrix][torch.arange(model.cfg.d_vocab)] # [inner_len, d_model]
+    queryside_vector = embeddings_dict[q_side_matrix][bags_of_words].T
+    queryside_normalized = queryside_vector / (queryside_vector.var(dim=-1, keepdim=True) + eps).pow(0.5)
+    query = W_Q.T @ queryside_normalized
+    if USE_QUERY_BIAS:
+        query += b_Q
 
-        queryside_vector = embeddings_dict[q_side_matrix][bags_of_words[outer_idx]]
-        queryside_normalized = queryside_vector / (queryside_vector.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
-        query = model.W_Q[LAYER, HEAD].T @ queryside_normalized
-        if USE_QUERY_BIAS:
-            query += model.b_Q[LAYER, HEAD]
-
-        keyside_vectors = embeddings_dict[k_side_matrix][torch.arange(model.cfg.d_vocab)]
-        keyside_normalized = keyside_vectors / (keyside_vectors.var(dim=-1, keepdim=True) + model.cfg.eps).pow(0.5)
-        key = keyside_normalized @ model.W_K[LAYER, HEAD]
-        if USE_KEY_BIAS:
-            key += model.b_K[LAYER, HEAD]
-
-        attention_scores = query @ key.T / np.sqrt(model.cfg.d_head)
-
-        assert len(attention_scores.shape) == 1 + int(DO_TWO_DIMENSIONS), attention_scores.shape
-
-        log_attentions_to_self[outer_idx] = (attention_scores >= (attention_scores[bags_of_words[outer_idx]] - 1e-5)).int().sum().item() # TODO I don't think that the 1e-5 is necessary
+    keyside_vectors = embeddings_dict[k_side_matrix][torch.arange(d_vocab)]
+    keyside_normalized = keyside_vectors / (keyside_vectors.var(dim=-1, keepdim=True) + eps).pow(0.5)
+    key = keyside_normalized @ W_K
+    if USE_KEY_BIAS:
+        key += b_K
+    attention_scores = query.T @ key.T / np.sqrt(d_head)
+    attention_scores = attention_scores.to("cpu")
+    gc.collect()
+    t.cuda.empty_cache()
+    log_attentions_to_self = (attention_scores >= (attention_scores[torch.arange(len(bags_of_words)), bags_of_words])).int().sum(dim=-1) # TODO I don't think that the 1e-5 is necessary
 
     all_log_attentions_to_self.append(log_attentions_to_self.cpu())
     sorted_log_attention = log_attentions_to_self.sort(descending=True).values
@@ -336,14 +328,16 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
 # In[21]:
 
 square_of_values = einops.rearrange(torch.tensor(lines), "(height width) -> height width", height=3)
+square_of_values = t.stack([square_of_values[:, 0], square_of_values[:, 2], square_of_values[:, 1]], dim=-1)
 labels = square_of_values.tolist()
+labels = [int(label) for row in labels for label in row]
 
 fig = imshow(
     square_of_values.log(),
     # text_auto=True,
     title=f"Median rank of tokens in static QK circuit", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
     labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Average Rank"},
-    x = ["W<sub>EE</sub>", "W<sub>E</sub>", "MLP<sub>0</sub>"], # x y sorta reversed with imshow
+    x = ["W<sub>EE</sub>", "MLP<sub>0</sub>", "W<sub>E</sub>"], # x y sorta reversed with imshow
     y = ["W<sub>EE</sub>", "W<sub>E</sub>", "W<sub>U</sub>"],
     color_continuous_midpoint=None,
     range_color=(0, 10), # This manually defines the range of things
@@ -387,8 +381,7 @@ fig.show()
 # %%
 
 # Save as JSON
-fig.write_json("quad_plot.json")
-
-fig.write_image("quad_plot.pdf")
+# fig.write_json("quad_plot.json")
+# fig.write_image("quad_plot.pdf")
 
 # %%
