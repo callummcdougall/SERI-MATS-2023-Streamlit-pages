@@ -41,6 +41,7 @@ def imshow(tensor, renderer=None, **kwargs):
     facet_label_size = kwargs_pre.pop("facet_label_size", None)
     animation_labels = kwargs_pre.pop("animation_labels", None)
     color_continuous_midpoint = kwargs_pre.pop("color_continuous_midpoint", 0.0) # Added by Arthur so that you can override this to None if wanted
+    text = kwargs_pre.pop("text", None)
  
     if "aspect" not in kwargs_pre:
         kwargs_pre["aspect"] = "auto"
@@ -74,6 +75,23 @@ def imshow(tensor, renderer=None, **kwargs):
             i += 1
     # if "autosize" not in kwargs_post:
     #     kwargs_post["autosize"] = False
+    if text:
+        if tensor.ndim == 2:
+            # if 2D, then we assume text is a list of lists of strings
+            assert isinstance(text[0], list)
+            assert isinstance(text[0][0], str)
+            text = [text]
+        else:
+            # if 3D, then text is either repeated for each facet, or different
+            assert isinstance(text[0], list)
+            if isinstance(text[0][0], str):
+                text = [text for _ in range(len(fig.data))]
+        for i, _text in enumerate(text):
+            fig.data[i].update(
+                text=_text, 
+                texttemplate="%{text}", 
+                textfont={"size": kwargs_post.get("font_size", 12)}
+            )
     fig.update_layout(**kwargs_post)
     if draw: 
         fig.update_layout(modebar_add=MODEBAR_ADD)
