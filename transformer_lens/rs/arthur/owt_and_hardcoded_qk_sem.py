@@ -46,13 +46,13 @@ model.set_use_attn_result(True)
 
 MAX_SEQ_LEN = 512
 BATCH_SIZE = 25
-SEED = 1
+SEED = 17292
 batched_tokens, targets = get_filtered_webtext(
     model, batch_size=BATCH_SIZE, seed=SEED, device="cuda", max_seq_len=MAX_SEQ_LEN
 )
 effective_embeddings = get_effective_embedding_2(model)
 JSON_FNAME = "../arthur/json_data"
-TOTAL_EFFECT_MIDS = True
+TOTAL_EFFECT_MIDS = False
 
 # %%
 
@@ -209,8 +209,9 @@ max_importance_examples = sorted(
 # %%
 
 # Get the top 5% of things by importance
-all_top_5_percent = max_importance_examples[: len(max_importance_examples) // 20]
 
+# warnings.warn("Just looking at anything!")
+all_top_5_percent = max_importance_examples[: len(max_importance_examples) // 20]
 np.random.seed(799)
 np.random.shuffle(all_top_5_percent)
 
@@ -370,8 +371,6 @@ logit_lens_head_bottom_ten = torch.topk(
 # %%
 
 ABS_MODE = True
-
-
 def to_string(toks):
     s = model.to_string(toks)
     s = s.replace("\n", "\\n")
@@ -462,12 +461,25 @@ for batch_idx in range(BATCH_SIZE):  # range(len(top_unembeds_per_position)):
         )
     )
 
-    top_negative_logit_changes = model.to_str_tokens(
-        logit_lens_head_bottom_ten.indices[
-            top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx]
-        ]
+    # Look into logit_lens_of_head ...
+    # top_negative_logit_changes = model.to_str_tokens(
+    #     logit_lens_head_bottom_ten.indices[
+    #         top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx]
+    #     ]
+    # )
+    sorted_head_predictions = sorted(
+        list_set_of_tokens,
+        key = lambda tokk: logit_lens_of_head[top5p_batch_indices[batch_idx]][top5p_seq_indices[batch_idx]][tokk],
+        reverse=False, # most neg first
     )
-
+    in_context_head_probs = model.to_str_tokens(torch.tensor(sorted_head_predictions))
+    top_negative_logit_changes = list(
+            zip(
+                in_context_head_probs,
+                logit_lens_of_head[top5p_batch_indices[batch_idx]][top5p_seq_indices[batch_idx]][sorted_head_predictions],
+                strict=True,
+            )
+    )
     print(
         "\nTop negative logit changes from 10.7:\n",
         top_negative_logit_changes,
@@ -491,7 +503,7 @@ for batch_idx in range(BATCH_SIZE):  # range(len(top_unembeds_per_position)):
     )
 
     intersection_size = len(
-        set(in_context_probs[:CUTOFF]).intersection(set(in_context_words[:CUTOFF])).intersection(set(top_negative_logit_changes[:CUTOFF])))
+        set(in_context_probs[:CUTOFF]).intersection(set(in_context_words[:CUTOFF])).intersection(set(in_context_head_probs[:CUTOFF])))
     if intersection_size > 0:
         intersecc+=1
     print("Intersection size", intersection_size)
