@@ -208,6 +208,7 @@ ranking_top_10 = (rankings<=10)
 print(ranking_top_10.int().sum())
 print(ranking_top_10.int().sum()/model.cfg.d_vocab)
 bags_of_words = ranking_top_10.int().nonzero()[:, 0]
+bags_of_words = torch.arange(model.cfg.d_vocab)
 
 #%%
 
@@ -325,10 +326,11 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
 
         assert len(attention_scores.shape) == 1 + int(DO_TWO_DIMENSIONS), attention_scores.shape
 
-        log_attentions_to_self[outer_idx] = (attention_scores >= (attention_scores[bags_of_words[outer_idx]] - 1e-5)).int().sum() # TODO I don't think that the 1e-5 is necessary
+        log_attentions_to_self[outer_idx] = (attention_scores >= (attention_scores[bags_of_words[outer_idx]] - 1e-5)).int().sum().item() # TODO I don't think that the 1e-5 is necessary
 
     all_log_attentions_to_self.append(log_attentions_to_self.cpu())
-    lines.append(log_attentions_to_self.mean())
+    sorted_log_attention = log_attentions_to_self.sort(descending=True).values
+    lines.append(sorted_log_attention[sorted_log_attention.shape[0]//2]) # Median!
     print(lines[-1])
 
 # In[21]:
@@ -339,10 +341,10 @@ labels = square_of_values.tolist()
 fig = imshow(
     square_of_values.log(),
     # text_auto=True,
-    title=f"Average rank of tokens in static QK circuit", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
+    title=f"Median rank of tokens in static QK circuit", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
     labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Average Rank"},
-    x = ["W_EE", "W_E", "MLP0"], # x y sorta reversed with imshow
-    y = ["W_EE", "W_E", "W_U"],
+    x = ["W<sub>EE</sub>", "W<sub>E</sub>", "MLP<sub>0</sub>"], # x y sorta reversed with imshow
+    y = ["W<sub>EE</sub>", "W<sub>E</sub>", "W<sub>U</sub>"],
     color_continuous_midpoint=None,
     range_color=(0, 10), # This manually defines the range of things
     coloraxis=dict(
