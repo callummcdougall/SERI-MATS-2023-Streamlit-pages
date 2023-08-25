@@ -32,8 +32,8 @@ is_local = (platform.processor() != "")
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 st.set_page_config(layout="wide")
-st.write(os.getcwd())
-st.write(list(Path.cwd().iterdir()))
+# st.write(os.getcwd())
+# st.write(list(Path.cwd().iterdir()))
 
 from transformer_lens.rs.callum2.utils import ST_HTML_PATH
 
@@ -48,11 +48,14 @@ from transformer_lens.rs.callum2.utils import ST_HTML_PATH
 # }
 
 if is_local:
-    NEGATIVE_HEADS = [(10, 1), (10, 7), (11, 10)]
-    FILENAME = "OV_QK_circuits_less_local.pkl"
+    # NEGATIVE_HEADS = [(10, 1), (10, 7), (11, 10)]
+    NEGATIVE_HEADS = [(10, 7)]
+    FILENAME = "OV_QK_circuits_less.pkl"
+    # FILENAME = "OV_QK_circuits_less_local.pkl"
 else:
-    NEGATIVE_HEADS = [(10, 7), (11, 10)]
-    FILENAME = "OV_QK_circuits_less_public.pkl"
+    NEGATIVE_HEADS = [(10, 7)]
+    FILENAME = "OV_QK_circuits_less.pkl"
+    # FILENAME = "OV_QK_circuits_less_public.pkl"
 
 NEG_HEADS = [f"{layer}.{head}" for layer, head in NEGATIVE_HEADS]
 
