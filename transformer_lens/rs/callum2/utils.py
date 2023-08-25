@@ -20,10 +20,9 @@ import sys, os
 #         break
 # else:
 #     raise Exception("Couldn't find root dir")
-
 # os.chdir(root_dir)
 # if root_dir not in sys.path: sys.path.append(root_dir)
-ST_HTML_PATH = Path("transformer_lens/rs/callum2/st_page/media")
+ST_HTML_PATH = Path("/mount/src/seri-mats-2023-streamlit-pages/transformer_lens/rs/callum2/st_page/media")
 
 NEGATIVE_HEADS = [(10, 7), (11, 10)]
 
