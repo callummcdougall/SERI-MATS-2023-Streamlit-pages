@@ -2,7 +2,6 @@ import sys, os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 import streamlit as st
-st.write(os.getcwd())
 import gzip
 import pickle
 from pathlib import Path
@@ -23,6 +22,7 @@ is_local = (platform.processor() != "")
 for p in [
     Path(r"C:\Users\calsm\Documents\AI Alignment\SERIMATS_23\seri_mats_23_streamlit_pages"),
     Path(r"/home/ubuntu/SERI-MATS-2023-Streamlit-pages"),
+    Path(r"/mount/src/SERI-MATS-2023-Streamlit-pages"),
 ]:
     if os.path.exists(str_p := str(p.resolve())):
         os.chdir(str_p)
@@ -32,6 +32,8 @@ for p in [
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 st.set_page_config(layout="wide")
+st.write(os.getcwd())
+st.write(list(Path.cwd().iterdir()))
 
 from transformer_lens.rs.callum2.utils import ST_HTML_PATH
 
