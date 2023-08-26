@@ -35,10 +35,9 @@ def get_effective_embedding_2(model: HookedTransformer, use_codys_without_attent
 
     return {
         "W_E (no MLPs)": W_E,
-        "W_U": W_U.T,
-        # "W_E (raw, no MLPs)": W_E,
         "W_E (including MLPs)": W_EE_full,
-        "W_E (only MLPs)": W_EE
+        "W_E (only MLPs)": W_EE,
+        "W_U": W_U.T,
     }
 
 

@@ -28,11 +28,12 @@ clear_output()
 
 # In[3]:
 
-
-LAYER_IDX, HEAD_IDX = {
-    "SoLU_10L1280W_C4_Code": (9, 18), # (9, 18) is somewhat cheaty
-    "gpt2": (10, 7),
-}[model.cfg.model_name]
+LAYER_IDX, HEAD_IDX = 3, 0
+warnings.warn("Using 3, 0")
+# LAYER_IDX, HEAD_IDX = {
+#     "SoLU_10L1280W_C4_Code": (9, 18), # (9, 18) is somewhat cheaty
+#     "gpt2": (10, 7),
+# }[model.cfg.model_name]
 
 
 W_U = model.W_U
@@ -258,14 +259,12 @@ HEAD = 7
 NORM = True
 
 all_results = []
-embeddings_dict_keys = sorted(embeddings_dict.keys())
 labels = []
-
 data = []
 lines = []
 
-USE_QUERY_BIAS = False
-USE_KEY_BIAS = False
+USE_QUERY_BIAS = True
+USE_KEY_BIAS = True
 DO_TWO_DIMENSIONS = False # this means doing things like 2D Attention Matrices
 
 all_log_attentions_to_self = []
@@ -283,7 +282,7 @@ t.cuda.empty_cache()
 
 #%%
 
-for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_keys, embeddings_dict_keys))):
+for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict.keys(), embeddings_dict.keys()))):
 
     print(f"{q_side_matrix=} {k_side_matrix=}")
 
@@ -307,18 +306,18 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
     queryside_normalized = queryside_vector / (queryside_vector.var(dim=-1, keepdim=True) + eps).pow(0.5)
     query = W_Q.T @ queryside_normalized
     if USE_QUERY_BIAS:
-        query += b_Q
+        query += b_Q[:, None]
 
     keyside_vectors = embeddings_dict[k_side_matrix][torch.arange(d_vocab)]
     keyside_normalized = keyside_vectors / (keyside_vectors.var(dim=-1, keepdim=True) + eps).pow(0.5)
     key = keyside_normalized @ W_K
     if USE_KEY_BIAS:
-        key += b_K
+        key += b_K[None]
     attention_scores = query.T @ key.T / np.sqrt(d_head)
     attention_scores = attention_scores.to("cpu")
     gc.collect()
     t.cuda.empty_cache()
-    log_attentions_to_self = (attention_scores >= (attention_scores[torch.arange(len(bags_of_words)), bags_of_words])).int().sum(dim=-1) # TODO I don't think that the 1e-5 is necessary
+    log_attentions_to_self = (attention_scores >= (attention_scores[torch.arange(len(bags_of_words)), bags_of_words])[:, None]).int().sum(dim=-1) # TODO I don't think that the 1e-5 is necessary
 
     all_log_attentions_to_self.append(log_attentions_to_self.cpu())
     sorted_log_attention = log_attentions_to_self.sort(descending=True).values
@@ -328,17 +327,17 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict_
 # In[21]:
 
 square_of_values = einops.rearrange(torch.tensor(lines), "(height width) -> height width", height=3)
-square_of_values = t.stack([square_of_values[:, 0], square_of_values[:, 2], square_of_values[:, 1]], dim=-1)
+# square_of_values = t.stack([square_of_values[:, 0], square_of_values[:, 2], square_of_values[:, 1]], dim=-1)
 labels = square_of_values.tolist()
-labels = [int(label) for row in labels for label in row]
+labels = [[int(label) for label in row] for row in labels]
 
 fig = imshow(
     square_of_values.log(),
     # text_auto=True,
-    title=f"Median rank of tokens in static QK circuit", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
+    title=f"Median rank with biases", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
     labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Average Rank"},
-    x = ["W<sub>EE</sub>", "MLP<sub>0</sub>", "W<sub>E</sub>"], # x y sorta reversed with imshow
-    y = ["W<sub>EE</sub>", "W<sub>E</sub>", "W<sub>U</sub>"],
+    x = ["W<sub>E</sub>", "W<sub>EE</sub>", "MLP<sub>0</sub>"], # sadly these are hardcoded
+    y = ["W<sub>E</sub>", "W<sub>EE</sub>", "W<sub>U</sub>"],
     color_continuous_midpoint=None,
     range_color=(0, 10), # This manually defines the range of things
     coloraxis=dict(
@@ -378,10 +377,11 @@ fig.update_layout(
 
 fig.show()
 
+
 # %%
 
 # Save as JSON
 # fig.write_json("quad_plot.json")
-# fig.write_image("quad_plot.pdf")
+fig.write_image("quad_plot2.pdf")
 
 # %%
