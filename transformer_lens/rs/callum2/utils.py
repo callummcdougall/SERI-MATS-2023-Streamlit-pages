@@ -58,16 +58,19 @@ def process_webtext(
     seq_len: int,
     model: HookedTransformer,
     verbose: bool = False,
+    return_indices: bool = False,
 ) -> Tuple[Int[Tensor, "batch seq"], List[List[str]]]:
     DATA_STR_ALL = get_webtext(seed=seed)
     DATA_STR_ALL = [parse_str(s) for s in DATA_STR_ALL]
     DATA_STR = []
 
     count = 0
+    indices = []
     for i in range(len(DATA_STR_ALL)):
         num_toks = len(model.to_tokens(DATA_STR_ALL[i]).squeeze())
         if num_toks > seq_len:
             DATA_STR.append(DATA_STR_ALL[i])
+            indices.append(i)
             count += 1
         if count == batch_size:
             break
@@ -87,6 +90,9 @@ def process_webtext(
     if verbose:
         print(f"Shape = {DATA_TOKS.shape}\n")
         print("First prompt:\n" + "".join(DATA_STR_TOKS[0]))
+
+    if return_indices: 
+        return DATA_TOKS, DATA_STR_TOKS_PARSED, indices
 
     return DATA_TOKS, DATA_STR_TOKS_PARSED
 

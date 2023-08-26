@@ -27,21 +27,39 @@ from transformer_lens.rs.callum2.utils import (
 def generate_loss_based_scatter(
     cspa_results,
     nbins: int = 200,
-    values: Literal["kl-div", "kl-div-reversed", "loss"] = "loss",
+    values: Literal["kl-div", "kl-div-reversed", "loss", "loss-absolute"] = "loss",
 ):
-    assert values in ["kl-div", "kl-div-reversed", "loss"]
+    xlabels = {
+        "kl-div": "D<sub>MA</sub>",
+        "kl-div-reversed": "D<sub>KL</sub>",
+        "loss": "Change in loss under mean ablation",
+        "loss-absolute": "Absolute change in loss under mean ablation",
+    }
+    ylabels = {
+        "kl-div": "D<sub>CSPA</sub>",
+        "kl-div-reversed": "D<sub>CSPA</sub>",
+        "loss": "Change in loss under CSPA",
+        "loss-absolute": "Absolute change in loss under CSPA",
+    }  
 
+    assert values in ["kl-div", "kl-div-reversed", "loss", "loss-absolute"]
     if values.startswith("kl-div"):
         xaxis_values = cspa_results["kl_div_ablated_to_orig"].flatten()
         yaxis_values = cspa_results["kl_div_cspa_to_orig"].flatten()
         title = "KL divergence of ablated predictions, relative to clean predictions"
-    elif values == "loss":
+    elif values.startswith("loss"):
         l_orig = cspa_results["loss"].flatten()
         l_abl = cspa_results["loss_ablated"].flatten()
         l_cspa = cspa_results["loss_cspa"].flatten()
+
         title = "Change in loss from ablation (relative to clean model)"
         xaxis_values = l_abl - l_orig
         yaxis_values = l_cspa - l_orig
+
+        if values == "loss-absolute":
+            xaxis_values = xaxis_values.abs()
+            yaxis_values = yaxis_values.abs()
+            title = "Absolute change in loss from ablation"
 
     ranks = t.argsort(t.argsort(xaxis_values))
     quantiles = ((ranks.float() / (xaxis_values.numel() - 1)) * nbins).int()
@@ -60,29 +78,36 @@ def generate_loss_based_scatter(
         yaxis_values_per_bucket.append(yaxis_value)
 
     df = pd.DataFrame({
-        "Full ablation": xaxis_values_per_bucket,
-        "CSPA": yaxis_values_per_bucket
+        xlabels[values]: xaxis_values_per_bucket,
+        ylabels[values]: yaxis_values_per_bucket
     })
 
     fig = px.scatter(
         df,
-        x="Full ablation",
-        y="CSPA",
+        x=xlabels[values],
+        y=ylabels[values],
         width=800,
         height=600,
         template="simple_white",
-        title=title,
     ).update_traces(
         mode='markers+lines'
     ).update_layout(
         showlegend=False,
+        font_size=30 if values.startswith("kl") else 25,
+        title=dict(
+            text=title,
+            font=dict(
+                size=20  # Smaller font size for title
+            )
+        )
     )
-    xmin = df["Full ablation"].min()
-    xmax = df["Full ablation"].max()
+
+    xmin = df[xlabels[values]].min()
+    xmax = df[xlabels[values]].max()
     fig.add_shape(type="line", x0=xmin, y0=xmin, x1=xmax, y1=xmax, line=dict(color="red", dash="dash", width=2), opacity=0.8)
     fig.add_hline(y=0, line=dict(color="red", dash="dash", width=2), opacity=0.8)
 
-    if values == "loss":
+    if values.startswith("loss"):
         fig.add_vline(x=0, line_width=1, opacity=0.4, line_color="black")
         x_y_text_list = [(0.98, 0.54, "No intervention"), (0.98, 1.04, "Full ablation")]
     elif values.startswith("kl-div"):

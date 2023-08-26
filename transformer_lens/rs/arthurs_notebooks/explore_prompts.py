@@ -63,35 +63,7 @@ TESTING = False
 NEGATIVE_HEAD = (10, 7)
 NEGATIVE_LAYER_IDX, NEGATIVE_HEAD_IDX = NEGATIVE_HEAD
 
-def process_webtext(
-    seed: int = 6,
-    batch_size: int = BATCH_SIZE,
-    indices: Optional[List[int]] = None,
-    seq_len: int = SEQ_LEN,
-    verbose: bool = False,
-):
-    DATA_STR = get_webtext(seed=seed)
-    if indices is None:
-        DATA_STR = DATA_STR[:batch_size]
-    else:
-        DATA_STR = [DATA_STR[i] for i in indices]
-    DATA_STR = [parse_str(s) for s in DATA_STR]
-
-    DATA_TOKS = model.to_tokens(DATA_STR)
-    DATA_STR_TOKS = model.to_str_tokens(DATA_STR)
-
-    if seq_len < 1024:
-        DATA_TOKS = DATA_TOKS[:, :seq_len]
-        DATA_STR_TOKS = [str_toks[:seq_len] for str_toks in DATA_STR_TOKS]
-
-    DATA_STR_TOKS_PARSED = list(map(parse_str_toks_for_printing, DATA_STR_TOKS))
-
-    clear_output()
-    if verbose:
-        print(f"Shape = {DATA_TOKS.shape}\n")
-        print("First prompt:\n" + "".join(DATA_STR_TOKS[0]))
-
-    return DATA_TOKS, DATA_STR_TOKS_PARSED
+raise NotImplementedError("Do process webtesxt")
 
 
 DATA_TOKS, DATA_STR_TOKS_PARSED = process_webtext(verbose=True) # indices=list(range(32, 40))
