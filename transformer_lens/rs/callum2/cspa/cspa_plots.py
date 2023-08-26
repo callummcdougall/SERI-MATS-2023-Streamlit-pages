@@ -107,10 +107,10 @@ def generate_loss_based_scatter(
     fig.add_shape(type="line", x0=xmin, y0=xmin, x1=xmax, y1=xmax, line=dict(color="red", dash="dash", width=2), opacity=0.8)
     fig.add_hline(y=0, line=dict(color="red", dash="dash", width=2), opacity=0.8)
 
-    if values.startswith("loss"):
+    if values=="loss":
         fig.add_vline(x=0, line_width=1, opacity=0.4, line_color="black")
         x_y_text_list = [(0.98, 0.54, "No intervention"), (0.98, 1.04, "Full ablation")]
-    elif values.startswith("kl-div"):
+    else:
         x_y_text_list = [(0.98, 0.17, "No intervention"), (0.98, 0.86, "Full ablation")]
 
     for (x, y, text) in x_y_text_list:
