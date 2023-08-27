@@ -45,6 +45,11 @@ streamlit run Home.py
 
 ---
 
+# Guide to Experiments
+
+* Surveying the direct effects of individual attention heads: `transformer_lens/rs/arthurs_notebooks/direct_effect_survey.py`
+* (TODO: scan through the paper, ideally clean up the repo too)
+
 # Description of directories in `transformer_lens/rs/callum2`
 
 *(Written by Callum)* These are the directories which I use to structure my own work.
