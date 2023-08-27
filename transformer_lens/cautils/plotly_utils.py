@@ -28,7 +28,7 @@ MODEBAR_ADD = ['drawline', 'drawopenpath', 'drawclosedpath', 'drawcircle', 'draw
 
 def imshow(tensor, renderer=None, **kwargs):
     for label_letter in ["x", "y"]:
-        if "x" in kwargs and len(kwargs[label_letter]) != len(set(kwargs[label_letter])):
+        if label_letter in kwargs and len(kwargs[label_letter]) != len(set(kwargs[label_letter])):
             warnings.warn(f"Overriding {label_letter} labels to be unique, in form 0_<original_label>, 1_<original_label>, etc.")
             kwargs[label_letter] = [f"{i}_{elem}" for i, elem in enumerate(kwargs[label_letter])]
     kwargs_post = {k: v for k, v in kwargs.items() if k in UPDATE_LAYOUT_SET}
