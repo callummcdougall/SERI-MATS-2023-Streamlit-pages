@@ -844,8 +844,11 @@ def decompose_attn_scores_full(
     use_layer0_heads: bool = False,
     subtract_S1_attn_scores: bool = False,
     include_S1_in_unembed_projection: bool = False,
+    decomposition: Literal["model components", "both"] = "both", # Should we just decompose the query input into the parts from all the model components, or should we decompose it into the model components and do projections onto unembedding and MLP0? 
 ):
     '''
+    TODO: I think that this docstring is outdated
+
     Creates heatmaps of attention score decompositions.
 
     decompose_by:
@@ -924,7 +927,7 @@ def decompose_attn_scores_full(
     t.cuda.empty_cache()
 
     contribution_to_attn_scores = t.zeros(
-        4, # this is for the 4 options: (∥ / ⟂) to (unembed of IO on query side / MLP0 on key side)
+        (4 if decomposition == "both" else 1), # if "both" decomposition this is for the 4 options: (∥ / ⟂) to (unembed of IO on query side / MLP0 on key side)
         3 + (nnmh[0] * (1 + model.cfg.n_heads)), # this is for the query-side
         3 + (nnmh[0] * (1 + model.cfg.n_heads)), # this is for the key-side
     )
@@ -935,6 +938,7 @@ def decompose_attn_scores_full(
     # TODO - calculate product directly after filling these in, in case it's too large? Or maybe it's fine cause they are on CPU.
     keys_decomposed = t.zeros(2, 3 + (nnmh[0] * (1 + model.cfg.n_heads)), batch_size, model.cfg.d_head)
     queries_decomposed = t.zeros(2, 3 + (nnmh[0] * (1 + model.cfg.n_heads)), batch_size, model.cfg.d_head)
+    # Note - we don't use dimension 2 if we end up doing
 
     def get_component(component_name, layer=None, keyside=False):
         '''
@@ -984,32 +988,55 @@ def decompose_attn_scores_full(
                 keyside_components.append(keyside_heads[:, head, :])
             queryside_components.append(queryside_heads[:, head, :])
 
+    def fake_projection(input, projection_dirs):
+        """Fairly hacked way of doing projection, but Arthur can't refactor Callum's code"""
+
+        return input.clone(), t.zeros_like(input)
+
+    current_projection_function = (project if (decomposition == "both") else fake_projection)
+
     # Now, we do the projection thing...
     # ... for keys ....
-    keys_decomposed[1, 0] = keyside_components[0]
+
+    if decomposition == "both":
+        keys_decomposed[1, 0] = keyside_components[0]
+    else:
+        keys_decomposed[0, 0] = keyside_components[0]
+
     for i, keyside_component in enumerate(keyside_components[1:], 1):
         if subtract_S1_attn_scores:
             keyside_component_IO, keyside_component_S1 = keyside_component
-            projections = project(keyside_component_IO, MLP0_output), project(keyside_component_S1, MLP0_output_S1)
+            projections = current_projection_function(keyside_component_IO, MLP0_output), current_projection_function(keyside_component_S1, MLP0_output_S1)
             projections = t.stack([projections[0][0] - projections[1][0], projections[0][1] - projections[1][1]])
         else:
-            projections = project(keyside_component, MLP0_output)
+            projections = current_projection_function(keyside_component, MLP0_output)
         keys_decomposed[:, i] = einops.einsum(projections.cpu(), model.W_K[nnmh[0], nnmh[1]].cpu(), "projection batch d_model, d_model d_head -> projection batch d_head")
     # ... and for queries ...
     queries_decomposed[1, 0] = queryside_components[0]
     for i, queryside_component in enumerate(queryside_components[1:], 1):
-        projections = t.stack(project(queryside_component, unembeddings if not(include_S1_in_unembed_projection) else [unembeddings, unembeddings_S1]))
+        projections = t.stack(current_projection_function(queryside_component, unembeddings if not(include_S1_in_unembed_projection) else [unembeddings, unembeddings_S1]))
         queries_decomposed[:, i] = einops.einsum(projections.cpu(), model.W_Q[nnmh[0], nnmh[1]].cpu(), "projection batch d_model, d_model d_head -> projection batch d_head")
     
+    if decomposition == "model components":
+        keys_decomposed = keys_decomposed[:1]
+        queries_decomposed = queries_decomposed[:1]
 
     # Finally, we do the outer product thing
     for (key_idx, keyside_component) in enumerate(keys_decomposed.unbind(dim=1)):
         for (query_idx, queryside_component) in enumerate(queries_decomposed.unbind(dim=1)):
-            contribution_to_attn_scores[:, query_idx, key_idx] = einops.einsum(
+            score_across_projections = einops.einsum(
                 queryside_component,
                 keyside_component,
                 "q_projection batch d_head, k_projection batch d_head -> q_projection k_projection batch"
             ).mean(-1).flatten() / (model.cfg.d_head ** 0.5)
+
+            if decomposition == "both":                
+                # We have 4 different options for the decomposition
+                contribution_to_attn_scores[:, query_idx, key_idx] = score_across_projections
+
+            else:
+                # There is only one option for the decomposition
+                contribution_to_attn_scores[0, query_idx, key_idx] = score_across_projections.item()
 
 
     return contribution_to_attn_scores
