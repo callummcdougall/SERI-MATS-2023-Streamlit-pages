@@ -2,6 +2,13 @@
 
 """Quad plots but I pivoted away from dot_with_query"""
 
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
+import torch 
+# One device assertion
+assert torch.cuda.device_count() == 1
+
 from transformer_lens.cautils.notebook import *
 from transformer_lens.cautils.utils import lock_attn
 from transformer_lens.rs.callum.keys_fixed import get_effective_embedding_2
@@ -28,8 +35,10 @@ clear_output()
 
 # In[3]:
 
-LAYER_IDX, HEAD_IDX = 3, 0
-warnings.warn("Using 3, 0")
+LAYER_IDX, HEAD_IDX = 9, 6
+
+warnings.warn("Using wrong thing")
+
 # LAYER_IDX, HEAD_IDX = {
 #     "SoLU_10L1280W_C4_Code": (9, 18), # (9, 18) is somewhat cheaty
 #     "gpt2": (10, 7),
@@ -254,25 +263,21 @@ for embedding_dict_key in embeddings_dict.keys():
 
 from transformer_lens import FactoredMatrix
 
-LAYER = 10
-HEAD = 7
-NORM = True
-
 all_results = []
 labels = []
 data = []
 lines = []
 
-USE_QUERY_BIAS = True
-USE_KEY_BIAS = True
+USE_QUERY_BIAS = False
+USE_KEY_BIAS = False
 DO_TWO_DIMENSIONS = False # this means doing things like 2D Attention Matrices
 
 all_log_attentions_to_self = []
 
-b_K = model.b_K[LAYER, HEAD]
-b_Q = model.b_Q[LAYER, HEAD]
-W_Q = model.W_Q[LAYER, HEAD]
-W_K = model.W_K[LAYER, HEAD]
+b_K = model.b_K[LAYER_IDX, HEAD_IDX]
+b_Q = model.b_Q[LAYER_IDX, HEAD_IDX]
+W_Q = model.W_Q[LAYER_IDX, HEAD_IDX]
+W_K = model.W_K[LAYER_IDX, HEAD_IDX]
 eps = model.cfg.eps
 d_vocab = model.cfg.d_vocab
 d_head = model.cfg.d_head
@@ -334,7 +339,7 @@ labels = [[int(label) for label in row] for row in labels]
 fig = imshow(
     square_of_values.log(),
     # text_auto=True,
-    title=f"Median rank with biases", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
+    title=f"Median rank of L{LAYER_IDX}H{HEAD_IDX}", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
     labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Average Rank"},
     x = ["W<sub>E</sub>", "W<sub>EE</sub>", "MLP<sub>0</sub>"], # sadly these are hardcoded
     y = ["W<sub>E</sub>", "W<sub>EE</sub>", "W<sub>U</sub>"],
@@ -382,6 +387,6 @@ fig.show()
 
 # Save as JSON
 # fig.write_json("quad_plot.json")
-fig.write_image("quad_plot2.pdf")
+# fig.write_image("quad_plot2.pdf")
 
 # %%
