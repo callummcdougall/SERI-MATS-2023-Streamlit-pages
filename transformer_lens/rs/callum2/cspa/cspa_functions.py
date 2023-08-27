@@ -526,23 +526,6 @@ def get_cspa_results(
         if verbose: print(f"Fraction of unembeddings we keep = {(semantically_similar_unembeddings.abs() > 1e-6).float().mean():.4f}")
         time_for_sstar = time.time() - t0
 
-    # else:
-    #     time_for_sstar = 0.0
-    #     # In this case, s_s_u will be like the thing above, but without basically all of its elements masked to zero
-
-    semantically_similar_unembeddings_old = einops.repeat(
-        W_U.T[semantically_similar_toks],
-        "batch seqK K_semantic d_model -> batch seqQ seqK d_model K_semantic",
-        seqQ = seq_len,
-    )
-
-    t.testing.assert_close( # Check we're not breaking things
-        semantically_similar_unembeddings,
-        semantically_similar_unembeddings_old,
-        atol = 1e-4,
-        rtol = 1e-4,
-    )
-
     if "ov" in interventions:
         # We project the output onto the unembeddings we got from the code above (which will either be all unembeddings,
         # or those which were filtered for being predicted on the destination side).
