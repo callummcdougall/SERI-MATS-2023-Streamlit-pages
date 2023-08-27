@@ -111,7 +111,7 @@ def generate_loss_based_scatter(
         fig.add_vline(x=0, line_width=1, opacity=0.4, line_color="black")
         x_y_text_list = [(0.98, 0.54, "No intervention"), (0.98, 1.04, "Full ablation")]
     else:
-        x_y_text_list = [(0.98, 0.17, "No intervention"), (0.98, 0.86, "Full ablation")]
+        x_y_text_list = [(0.98, 0.07, "No intervention"), (0.98, 0.86, "Full ablation")]
 
     for (x, y, text) in x_y_text_list:
         fig.add_annotation(

@@ -438,7 +438,6 @@ if True: # remove at some point in future
             used_seq_indices.extend([seq_idx for _ in range(len(indices))])
 
     # Make two plots
-
     r2 = np.corrcoef(xs, ys)[0, 1] ** 2
 
     # get best fit line 
@@ -465,7 +464,6 @@ if True: # remove at some point in future
         go.Scatter(
             x=[min(xs), max(xs)],
             y=[m * min(xs) + b, m * max(xs) + b],
-            # text = 
             mode="lines",
             name=f"r^2 = {r2:.3f}",
         )
