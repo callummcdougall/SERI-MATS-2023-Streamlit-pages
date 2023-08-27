@@ -509,22 +509,21 @@ def get_cspa_results(
     assert ("qk" in interventions) == (K_unembeddings != 1.0), "Either do a QK intervention, or we must all unembeddings used"
 
     # Get the top predicted semantically similar tokens (this everything with seqQ<=seqK if we're not doing QK filtering)
-    if True:
-        # Get the unembeddings we'll be projecting onto (also get the dict of (s, s*) pairs and store in context)
-        # Most of the elements in `semantically_similar_unembeddings` will be zero
-        t0 = time.time()
-        semantically_similar_unembeddings, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, top_K_and_Ksem_mask = get_top_predicted_semantically_similar_tokens(
-            toks=toks,
-            resid_pre=resid_pre,
-            semantically_similar_toks=semantically_similar_toks,
-            K_unembeddings=K_unembeddings,
-            function_toks=FUNCTION_TOKS,
-            model=model,
-            final_scale=final_scale,
-            keep_self_attn=keep_self_attn,
-        )
-        if verbose: print(f"Fraction of unembeddings we keep = {(semantically_similar_unembeddings.abs() > 1e-6).float().mean():.4f}")
-        time_for_sstar = time.time() - t0
+    t0 = time.time()
+    # Get the unembeddings we'll be projecting onto (also get the dict of (s, s*) pairs and store in context)
+    # Most of the elements in `semantically_similar_unembeddings` will be zero
+    semantically_similar_unembeddings, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, top_K_and_Ksem_mask = get_top_predicted_semantically_similar_tokens(
+        toks=toks,
+        resid_pre=resid_pre,
+        semantically_similar_toks=semantically_similar_toks,
+        K_unembeddings=K_unembeddings,
+        function_toks=FUNCTION_TOKS,
+        model=model,
+        final_scale=final_scale,
+        keep_self_attn=keep_self_attn,
+    )
+    if verbose: print(f"Fraction of unembeddings we keep = {(semantically_similar_unembeddings.abs() > 1e-6).float().mean():.4f}")
+    time_for_sstar = time.time() - t0
 
     if "ov" in interventions:
         # We project the output onto the unembeddings we got from the code above (which will either be all unembeddings,
