@@ -506,31 +506,24 @@ def get_cspa_results(
             "seqQ d_model, batch seqQ seqK -> batch seqQ seqK d_model"
         )
 
-    # If we ablate QK, this means we need to get the top predicted semantically similar tokens
-    if "qk" in interventions:
-        # Get the unembeddings we'll be projecting onto (also get the dict of (s, s*) pairs and store in context)
-        # Most of the elements in `semantically_similar_unembeddings` will be zero
-        t0 = time.time()
-        semantically_similar_unembeddings, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, top_K_and_Ksem_mask = get_top_predicted_semantically_similar_tokens(
-            toks=toks,
-            resid_pre=resid_pre,
-            semantically_similar_toks=semantically_similar_toks,
-            K_unembeddings=K_unembeddings,
-            function_toks=FUNCTION_TOKS,
-            model=model,
-            final_scale=final_scale,
-            keep_self_attn=keep_self_attn,
-        )
-        if verbose: print(f"Fraction of unembeddings we keep = {(semantically_similar_unembeddings.abs() > 1e-6).float().mean():.4f}")
-        time_for_sstar = time.time() - t0
-    else:
-        time_for_sstar = 0.0
-        # In this case, s_s_u will be like the thing above, but without basically all of its elements masked to zero
-        semantically_similar_unembeddings = einops.repeat(
-            W_U.T[semantically_similar_toks],
-            "batch seqK K_semantic d_model -> batch seqQ seqK d_model K_semantic",
-            seqQ = seq_len,
-        )
+    assert ("qk" in interventions) == (K_unembeddings != 1.0), "Either do a QK intervention, or we must all unembeddings used"
+
+    # Get the top predicted semantically similar tokens (this everything with seqQ<=seqK if we're not doing QK filtering)
+    t0 = time.time()
+    # Get the unembeddings we'll be projecting onto (also get the dict of (s, s*) pairs and store in context)
+    # Most of the elements in `semantically_similar_unembeddings` will be zero
+    semantically_similar_unembeddings, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, top_K_and_Ksem_mask = get_top_predicted_semantically_similar_tokens(
+        toks=toks,
+        resid_pre=resid_pre,
+        semantically_similar_toks=semantically_similar_toks,
+        K_unembeddings=K_unembeddings,
+        function_toks=FUNCTION_TOKS,
+        model=model,
+        final_scale=final_scale,
+        keep_self_attn=keep_self_attn,
+    )
+    if verbose: print(f"Fraction of unembeddings we keep = {(semantically_similar_unembeddings.abs() > 1e-6).float().mean():.4f}")
+    time_for_sstar = time.time() - t0
 
     if "ov" in interventions:
         # We project the output onto the unembeddings we got from the code above (which will either be all unembeddings,
@@ -919,4 +912,3 @@ def convert_top_K_and_Ksem_to_dict(
 
 #     pattern[:, HEAD] = new_pattern
 #     return pattern
-
