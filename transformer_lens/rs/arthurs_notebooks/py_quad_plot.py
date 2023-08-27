@@ -387,6 +387,6 @@ fig.show()
 
 # Save as JSON
 # fig.write_json("quad_plot.json")
-# fig.write_image("quad_plot2.pdf")
+fig.write_image("quad_plot2.pdf")
 
 # %%
