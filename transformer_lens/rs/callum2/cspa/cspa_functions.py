@@ -506,7 +506,9 @@ def get_cspa_results(
             "seqQ d_model, batch seqQ seqK -> batch seqQ seqK d_model"
         )
 
-    # If we ablate QK, this means we need to get the top predicted semantically similar tokens
+    assert ("qk" in interventions) == (K_unembeddings != 1.0), "Either do a QK intervention, or we must all unembeddings used"
+
+    # Get the top predicted semantically similar tokens (this everything with seqQ<=seqK if we're not doing QK filtering)
     if True:
         # Get the unembeddings we'll be projecting onto (also get the dict of (s, s*) pairs and store in context)
         # Most of the elements in `semantically_similar_unembeddings` will be zero
@@ -528,22 +530,18 @@ def get_cspa_results(
     #     time_for_sstar = 0.0
     #     # In this case, s_s_u will be like the thing above, but without basically all of its elements masked to zero
 
-    semantically_similar_unembeddings = einops.repeat(
+    semantically_similar_unembeddings_old = einops.repeat(
         W_U.T[semantically_similar_toks],
         "batch seqK K_semantic d_model -> batch seqQ seqK d_model K_semantic",
         seqQ = seq_len,
     )
 
-        # # Also we need to compute the following variables to avoid syntax errors: top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, top_K_and_Ksem_mask 
-        # # Causal Mask
-        # top_K_and_Ksem_mask = einops.repeat(
-        #     t.arange(seq_len)[:, None] >= t.arange(seq_len)[None] # [seqQ seqK]
-        #     "seqQ seqK -> batch seqQ seqK K_s",
-        #     batch = semantically_similar_unembeddings.shape[0],
-        #     K_s = K_semantic,
-        # )
-
-        # top_K_and_Ksem_per_dest_token = top_K_and_Ksem_per_dest_token = t.nonzero(top_K_and_Ksem_mask)
+    t.testing.assert_close( # Check we're not breaking things
+        semantically_similar_unembeddings,
+        semantically_similar_unembeddings_old,
+        atol = 1e-4,
+        rtol = 1e-4,
+    )
 
     if "ov" in interventions:
         # We project the output onto the unembeddings we got from the code above (which will either be all unembeddings,
