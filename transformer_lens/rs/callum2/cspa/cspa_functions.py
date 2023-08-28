@@ -220,7 +220,7 @@ def gram_schmidt(basis: Float[Tensor, "... d num"], device=None) -> Float[Tensor
     return basis
 
 
-from transformer_lens.rs.callum.keys_fixed import project as multi_project
+from transformer_lens.rs.callum.keys_fixed import project as multi_project # TODO ask Callum why the def project below did not implement projection onto subspaces
 
 def project(
     vectors: Float[Tensor, "... d"],
@@ -513,7 +513,6 @@ def get_cspa_results(
     # ====================================================================
 
     # Recompute pattern based on the input to the queryside, and the different keysides
-    # As a warmup let's manually compute attention patterns...
 
     base_q_input = scaled_resid_pre.clone() # [batch seqQ d_model]
     # Prepare q_input
@@ -523,9 +522,8 @@ def get_cspa_results(
         q_shape = "batch seqQ seqK" if projections["q"] == "unembedding" else "batch seqQ"
         
         if projections["q"] == "unembedding":
-            warnings.warn("Ugh this seems broken")
             q_input_per_position = 2.0 * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len)
-            unembeddings = model.W_U.T[toks] # TODO reimplement unembedding projection too
+            unembeddings = model.W_U.T[toks]
             projection_directions_per_k = einops.repeat(unembeddings, "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len)
 
             q_input = project(
@@ -533,9 +531,6 @@ def get_cspa_results(
                 projection_directions_per_k,
                 device=computation_device,
             )
-
-            # Probably don't project BOS, because it's more appropriate to preserve this information I think
-            q_input[:, :, 0, :] = q_input_per_position[:, :, 0, :]
 
 
         else:
@@ -551,8 +546,7 @@ def get_cspa_results(
                 projection_directions,
                 device=computation_device,
             )
-            q_input = q_input.to(base_q_input.device) # TODO make this less verbose: why isn;t it on the device??
-            # q_input[:, ]
+            q_input = q_input.to(base_q_input.device) # TODO make this less verbose: why isn't this on the device
 
     else:
         q_input = base_q_input
@@ -579,10 +573,13 @@ def get_cspa_results(
     att_scores_causal = att_scores.masked_fill_(t.triu(t.ones_like(att_scores), diagonal=1).bool(), -float("inf"))
     att_probs = t.softmax(att_scores_causal, dim=-1)
 
+    # Control attention to BOS ie keep the same BOS attention and scale all other attentions so things sum to 1
     rest_of_attention_probs = att_probs[:, 1:, 1:].sum(dim=-1)
     scale_factor = (-pattern[:, 1:, 0] + 1.0) / rest_of_attention_probs # scale_factor * (sum of non BOS probs) + new BOS probs = 1.0
     att_probs[:, 1:, 1:] *= scale_factor.unsqueeze(-1)
     att_probs[:, 1:, 0] = pattern[:, 1:, 0]
+
+    # Testing that we did control BOS attention
     assert t.allclose(pattern[:, :, 0], att_probs[:, :, 0], atol=1e-3, rtol=1e-3), "Projections don't match attention scores with BOS hack"
     assert torch.norm(att_probs.sum(dim=-1) - 1.0).item() < 1e-2, (att_probs.sum(dim=-1) - 1.0, "Attention probs don't sum to 1.0")
 
@@ -592,6 +589,7 @@ def get_cspa_results(
     else:
         assert not t.allclose(att_probs, pattern, atol=1e-3, rtol=1e-3)
 
+    # Pattern is actually what we use in CSPA
     pattern = att_probs
 
     # ====================================================================
