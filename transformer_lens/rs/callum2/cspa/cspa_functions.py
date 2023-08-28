@@ -420,7 +420,6 @@ def get_cspa_results(
     '''
 
     if projections is None and "ov" in interventions:
-        warnings.warn("WARNING: since the OV move is really a projection, we're moving this to the `projections` list. Please add it there in future.")
         projections = ["ov"]
         interventions = interventions[:] # Otherwise successive calls to the function will also be edited
         interventions.remove("ov")
@@ -512,15 +511,60 @@ def get_cspa_results(
     # Recompute pattern based on the input to the queryside, and the different keysides
     # As a warmup let's manually compute attention patterns...
 
-    q_input = scaled_resid_pre.clone() # [batch seqQ d_model]
-    k_input = scaled_resid_pre.clone() # [batch seqK d_model]
-    q = einops.einsum(q_input, model.W_Q[LAYER, HEAD], "batch seqQ d_model, d_model d_head -> batch seqQ d_head")
-    k = einops.einsum(k_input, model.W_K[LAYER, HEAD], "batch seqK d_model, d_model d_head -> batch seqK d_head")
-    q += model.b_Q[LAYER, HEAD]
+    base_q_input = scaled_resid_pre.clone() # [batch seqQ d_model]
+    # Prepare q_input
+    if "q" in projections:
+        # Note the 2.0 as we suck without this
+        q_input_per_position = 2.0 * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len)
+        q_shape = "batch seqQ seqK"
+        unembeddings = model.W_U.T[toks]
+        unembeddings_per_q = einops.repeat(unembeddings, "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len)
+        q_input = project(
+            q_input_per_position,
+            unembeddings_per_q,
+            device=computation_device,
+        )
+
+        # Probably don't project BOS, because it's more appropriate to preserve this information I think
+        q_input[:, :, 0, :] = q_input_per_position[:, :, 0, :]
+
+    else:
+        q_input = base_q_input
+        q_shape = "batch seqQ"
+
+    base_k_input = scaled_resid_pre.clone() # [batch seqK d_model]
+    # Prepare k input
+    if "k" in projections: 
+        k_input = einops.repeat(base_k_input, "batch seqK d_model -> batch seqQ seqK d_model", seqQ=batch_size)
+        k_shape = "batch seqQ seqK"
+        raise NotImplementedError("TODO implement some QK ablation")
+    else:
+        k_input = base_k_input
+        k_shape = "batch seqK"
+
+    q = einops.einsum(q_input, model.W_Q[LAYER, HEAD], f"{q_shape} d_model, d_model d_head -> {q_shape} d_head")
+    k = einops.einsum(k_input, model.W_K[LAYER, HEAD], f"{k_shape} d_model, d_model d_head -> {k_shape} d_head")
+
+    # Broadcast on last dim :-) 
+    q += model.b_Q[LAYER, HEAD] 
     k += model.b_K[LAYER, HEAD]
-    att_scores = einops.einsum(q, k, "batch seqQ d_head, batch seqK d_head -> batch seqQ seqK") / math.sqrt(model.cfg.d_head)
+
+    att_scores = einops.einsum(q, k, f"{q_shape} d_head, {k_shape} d_head -> batch seqQ seqK") / math.sqrt(model.cfg.d_head)
     att_scores_causal = att_scores.masked_fill_(t.triu(t.ones_like(att_scores), diagonal=1).bool(), -float("inf"))
     att_probs = t.softmax(att_scores_causal, dim=-1)
+
+    # TODO implement BOS manipuldation so that we're on 'easy mode'
+    # rest_of_attention_probs = att_probs[:, :, 1:].sum(dim=-1)
+    # att_scores_causal[:, :, 0] += (pattern[:, :, 0] * rest_of_probs]).log()
+    # att_probs = t.softmax(att_scores_causal, dim=-1)
+    # assert t.allclose(pattern[:, :, 0], att_probs[:, :, 0], atol=1e-3, rtol=1e-3), "Projections don't match attention scores with BOS hack"
+
+    # Testing, probably remove this...
+    if "q" not in projections and "k" not in projections:
+        assert t.allclose(att_probs, pattern, atol=1e-3, rtol=1e-3), "Projections don't match attention scores"
+    else:
+        assert not t.allclose(att_probs, pattern, atol=1e-3, rtol=1e-3)
+    pattern = att_probs
 
     # ====================================================================
     # ! STEP 4: Get CSPA results (this is the hard part!)
@@ -655,6 +699,9 @@ def get_cspa_results_batched(
 
     See the `get_cspa_results` docstring for more info.
     '''
+    if projections is None and "ov" in interventions:
+        warnings.warn("WARNING: since the OV move is really a projection, we're moving this to the `projections` list. Please add it there in future.")
+
     batch_size, seq_len = toks.shape
     chunks = toks.shape[0] // max_batch_size
 
@@ -961,12 +1008,13 @@ def convert_top_K_and_Ksem_to_dict(
 #     pattern[:, HEAD] = new_pattern
 #     return pattern
 
-def get_performance_recovered(cspa_results: Dict[str, t.Tensor], metric: str = "kl_div_cspa_to_orig"):
+def get_performance_recovered(cspa_results: Dict[str, t.Tensor], metric: str = "kl_div_cspa_to_orig", verbose=False):
     '''Calculate the performance recovered with some metric'''
 
     numerator = cspa_results[metric]
     if "loss" in metric:
         numerator -= cspa_results["loss"]
+    if verbose: print(f"numerator = {numerator.mean().item():.4f}")
     denominator = cspa_results[metric.replace("cspa", "ablated")]
     if "loss" in metric:
         numerator -= cspa_results["loss"]
