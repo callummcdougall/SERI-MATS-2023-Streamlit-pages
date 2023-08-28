@@ -422,6 +422,7 @@ def get_cspa_results(
     if projections is None and "ov" in interventions:
         warnings.warn("WARNING: since the OV move is really a projection, we're moving this to the `projections` list. Please add it there in future.")
         projections = ["ov"]
+        interventions = interventions[:] # Otherwise successive calls to the function will also be edited
         interventions.remove("ov")
     if projections is None:
         projections = []
@@ -704,8 +705,7 @@ def get_cspa_results_batched(
             bar.set_description(f"Batch {i+1}/{chunks}, shape = {tuple(_toks.shape)}, times = [get = {t_get-t_sstar:.2f}, s* = {t_sstar:.2f}, aggregate = {t_agg:.2f}]")
 
     if compute_s_sstar_dict:
-        t0 = time.time()
-        print("Converting top K and Ksem to dict ...", end=" ")
+        if verbose: print("Converting top K and Ksem to dict ...", end="\r"); t0 = time.time()
         S_SSTAR_PAIRS = convert_top_K_and_Ksem_to_dict(
             top_K_and_Ksem_per_dest_token = TOP_K_AND_KSEM_PER_DEST_TOKEN,
             logit_lens_for_top_K_Ksem = LOGIT_LENS_FOR_TOP_K_KSEM,
