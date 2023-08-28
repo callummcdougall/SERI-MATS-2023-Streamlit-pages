@@ -3,3 +3,4 @@ __pycache__*
 !**/callum2/**/*.ipynb
 *settings.json
 **/callum2/**/*.pkl
+transformer_lens/rs/arthurs_notebooks/cspa_with_projection.py

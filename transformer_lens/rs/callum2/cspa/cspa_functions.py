@@ -550,7 +550,8 @@ def get_cspa_results(
         output_attn_cspa = project(
             vectors = output_attn - output_attn_mean_ablated,
             proj_directions = semantically_similar_unembeddings,
-            only_keep = "neg" if only_keep_negative_components else None
+            only_keep = "neg" if only_keep_negative_components else None, 
+            device = computation_device,
         ) + output_attn_mean_ablated
     else:
         # In this case, we assume we are filtering for QK (cause we're doing at least one). We want to set the output to be the mean-ablated
