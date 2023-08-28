@@ -2,6 +2,7 @@
 
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
+import warnings
 from typing import Dict, Any, Tuple, List, Optional, Literal, Union
 from transformer_lens import HookedTransformer, utils
 from functools import partial
@@ -165,7 +166,6 @@ FUNCTION_STR_TOKS =  [
     '<|endoftext|>',
     # Need to go through these words and add more to them, I suspect this list is minimal
 ]
-
 
 
 
@@ -354,6 +354,7 @@ def get_cspa_results(
     toks: Int[Tensor, "batch seq"],
     negative_head: Tuple[int, int],
     interventions: List[str],
+    projections: Optional[List[str]] = None,
     K_unembeddings: Optional[Union[int, float]] = None,
     K_semantic: int = 10,
     only_keep_negative_components: bool = False,
@@ -418,6 +419,12 @@ def get_cspa_results(
           ablation.
     '''
 
+    projections = [] if projections is None else projections
+    if projections is None and "ov" in interventions:
+        warnings.warn("WARNING: since the OV move is really a projection, we're moving this to the `projections` list. Please add it there in future.")
+        projections.append("ov")
+        interventions.remove("ov")
+
     # ====================================================================
     # ! STEP 0: Define setup vars, move things onto the correct device, get semantically similar toks
     # ====================================================================
@@ -450,15 +457,14 @@ def get_cspa_results(
     # ====================================================================
     
     # Get all hook names
-    # TODO - change names to "pattern_hook_name" and "pattern_hook_fn" etc
-    hook_name_resid = utils.get_act_name("resid_pre", LAYER)
-    hook_name_resid_final = utils.get_act_name("resid_post", model.cfg.n_layers - 1)
-    hook_name_result = utils.get_act_name("result", LAYER)
-    hook_name_v = utils.get_act_name("v", LAYER)
-    hook_name_pattern = utils.get_act_name("pattern", LAYER)
-    hook_name_scale = utils.get_act_name("scale", LAYER, "ln1")
-    hook_name_scale_final = utils.get_act_name("scale")
-    hook_names_to_cache = [hook_name_scale, hook_name_v, hook_name_pattern, hook_name_scale_final, hook_name_resid, hook_name_resid_final, hook_name_result]
+    resid_hook_name = utils.get_act_name("resid_pre", LAYER)
+    resid_hook_name = utils.get_act_name("resid_post", model.cfg.n_layers - 1)
+    result_hook_name = utils.get_act_name("result", LAYER)
+    v_hook_name = utils.get_act_name("v", LAYER)
+    pattern_hook_name = utils.get_act_name("pattern", LAYER)
+    scale_hook_name = utils.get_act_name("scale", LAYER, "ln1")
+    scale_hook_name = utils.get_act_name("scale")
+    hook_names_to_cache = [scale_hook_name, v_hook_name, pattern_hook_name, scale_hook_name, resid_hook_name, resid_hook_name, result_hook_name]
 
     t_clean_and_ablated = time.time()
 
@@ -470,16 +476,16 @@ def get_cspa_results(
         names_filter = lambda name: name in hook_names_to_cache
     )
     loss = model.loss_fn(logits, toks, per_token=True)
-    resid_post_final = cache[hook_name_resid_final] # [batch seqQ d_model]
-    resid_pre = cache[hook_name_resid] # [batch seqK d_model]
+    resid_post_final = cache[resid_hook_name] # [batch seqQ d_model]
+    resid_pre = cache[resid_hook_name] # [batch seqK d_model]
     # TODO odd thing; sometimes it seems like scale isn't recorded as different across heads. why?
-    scale = cache[hook_name_scale]
+    scale = cache[scale_hook_name]
     if scale.ndim == 4:
-        scale = cache[hook_name_scale][:, :, HEAD] # [batch seqK 1]
-    head_result_orig = cache[hook_name_result][:, :, HEAD] # [batch seqQ d_model]
-    final_scale = cache[hook_name_scale_final] # [batch seq 1]
-    v = cache[hook_name_v][:, :, HEAD] # [batch seqK d_head]
-    pattern = cache[hook_name_pattern][:, HEAD] # [batch seqQ seqK]      
+        scale = cache[scale_hook_name][:, :, HEAD] # [batch seqK 1]
+    head_result_orig = cache[result_hook_name][:, :, HEAD] # [batch seqQ d_model]
+    final_scale = cache[scale_hook_name] # [batch seq 1]
+    v = cache[v_hook_name][:, :, HEAD] # [batch seqK d_head]
+    pattern = cache[pattern_hook_name][:, HEAD] # [batch seqQ seqK]      
     del cache
 
     # * Perform complete ablation (via a direct calculation)
@@ -496,11 +502,18 @@ def get_cspa_results(
 
     t_clean_and_ablated = time.time() - t_clean_and_ablated
 
+    # ====================================================================
+    # ! STEP 3: Run projections
+    # ====================================================================
 
+    # Recompute pattern based on the input to the queryside, and the different keysides
+    # As a warmup let's manually compute attention patterns...
+
+    
 
     # ====================================================================
-    # ! STEP 3: Get CSPA results (this is the hard part!)
-    # ====================================================================
+    # ! STEP 4: Get CSPA results (this is the hard part!)
+    # ====================================================================    
 
     # Multiply by output matrix, then by attention probabilities
     output = v @ model.W_O[LAYER, HEAD] # [batch seqK d_model]
@@ -526,6 +539,7 @@ def get_cspa_results(
     assert ("qk" in interventions) == (K_unembeddings != 1.0), "Either do a QK intervention, or we must all unembeddings used"
 
     # Get the top predicted semantically similar tokens (this everything with seqQ<=seqK if we're not doing QK filtering)
+    # TODO probably refactor this because I expect us to rarely be needing this full function now, it's mostly a no op
     t0 = time.time()
     # Get the unembeddings we'll be projecting onto (also get the dict of (s, s*) pairs and store in context)
     # Most of the elements in `semantically_similar_unembeddings` will be zero
@@ -542,7 +556,7 @@ def get_cspa_results(
     if verbose: print(f"Fraction of unembeddings we keep = {(semantically_similar_unembeddings.abs() > 1e-6).float().mean():.4f}")
     time_for_sstar = time.time() - t0
 
-    if "ov" in interventions:
+    if "ov" in projections:
         # We project the output onto the unembeddings we got from the code above (which will either be all unembeddings,
         # or those which were filtered for being predicted on the destination side).
         if only_keep_negative_components:
@@ -610,6 +624,7 @@ def get_cspa_results_batched(
     max_batch_size: int,
     negative_head: Tuple[int, int],
     interventions: List[str],
+    projections: Optional[List[str]] = None,
     K_unembeddings: Optional[Union[int, float]] = None,
     K_semantic: int = 10,
     only_keep_negative_components: bool = False,
@@ -660,6 +675,7 @@ def get_cspa_results_batched(
             toks = _toks,
             negative_head = negative_head,
             interventions = interventions,
+            projections = projections,
             K_unembeddings = K_unembeddings,
             K_semantic = K_semantic,
             only_keep_negative_components = only_keep_negative_components,
@@ -687,7 +703,8 @@ def get_cspa_results_batched(
             bar.set_description(f"Batch {i+1}/{chunks}, shape = {tuple(_toks.shape)}, times = [get = {t_get-t_sstar:.2f}, s* = {t_sstar:.2f}, aggregate = {t_agg:.2f}]")
 
     if compute_s_sstar_dict:
-        if verbose: print("Converting top K and Ksem to dict ...", end="\r"); t0 = time.time()
+        t0 = time.time()
+        print("Converting top K and Ksem to dict ...", end=" ")
         S_SSTAR_PAIRS = convert_top_K_and_Ksem_to_dict(
             top_K_and_Ksem_per_dest_token = TOP_K_AND_KSEM_PER_DEST_TOKEN,
             logit_lens_for_top_K_Ksem = LOGIT_LENS_FOR_TOP_K_KSEM,
@@ -869,8 +886,8 @@ def convert_top_K_and_Ksem_to_dict(
     
 #     return v_input
 # if "v" in interventions:
-#     model.add_hook(hook_name_v_input, hook_fn_project_v)
-#     model.add_hook(hook_name_scale, partial(hook_fn_freeze_scale, frozen_scale=scale, component="v"))
+#     model.add_hook(v_hook_name, hook_fn_project_v)
+#     model.add_hook(scale_hook_name, partial(hook_fn_freeze_scale, frozen_scale=scale, component="v"))
 
 
 # ? This code doesn't work super well; projecting queries is meh.
@@ -935,7 +952,7 @@ def convert_top_K_and_Ksem_to_dict(
 #     return pattern
 
 def get_performance_recovered(cspa_results: Dict[str, t.Tensor], metric: str = "kl_div_cspa_to_orig"):
-    """Calculate the performance recovered with some metric"""
+    '''Calculate the performance recovered with some metric'''
 
     numerator = cspa_results[metric]
     if "loss" in metric:
