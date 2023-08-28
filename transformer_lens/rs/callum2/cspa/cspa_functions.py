@@ -419,11 +419,12 @@ def get_cspa_results(
           ablation.
     '''
 
-    projections = [] if projections is None else projections
     if projections is None and "ov" in interventions:
         warnings.warn("WARNING: since the OV move is really a projection, we're moving this to the `projections` list. Please add it there in future.")
-        projections.append("ov")
+        projections = ["ov"]
         interventions.remove("ov")
+    if projections is None:
+        projections = []
 
     # ====================================================================
     # ! STEP 0: Define setup vars, move things onto the correct device, get semantically similar toks
