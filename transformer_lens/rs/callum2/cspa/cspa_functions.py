@@ -220,6 +220,7 @@ def gram_schmidt(basis: Float[Tensor, "... d num"], device=None) -> Float[Tensor
     return basis
 
 
+from transformer_lens.rs.callum.keys_fixed import project as multi_project
 
 def project(
     vectors: Float[Tensor, "... d"],
@@ -355,7 +356,7 @@ def get_cspa_results(
     toks: Int[Tensor, "batch seq"],
     negative_head: Tuple[int, int],
     interventions: List[str],
-    projections: Optional[List[str]] = None,
+    projections: Optional[Dict[str, str]] = None,
     K_unembeddings: Optional[Union[int, float]] = None,
     K_semantic: int = 10,
     only_keep_negative_components: bool = False,
@@ -421,11 +422,11 @@ def get_cspa_results(
     '''
 
     if projections is None and "ov" in interventions:
-        projections = ["ov"]
+        projections = {"ov": "unembedding"}
         interventions = interventions[:] # Otherwise successive calls to the function will also be edited
         interventions.remove("ov")
     if projections is None:
-        projections = []
+        projections = {}
 
     # ====================================================================
     # ! STEP 0: Define setup vars, move things onto the correct device, get semantically similar toks
@@ -461,12 +462,13 @@ def get_cspa_results(
     # Get all hook names
     resid_hook_name = utils.get_act_name("resid_pre", LAYER)
     resid_final_hook_name = utils.get_act_name("resid_post", model.cfg.n_layers - 1)
+    pre_result_hook_name = utils.get_act_name("result", LAYER-1)
     result_hook_name = utils.get_act_name("result", LAYER)
     v_hook_name = utils.get_act_name("v", LAYER)
     pattern_hook_name = utils.get_act_name("pattern", LAYER)
     scale_hook_name = utils.get_act_name("scale", LAYER, "ln1")
     scale_final_hook_name = utils.get_act_name("scale")
-    hook_names_to_cache = [scale_final_hook_name, v_hook_name, pattern_hook_name, scale_hook_name, resid_hook_name, resid_final_hook_name, result_hook_name]
+    hook_names_to_cache = [pre_result_hook_name, scale_final_hook_name, v_hook_name, pattern_hook_name, scale_hook_name, resid_hook_name, resid_final_hook_name, result_hook_name]
 
     t_clean_and_ablated = time.time()
 
@@ -489,6 +491,7 @@ def get_cspa_results(
     v = cache[v_hook_name][:, :, HEAD] # [batch seqK d_head]
     pattern = cache[pattern_hook_name][:, HEAD] # [batch seqQ seqK]      
     scaled_resid_pre = cache[resid_hook_name].clone() / cache[scale_hook_name]
+    pre_head_result_orig = cache[pre_result_hook_name] # [batch seq n_heads d_model]
     del cache
 
     # * Perform complete ablation (via a direct calculation)
@@ -516,18 +519,40 @@ def get_cspa_results(
     # Prepare q_input
     if "q" in projections:
         # Note the 2.0 as we suck without this
-        q_input_per_position = 3.0 * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len)
-        q_shape = "batch seqQ seqK"
-        unembeddings = model.W_U.T[toks]
-        unembeddings_per_q = einops.repeat(unembeddings, "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len)
-        q_input = project(
-            q_input_per_position,
-            unembeddings_per_q,
-            device=computation_device,
-        )
 
-        # Probably don't project BOS, because it's more appropriate to preserve this information I think
-        q_input[:, :, 0, :] = q_input_per_position[:, :, 0, :]
+        q_shape = "batch seqQ seqK" if projections["q"] == "unembedding" else "batch seqQ"
+        
+        if projections["q"] == "unembedding":
+            warnings.warn("Ugh this seems broken")
+            q_input_per_position = 2.0 * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len)
+            unembeddings = model.W_U.T[toks] # TODO reimplement unembedding projection too
+            projection_directions_per_k = einops.repeat(unembeddings, "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len)
+
+            q_input = project(
+                q_input_per_position,
+                projection_directions_per_k,
+                device=computation_device,
+            )
+
+            # Probably don't project BOS, because it's more appropriate to preserve this information I think
+            q_input[:, :, 0, :] = q_input_per_position[:, :, 0, :]
+
+
+        else:
+            assert projections["q"] == "layer9_heads", "Only implemented these two projections so far"
+
+            projection_directions = list(einops.rearrange(
+                pre_head_result_orig.to(base_q_input.device),  # [batch seqK n_heads d_model]
+                "batch seqQ n_heads d_model -> n_heads batch seqQ d_model",
+            ))
+
+            q_input, _ = multi_project(
+                2.0 * base_q_input,
+                projection_directions,
+                device=computation_device,
+            )
+            q_input = q_input.to(base_q_input.device) # TODO make this less verbose: why isn;t it on the device??
+            # q_input[:, ]
 
     else:
         q_input = base_q_input
@@ -554,14 +579,12 @@ def get_cspa_results(
     att_scores_causal = att_scores.masked_fill_(t.triu(t.ones_like(att_scores), diagonal=1).bool(), -float("inf"))
     att_probs = t.softmax(att_scores_causal, dim=-1)
 
-    # TODO implement BOS manipuldation so that we're on 'easy mode'
-    warnings.warn("Performing control for BOS which is untested")
     rest_of_attention_probs = att_probs[:, 1:, 1:].sum(dim=-1)
     scale_factor = (-pattern[:, 1:, 0] + 1.0) / rest_of_attention_probs # scale_factor * (sum of non BOS probs) + new BOS probs = 1.0
     att_probs[:, 1:, 1:] *= scale_factor.unsqueeze(-1)
     att_probs[:, 1:, 0] = pattern[:, 1:, 0]
     assert t.allclose(pattern[:, :, 0], att_probs[:, :, 0], atol=1e-3, rtol=1e-3), "Projections don't match attention scores with BOS hack"
-    assert torch.norm(att_probs.sum(dim=-1) - 1.0).item() < 1e-2, (att_probs.sum(dim=-1) - 1.0)
+    assert torch.norm(att_probs.sum(dim=-1) - 1.0).item() < 1e-2, (att_probs.sum(dim=-1) - 1.0, "Attention probs don't sum to 1.0")
 
     # Testing, probably remove this...
     if "q" not in projections and "k" not in projections:
@@ -617,6 +640,8 @@ def get_cspa_results(
     time_for_sstar = time.time() - t0
 
     if "ov" in projections:
+        assert projections["ov"] == "unembedding", "Only implemented this projection so far"
+
         # We project the output onto the unembeddings we got from the code above (which will either be all unembeddings,
         # or those which were filtered for being predicted on the destination side).
         if only_keep_negative_components:
@@ -684,7 +709,7 @@ def get_cspa_results_batched(
     max_batch_size: int,
     negative_head: Tuple[int, int],
     interventions: List[str],
-    projections: Optional[List[str]] = None,
+    projections: Optional[Dict[str, str]] = None,
     K_unembeddings: Optional[Union[int, float]] = None,
     K_semantic: int = 10,
     only_keep_negative_components: bool = False,

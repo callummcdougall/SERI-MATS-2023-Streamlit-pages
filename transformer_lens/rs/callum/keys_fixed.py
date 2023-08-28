@@ -713,6 +713,7 @@ def project(
     dir: Union[List[Float[Tensor, "... dim"]], Float[Tensor, "... dim"]],
     test: bool = False,
     return_type: Literal["projections", "coeffs", "both"] = "projections",
+    device = None,
 ):
     '''
     x: 
@@ -735,9 +736,21 @@ def project(
     Notes:
         Make sure x and dir (or each element in dir) have the same shape, I don't want to
         mess up broadcasting by accident! Do einops.repeat on dir if you have to.
+
+    If device is not None, do Gram-Schmidt on that device to try and reduce memory strain
     '''
     assert return_type in ["projections", "coeffs", "both"]
-    device = x.device
+
+    if device is not None:
+        original_device = x.device
+        x = x.to(device)
+        if isinstance(dir, Tensor): dir = dir.to(device)
+        else:
+            dir = [d.to(device) for d in dir]
+    else:
+        original_device = None
+        device = x.device
+
     if isinstance(dir, Tensor): dir = [dir]
     assert all([x.shape == dir_.shape for dir_ in dir]), [x.shape, [d.shape for d in dir]]
     dir = t.stack(dir, dim=-1)
@@ -758,7 +771,7 @@ def project(
         "... dim, ... dim directions -> ... directions"
     )
     if return_type == "coeffs":
-        return x_coeffs
+        return x_coeffs.to(original_device) if (original_device is not None) else x_coeffs
 
     # Project x onto these directions (summing over each of the directional projections)
     x_dir = einops.einsum(
@@ -792,10 +805,10 @@ def project(
         print(f"\tNorms test passed: max norm diff = {diff:.4e}")
 
     if return_type == "both":
-        return x_dir, x - x_dir, x_coeffs
+        return (x_dir, x - x_dir, x_coeffs) if (original_device is None) else (x_dir.to(original_device), (x - x_dir).to(original_device), x_coeffs.to(original_device))
     elif return_type == "projections":
-        return x_dir, x - x_dir
-
+        return (x_dir, x - x_dir) if (original_device is None) else (x_dir.to(original_device), (x - x_dir).to(original_device))
+ 
 # def test_project(project: Callable):
 
 #     # First test: 1D

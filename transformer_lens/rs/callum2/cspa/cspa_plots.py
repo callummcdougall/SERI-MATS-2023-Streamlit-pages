@@ -439,7 +439,10 @@ def show_graphs_and_summary_stats(cspa_results):
 
     xaxis_values = l_abl - l_orig
     yaxis_values = l_cspa - l_orig
-    # if values == "loss-absolute":
+
+    loss_performance_recovered = 1 - yaxis_values.mean() / xaxis_values.mean()
+    print("Loss recovery", loss_performance_recovered.mean())
+
     xaxis_values = xaxis_values.abs()
     yaxis_values = yaxis_values.abs()
     # title = "Absolute change in loss from ablation"
