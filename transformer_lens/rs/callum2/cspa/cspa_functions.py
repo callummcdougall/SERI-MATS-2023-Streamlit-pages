@@ -2,6 +2,7 @@
 
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
+import torch
 import warnings
 from typing import Dict, Any, Tuple, List, Optional, Literal, Union
 from transformer_lens import HookedTransformer, utils
@@ -515,7 +516,7 @@ def get_cspa_results(
     # Prepare q_input
     if "q" in projections:
         # Note the 2.0 as we suck without this
-        q_input_per_position = 2.0 * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len)
+        q_input_per_position = 3.0 * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len)
         q_shape = "batch seqQ seqK"
         unembeddings = model.W_U.T[toks]
         unembeddings_per_q = einops.repeat(unembeddings, "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len)
@@ -554,16 +555,20 @@ def get_cspa_results(
     att_probs = t.softmax(att_scores_causal, dim=-1)
 
     # TODO implement BOS manipuldation so that we're on 'easy mode'
-    # rest_of_attention_probs = att_probs[:, :, 1:].sum(dim=-1)
-    # att_scores_causal[:, :, 0] += (pattern[:, :, 0] * rest_of_probs]).log()
-    # att_probs = t.softmax(att_scores_causal, dim=-1)
-    # assert t.allclose(pattern[:, :, 0], att_probs[:, :, 0], atol=1e-3, rtol=1e-3), "Projections don't match attention scores with BOS hack"
+    warnings.warn("Performing control for BOS which is untested")
+    rest_of_attention_probs = att_probs[:, 1:, 1:].sum(dim=-1)
+    scale_factor = (-pattern[:, 1:, 0] + 1.0) / rest_of_attention_probs # scale_factor * (sum of non BOS probs) + new BOS probs = 1.0
+    att_probs[:, 1:, 1:] *= scale_factor.unsqueeze(-1)
+    att_probs[:, 1:, 0] = pattern[:, 1:, 0]
+    assert t.allclose(pattern[:, :, 0], att_probs[:, :, 0], atol=1e-3, rtol=1e-3), "Projections don't match attention scores with BOS hack"
+    assert torch.norm(att_probs.sum(dim=-1) - 1.0).item() < 1e-2, (att_probs.sum(dim=-1) - 1.0)
 
     # Testing, probably remove this...
     if "q" not in projections and "k" not in projections:
         assert t.allclose(att_probs, pattern, atol=1e-3, rtol=1e-3), "Projections don't match attention scores"
     else:
         assert not t.allclose(att_probs, pattern, atol=1e-3, rtol=1e-3)
+
     pattern = att_probs
 
     # ====================================================================
