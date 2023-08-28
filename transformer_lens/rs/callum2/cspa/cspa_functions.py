@@ -460,13 +460,13 @@ def get_cspa_results(
     
     # Get all hook names
     resid_hook_name = utils.get_act_name("resid_pre", LAYER)
-    resid_hook_name = utils.get_act_name("resid_post", model.cfg.n_layers - 1)
+    resid_final_hook_name = utils.get_act_name("resid_post", model.cfg.n_layers - 1)
     result_hook_name = utils.get_act_name("result", LAYER)
     v_hook_name = utils.get_act_name("v", LAYER)
     pattern_hook_name = utils.get_act_name("pattern", LAYER)
     scale_hook_name = utils.get_act_name("scale", LAYER, "ln1")
-    scale_hook_name = utils.get_act_name("scale")
-    hook_names_to_cache = [scale_hook_name, v_hook_name, pattern_hook_name, scale_hook_name, resid_hook_name, resid_hook_name, result_hook_name]
+    scale_final_hook_name = utils.get_act_name("scale")
+    hook_names_to_cache = [scale_final_hook_name, v_hook_name, pattern_hook_name, scale_hook_name, resid_hook_name, resid_final_hook_name, result_hook_name]
 
     t_clean_and_ablated = time.time()
 
@@ -478,16 +478,17 @@ def get_cspa_results(
         names_filter = lambda name: name in hook_names_to_cache
     )
     loss = model.loss_fn(logits, toks, per_token=True)
-    resid_post_final = cache[resid_hook_name] # [batch seqQ d_model]
+    resid_post_final = cache[resid_final_hook_name] # [batch seqQ d_model]
     resid_pre = cache[resid_hook_name] # [batch seqK d_model]
     # TODO odd thing; sometimes it seems like scale isn't recorded as different across heads. why?
     scale = cache[scale_hook_name]
     if scale.ndim == 4:
         scale = cache[scale_hook_name][:, :, HEAD] # [batch seqK 1]
     head_result_orig = cache[result_hook_name][:, :, HEAD] # [batch seqQ d_model]
-    final_scale = cache[scale_hook_name] # [batch seq 1]
+    final_scale = cache[scale_final_hook_name] # [batch seq 1]
     v = cache[v_hook_name][:, :, HEAD] # [batch seqK d_head]
     pattern = cache[pattern_hook_name][:, HEAD] # [batch seqQ seqK]      
+    scaled_q_input = cache[resid_hook_name].clone() / cache[scale_hook_name]
     del cache
 
     # * Perform complete ablation (via a direct calculation)
@@ -510,8 +511,6 @@ def get_cspa_results(
 
     # Recompute pattern based on the input to the queryside, and the different keysides
     # As a warmup let's manually compute attention patterns...
-
-    
 
     # ====================================================================
     # ! STEP 4: Get CSPA results (this is the hard part!)
