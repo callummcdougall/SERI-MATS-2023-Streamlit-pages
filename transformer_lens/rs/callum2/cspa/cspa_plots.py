@@ -421,3 +421,44 @@ def add_cspa_to_streamlit_page(
         with gzip.open(full_filename, "wb") as f:
             pickle.dump(HTML_PLOTS, f)
         if verbose: print(f"Saving plots to {full_filename.name!r} ... {time.time()-t0:.2f}", end="\n")
+
+def show_graphs_and_summary_stats(cspa_results):
+    """Given a dictionary of CSPA results, show the graphs and summary stats"""
+
+    fig_line_loss = generate_loss_based_scatter(cspa_results, nbins=100, values="loss")
+    fig_line_loss_absolute = generate_loss_based_scatter(cspa_results, nbins=100, values="loss-absolute")
+    fig_line_kl = generate_loss_based_scatter(cspa_results, nbins=100, values="kl-div")
+
+    kl_div_ablated_to_orig = cspa_results["kl_div_ablated_to_orig"].mean()
+    kl_div_cspa_to_orig = cspa_results["kl_div_cspa_to_orig"].mean()
+
+    # normed_loss_ablated_to_orig = cspa_results_qk_ov
+    l_orig = cspa_results["loss"].flatten()
+    l_abl = cspa_results["loss_ablated"].flatten()
+    l_cspa = cspa_results["loss_cspa"].flatten()
+
+    xaxis_values = l_abl - l_orig
+    yaxis_values = l_cspa - l_orig
+    # if values == "loss-absolute":
+    xaxis_values = xaxis_values.abs()
+    yaxis_values = yaxis_values.abs()
+    # title = "Absolute change in loss from ablation"
+
+    normed_loss_performance_recovered = 1 - yaxis_values.mean() / xaxis_values.mean()
+    print("Normed recovery", normed_loss_performance_recovered.mean())
+
+    for fig_name, fig in zip(
+        ["loss", "loss-absolute", "kl-div"],
+        [fig_line_loss, fig_line_loss_absolute, fig_line_kl], 
+        strict=True,
+    ):
+        print("Stats for", fig_name)
+        for i in range(1, 10):
+            ma_max = fig.data[0].x[-i]
+            cspa_max = fig.data[0].y[-i]
+            print(f"{i}th most extreme quantile: fraction explained = 1 - ({cspa_max:.3f}/{ma_max:.3f}) = {1 - cspa_max/ma_max:.3f}, and average metric")
+
+    print(f"Mean KL divergence from ablated to original: {kl_div_ablated_to_orig:.4f}")
+    print(f"Mean KL divergence from CSPA to original: {kl_div_cspa_to_orig:.4f}")
+    print(f"Ratio = {kl_div_cspa_to_orig / kl_div_ablated_to_orig:.3f}")
+    print(f"Performance explained = {1 - kl_div_cspa_to_orig / kl_div_ablated_to_orig:.3f}")

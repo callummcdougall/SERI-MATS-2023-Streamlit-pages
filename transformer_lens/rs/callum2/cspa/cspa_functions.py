@@ -171,7 +171,7 @@ FUNCTION_STR_TOKS =  [
 
 
 
-def gram_schmidt(basis: Float[Tensor, "... d num"]) -> Float[Tensor, "... d num"]:
+def gram_schmidt(basis: Float[Tensor, "... d num"], device=None) -> Float[Tensor, "... d num"]:
     '''
     Performs Gram-Schmidt orthonormalization on a batch of vectors, returning a basis.
 
@@ -183,9 +183,18 @@ def gram_schmidt(basis: Float[Tensor, "... d num"]) -> Float[Tensor, "... d num"
     If the vectors aren't linearly independent, then some of the basis vectors will be zero (this is
     so we can still batch our projections, even if the subspace rank for each individual projection
     is not equal.
+
+    If device is not None, do computation on the device (to try and reduce memory strain)
     '''
     # Make a copy of the vectors
-    basis = basis.clone()
+
+    if device is not None:
+        basis = basis.to(device).clone()
+        original_device = basis.device
+
+    else:
+        basis = basis.clone()
+
     num_vectors = basis.shape[-1]
     
     # Iterate over each vector in the batch, starting from the zeroth
@@ -203,7 +212,10 @@ def gram_schmidt(basis: Float[Tensor, "... d num"]) -> Float[Tensor, "... d num"
             basis[..., i] / basis_vec_norm,
             0.0,
         )
-    
+        
+    if device is not None:
+        basis = basis.to(original_device)
+
     return basis
 
 
@@ -214,6 +226,7 @@ def project(
     only_keep: Optional[Literal["pos", "neg"]] = None,
     gs: bool = True,
     return_coeffs: bool = False,
+    device = None,
 ):
     '''
     `vectors` is a batch of vectors, with last dimension `d` and all earlier dimensions as batch dims.
@@ -223,7 +236,10 @@ def project(
     If they have the same shape, we project each vector in `vectors` onto the corresponding direction
     in `proj_directions`. If `proj_directions` has an extra dim, then the last dimension is another 
     batch dim, i.e. we're projecting each vector onto a subspace rather than a single vector.
+    
+    If device is not None, do Gram-Schmidt on that device to try and reduce memory strain
     '''
+
     # If we're only projecting onto one direction, add a dim at the end (for consistency)
     if proj_directions.shape == vectors.shape:
         proj_directions = proj_directions.unsqueeze(-1)
@@ -232,7 +248,7 @@ def project(
     assert not((proj_directions.shape[-1] > 20) and gs), "Shouldn't do too many vectors, GS orth might be computationally heavy I think"
 
     # We might want to have done G-S orthonormalization first
-    proj_directions_basis = gram_schmidt(proj_directions) if gs else proj_directions
+    proj_directions_basis = gram_schmidt(proj_directions, device=device) if gs else proj_directions
 
     components_in_proj_dir = einops.einsum(
         vectors, proj_directions_basis,
@@ -347,6 +363,7 @@ def get_cspa_results(
     return_logits: bool = False,
     verbose: bool = False,
     keep_self_attn: bool = True,
+    computation_device = None,
 ) -> Tuple[
         Dict[str, Float[Tensor, "batch seq-1"]],
         Int[Tensor, "n 4"],
@@ -603,6 +620,7 @@ def get_cspa_results_batched(
     return_dla: bool = False,
     return_logits: bool = False,
     keep_self_attn: bool = True,
+    computation_device = None, 
 ) -> Dict[str, Float[Tensor, "batch seq-1"]]:
     '''
     Gets results from CSPA, by splitting the tokens along batch dimension and running it several 
@@ -649,6 +667,7 @@ def get_cspa_results_batched(
             keep_self_attn = keep_self_attn,
             return_dla = return_dla,
             return_logits = return_logits,
+            computation_device = computation_device,
         )
         t_get = time.time() - t_get
 
