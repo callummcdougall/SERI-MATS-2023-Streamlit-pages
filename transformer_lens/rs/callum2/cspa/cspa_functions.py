@@ -922,6 +922,7 @@ def convert_top_K_and_Ksem_to_dict(
 #     new_attn_scores.masked_fill_(t.triu(t.ones_like(new_attn_scores), diagonal=1).bool(), -float("inf"))
 #     new_pattern = new_attn_scores.softmax(dim=-1)
 
+
 #     # We want to make sure that attention prob to the zeroth token is same as before (as a baseline)
 #     # e.g. if original attn to 0 was very high, we'll be scaling down the new not-to-0 attn probs
 #     new_pattern[:, 1:, 1:] *= (1 - pattern[:, HEAD, 1:, [0]]) / (1 - new_pattern[:, 1:, [0]])
