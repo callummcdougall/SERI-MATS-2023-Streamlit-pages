@@ -488,7 +488,7 @@ def get_cspa_results(
     final_scale = cache[scale_final_hook_name] # [batch seq 1]
     v = cache[v_hook_name][:, :, HEAD] # [batch seqK d_head]
     pattern = cache[pattern_hook_name][:, HEAD] # [batch seqQ seqK]      
-    scaled_q_input = cache[resid_hook_name].clone() / cache[scale_hook_name]
+    scaled_resid_pre = cache[resid_hook_name].clone() / cache[scale_hook_name]
     del cache
 
     # * Perform complete ablation (via a direct calculation)
@@ -511,6 +511,12 @@ def get_cspa_results(
 
     # Recompute pattern based on the input to the queryside, and the different keysides
     # As a warmup let's manually compute attention patterns...
+
+    q_input = scaled_resid_pre.clone() # [batch seqQ d_model]
+    k_input = scaled_resid_pre.clone() # [batch seqK d_model]
+
+    q = einops.einsum(q_input, model.W_Q[LAYER, HEAD], "batch seqQ d_model, d_model d_head -> batch seqQ d_head")
+    
 
     # ====================================================================
     # ! STEP 4: Get CSPA results (this is the hard part!)
