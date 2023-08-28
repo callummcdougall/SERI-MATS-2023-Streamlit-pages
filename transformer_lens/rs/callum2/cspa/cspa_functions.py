@@ -514,9 +514,13 @@ def get_cspa_results(
 
     q_input = scaled_resid_pre.clone() # [batch seqQ d_model]
     k_input = scaled_resid_pre.clone() # [batch seqK d_model]
-
     q = einops.einsum(q_input, model.W_Q[LAYER, HEAD], "batch seqQ d_model, d_model d_head -> batch seqQ d_head")
-    
+    k = einops.einsum(k_input, model.W_K[LAYER, HEAD], "batch seqK d_model, d_model d_head -> batch seqK d_head")
+    q += model.b_Q[LAYER, HEAD]
+    k += model.b_K[LAYER, HEAD]
+    att_scores = einops.einsum(q, k, "batch seqQ d_head, batch seqK d_head -> batch seqQ seqK") / math.sqrt(model.cfg.d_head)
+    att_scores_causal = att_scores.masked_fill_(t.triu(t.ones_like(att_scores), diagonal=1).bool(), -float("inf"))
+    att_probs = t.softmax(att_scores_causal, dim=-1)
 
     # ====================================================================
     # ! STEP 4: Get CSPA results (this is the hard part!)
