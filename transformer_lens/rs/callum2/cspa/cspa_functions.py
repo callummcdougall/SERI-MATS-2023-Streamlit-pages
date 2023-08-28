@@ -189,8 +189,8 @@ def gram_schmidt(basis: Float[Tensor, "... d num"], device=None) -> Float[Tensor
     # Make a copy of the vectors
 
     if device is not None:
-        basis = basis.to(device).clone()
         original_device = basis.device
+        basis = basis.to(device).clone()
 
     else:
         basis = basis.clone()
@@ -932,3 +932,16 @@ def convert_top_K_and_Ksem_to_dict(
 
 #     pattern[:, HEAD] = new_pattern
 #     return pattern
+
+def get_performance_recovered(cspa_results: Dict[str, t.Tensor], metric: str = "kl_div_cspa_to_orig"):
+    """Calculate the performance recovered with some metric"""
+
+    numerator = cspa_results[metric]
+    if "loss" in metric:
+        numerator -= cspa_results["loss"]
+    denominator = cspa_results[metric.replace("cspa", "ablated")]
+    if "loss" in metric:
+        numerator -= cspa_results["loss"]
+
+    assert numerator.shape==denominator.shape
+    return 1 - numerator.mean().item() / denominator.mean().item()
