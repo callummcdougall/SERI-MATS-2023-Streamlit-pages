@@ -1,6 +1,24 @@
 import sys, os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
+from pathlib import Path
+
+# Reason we need this code: if we don't have it, then we default to importing the version of transformer_lens from site-packages instead
+# (please correct me if wrong!)
+
+for st_page_dir in [
+    os.getcwd().split("SERI-MATS-2023-Streamlit-pages")[0] + "SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/st_page",
+    os.getcwd().split("seri_mats_23_streamlit_pages")[0] + "seri_mats_23_streamlit_pages/transformer_lens/rs/callum2/st_page",
+    os.getcwd().split("seri-mats-2023-streamlit-pages")[0] + "seri-mats-2023-streamlit-pages/transformer_lens/rs/callum2/st_page",
+    os.getcwd().split("/app/seri-mats-2023-streamlit-pages")[0] + "/app/seri-mats-2023-streamlit-pages/transformer_lens/rs/callum2/st_page",
+    "/mount/src/seri-mats-2023-streamlit-pages/transformer_lens/rs/callum2/st_page",
+]:
+    if os.path.exists(st_page_dir): break
+else: raise Exception("Couldn't find root dir")
+root_dir = st_page_dir.replace("/transformer_lens/rs/callum2/st_page", "")
+ST_HTML_PATH = Path(st_page_dir) / "media"
+if sys.path[0] != root_dir: sys.path.insert(0, root_dir)
+
 import streamlit as st
 import gzip
 import pickle
