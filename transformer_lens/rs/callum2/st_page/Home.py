@@ -30,10 +30,10 @@ ST_HTML_PATH = Path(st_page_dir) / "media"
 if sys.path[0] != root_dir: sys.path.insert(0, root_dir)
 
 if DEBUG:
-    print("st_page_dir:", st_page_dir)
-    print("root_dir:", root_dir)
-    print("sys.path:", sys.path)
-    print("ST_HTML_PATH:", ST_HTML_PATH)
+    st.write("st_page_dir:", st_page_dir)
+    st.write("root_dir:", root_dir)
+    st.write("sys.path:", sys.path)
+    st.write("ST_HTML_PATH:", ST_HTML_PATH)
 
 
 import platform
