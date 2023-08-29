@@ -6,14 +6,35 @@ from pathlib import Path
 
 DEBUG = True
 
+import sys, os
+for st_page_dir in [
+    os.getcwd().split("SERI-MATS-2023-Streamlit-pages")[0] + "SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/st_page",
+    os.getcwd().split("seri_mats_23_streamlit_pages")[0] + "seri_mats_23_streamlit_pages/transformer_lens/rs/callum2/st_page",
+    os.getcwd().split("seri-mats-2023-streamlit-pages")[0] + "seri-mats-2023-streamlit-pages/transformer_lens/rs/callum2/st_page",
+    os.getcwd().split("/app/seri-mats-2023-streamlit-pages")[0] + "/app/seri-mats-2023-streamlit-pages/transformer_lens/rs/callum2/st_page",
+    "/mount/src/seri-mats-2023-streamlit-pages/transformer_lens/rs/callum2/st_page",
+    "callummcdougall/seri-mats-2023-streamlit-pages/main/transformer_lens/rs/callum2/st_page",
+]:
+    if os.path.exists(st_page_dir):
+        break
+else:
+    raise Exception("Couldn't find root dir")
+
+root_dir = st_page_dir.replace("/transformer_lens/rs/callum2/st_page", "")
+
+# We change to st_page_dir, so that we can read media (although maybe that's not necessary cause we have `ST_HTML_PATH` which we use directly)
+os.chdir(st_page_dir)
+ST_HTML_PATH = Path(st_page_dir) / "media"
+
+# We make sure that the version of transformer_lens we can import from is 0th in the path
+if sys.path[0] != root_dir: sys.path.insert(0, root_dir)
+
 if DEBUG:
-    st.write(os.getcwd())
-    st.write(list(Path.cwd().iterdir()))
-    st.write("What's going on?")
-# from transformer_lens.rs.callum2.utils import ST_HTML_PATH
-# if DEBUG:
-#     st.write(ST_HTML_PATH)
-#     st.write("What's going on?")
+    print("st_page_dir:", st_page_dir)
+    print("root_dir:", root_dir)
+    print("sys.path:", sys.path)
+    print("ST_HTML_PATH:", ST_HTML_PATH)
+
 
 import platform
 is_local = (platform.processor() != "")
