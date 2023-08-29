@@ -200,6 +200,7 @@ def get_mega_dict() -> dict:
             "tokenizer": mega_dict["tokenizer"],
             "10.7": {k: v for k, v in mega_dict.items() if k != "toknizer"},
         }
+    return mega_dict
 
 
 mega_dict = get_mega_dict()
