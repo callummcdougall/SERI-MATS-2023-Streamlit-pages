@@ -11,6 +11,7 @@ if DEBUG:
     st.write(os.getcwd())
     st.write(list(Path.cwd().iterdir()))
     st.write(ST_HTML_PATH)
+    st.write("What's going on?")
 
 import platform
 is_local = (platform.processor() != "")
