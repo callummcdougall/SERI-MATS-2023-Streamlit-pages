@@ -3,15 +3,16 @@ import streamlit as st
 import os, sys
 from pathlib import Path
 
-from transformer_lens.rs.callum2.utils import ST_HTML_PATH
 
 DEBUG = True
 
 if DEBUG:
     st.write(os.getcwd())
     st.write(list(Path.cwd().iterdir()))
-    st.write(ST_HTML_PATH)
-    st.write("What's going on?")
+# from transformer_lens.rs.callum2.utils import ST_HTML_PATH
+# if DEBUG:
+#     st.write(ST_HTML_PATH)
+#     st.write("What's going on?")
 
 import platform
 is_local = (platform.processor() != "")
