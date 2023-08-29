@@ -1,5 +1,14 @@
 import streamlit as st
 
+import os, sys
+from pathlib import Path
+
+DEBUG = True
+
+if DEBUG:
+    st.write(os.getcwd())
+    st.write(list(Path.cwd().iterdir()))
+
 import platform
 is_local = (platform.processor() != "")
 if is_local:
