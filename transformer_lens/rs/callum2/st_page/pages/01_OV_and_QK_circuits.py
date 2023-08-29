@@ -200,6 +200,9 @@ def get_mega_dict() -> dict:
             "tokenizer": mega_dict["tokenizer"],
             "10.7": {k: v for k, v in mega_dict.items() if k != "toknizer"},
         }
+    # Make it as likely as possible that we'll show histograms on load
+    st.session_state["waiting_to_display"] = True
+    # Return the dict
     return mega_dict
 
 
