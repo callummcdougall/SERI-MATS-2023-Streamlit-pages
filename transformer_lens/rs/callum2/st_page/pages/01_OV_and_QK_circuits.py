@@ -193,7 +193,14 @@ def plot_full_matrix_histogram(
 
 @st.cache_data(show_spinner=False, max_entries=1)
 def get_mega_dict() -> dict:
-    return pickle.load(gzip.open(ST_HTML_PATH / FILENAME))
+    mega_dict = pickle.load(gzip.open(ST_HTML_PATH / FILENAME))
+    # Get it in the same form as the version which has multiple heads, if this is the one with only 10.7
+    if "10.7" not in mega_dict:
+        mega_dict = {
+            "tokenizer": mega_dict["tokenizer"],
+            "10.7": {k: v for k, v in mega_dict.items() if k != "toknizer"},
+        }
+
 
 mega_dict = get_mega_dict()
 tokenizer = mega_dict.pop("tokenizer")
