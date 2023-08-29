@@ -9,6 +9,7 @@ DEBUG = True
 if DEBUG:
     st.write(os.getcwd())
     st.write(list(Path.cwd().iterdir()))
+    st.write("What's going on?")
 # from transformer_lens.rs.callum2.utils import ST_HTML_PATH
 # if DEBUG:
 #     st.write(ST_HTML_PATH)
