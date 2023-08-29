@@ -13,49 +13,21 @@ import pandas as pd
 import textwrap
 import torch as t
 t.set_grad_enabled(False)
-# from transformers import AutoTokenizer
 
 import platform
 is_local = (platform.processor() != "")
 
-# # Stuff to make the page work on my local machine
-# for p in [
-#     Path(r"C:\Users\calsm\Documents\AI Alignment\SERIMATS_23\seri_mats_23_streamlit_pages"),
-#     Path(r"/home/ubuntu/SERI-MATS-2023-Streamlit-pages"),
-#     Path(r"/mount/src/seri-mats-2023-streamlit-pages"),
-# ]:
-#     if os.path.exists(str_p := str(p.resolve())):
-#         os.chdir(str_p)
-#         if (sys.path[0] != str_p): sys.path.insert(0, str_p)
-#         break
-
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-
 st.set_page_config(layout="wide")
-# st.write(os.getcwd())
-# st.write(list(Path.cwd().iterdir()))
 
 from transformer_lens.rs.callum2.utils import ST_HTML_PATH
-
-# dict_to_store_less = {
-#     "tokenizer": model.tokenizer,
-#     "W_EE_V": W_EE @ model.W_V[10, 7],
-#     "W_U_O": model.W_O[10, 7] @ W_U,
-#     "W_U_Q": W_U.T @ model.W_Q[10, 7],
-#     "W_EE_K": W_EE @ model.W_K[10, 7],
-#     "b_Q": model.b_Q[10, 7],
-#     "b_K": model.b_K[10, 7],
-# }
 
 if is_local:
     # NEGATIVE_HEADS = [(10, 1), (10, 7), (11, 10)]
     NEGATIVE_HEADS = [(10, 7)]
     FILENAME = "OV_QK_circuits_less.pkl"
-    # FILENAME = "OV_QK_circuits_less_local.pkl"
 else:
     NEGATIVE_HEADS = [(10, 7)]
     FILENAME = "OV_QK_circuits_less.pkl"
-    # FILENAME = "OV_QK_circuits_less_public.pkl"
 
 NEG_HEADS = [f"{layer}.{head}" for layer, head in NEGATIVE_HEADS]
 

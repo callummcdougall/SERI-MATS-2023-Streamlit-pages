@@ -819,7 +819,8 @@ def generate_4_html_plots_batched(
     # Delete the plots we no longer need
     print("Deleting HTML plots we no longer need...")
     for (lower, upper) in lower_upper_list:
-        os.remove(ST_HTML_PATH / f"_GZIP_HTML_PLOTS_{lower}_{upper}.pkl")
+        file = ST_HTML_PATH / f"_GZIP_HTML_PLOTS_{lower}_{upper}.pkl"
+        if file.exists(): os.remove(file)
 
 
 

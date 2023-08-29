@@ -2,16 +2,7 @@
 import sys, os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
-# Stuff to make the page work on my local machine
 from pathlib import Path
-# for p in [
-#     Path(r"C:\Users\calsm\Documents\AI Alignment\SERIMATS_23\seri_mats_23_streamlit_pages"),
-#     Path(r"/home/ubuntu/SERI-MATS-2023-Streamlit-pages"),
-# ]:
-#     if os.path.exists(str_p := str(p.resolve())):
-#         os.chdir(str_p)
-#         if (sys.path[0] != str_p): sys.path.insert(0, str_p)
-#         break
 
 import streamlit as st
 st.set_page_config(layout="wide")
