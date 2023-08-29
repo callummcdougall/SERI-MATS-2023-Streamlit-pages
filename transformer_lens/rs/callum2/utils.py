@@ -7,12 +7,11 @@
 # ! Imports & paths & constants
 # =============================================================================
 
-from transformer_lens.cautils.notebook import *
-
 import sys, os
 for root_dir in [
     os.getcwd().split("SERI-MATS-2023-Streamlit-pages")[0] + "SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/st_page",
     os.getcwd().split("seri_mats_23_streamlit_pages")[0] + "seri_mats_23_streamlit_pages/transformer_lens/rs/callum2/st_page",
+    os.getcwd().split("seri-mats-2023-streamlit-pages")[0] + "seri-mats-2023-streamlit-pages/transformer_lens/rs/callum2/st_page",
     os.getcwd().split("/app/seri-mats-2023-streamlit-pages")[0] + "/app/seri-mats-2023-streamlit-pages/transformer_lens/rs/callum2/st_page",
     "/mount/src/seri-mats-2023-streamlit-pages/transformer_lens/rs/callum2/st_page",
 ]:
@@ -21,12 +20,13 @@ for root_dir in [
 else:
     raise Exception("Couldn't find root dir")
 os.chdir(root_dir)
-if root_dir not in sys.path: sys.path.append(root_dir)
+if sys.path[0] != root_dir: sys.path.insert(0, root_dir)
 
 ST_HTML_PATH = Path(root_dir) / "media"
 
 NEGATIVE_HEADS = [(10, 7), (11, 10)]
 
+from transformer_lens.cautils.notebook import *
 
 
 # =============================================================================
