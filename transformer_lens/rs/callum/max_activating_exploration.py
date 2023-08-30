@@ -1,5 +1,6 @@
 from transformer_lens.cautils.utils import *
-from transformer_lens.rs.callum.keys_fixed import project, get_effective_embedding_2
+from transformer_lens.rs.callum.keys_fixed import project
+from transformer_lens.rs.callum2.utils import get_effective_embedding
 
 
 def print_best_outputs(
@@ -269,7 +270,7 @@ def decompose_attn_scores(
 
     # * Get the MLP0 output (note that we need to be careful here if we're subtracting the S1 baseline, because we actually need the 2 different MLP0s)
     if use_effective_embedding:
-        W_EE_dict = get_effective_embedding_2(model)
+        W_EE_dict = get_effective_embedding(model, use_codys_without_attention_changes=False)
         W_EE = (W_EE_dict["W_E (including MLPs)"] - W_EE_dict["W_E (no MLPs)"]) if use_layer0_heads else W_EE_dict["W_E (only MLPs)"]
         MLP0_output = W_EE[src_toks]
         if use_baseline: MLP0_output_baseline = W_EE[src_baseline_toks]
@@ -574,7 +575,7 @@ def decompose_attn_scores_full(
 
     # * Get the MLP0 output (note that we need to be careful here if we're subtracting the S1 baseline, because we actually need the 2 different MLP0s)
     if use_effective_embedding:
-        W_EE_dict = get_effective_embedding_2(model)
+        W_EE_dict = get_effective_embedding(model, use_codys_without_attention_changes=False)
         W_EE = (W_EE_dict["W_E (including MLPs)"] - W_EE_dict["W_E (no MLPs)"]) if use_layer0_heads else W_EE_dict["W_E (only MLPs)"]
         MLP0_output = W_EE[src_toks]
         if use_baseline: MLP0_output_baseline = W_EE[src_baseline_toks]

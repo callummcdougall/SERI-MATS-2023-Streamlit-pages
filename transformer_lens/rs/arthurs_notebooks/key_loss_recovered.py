@@ -8,7 +8,9 @@ from transformer_lens.cautils.notebook import *
 from transformer_lens.rs.arthurs_notebooks.arthurs_utils import *
 from transformer_lens.rs.callum.keys_fixed import (
     project,
-    get_effective_embedding_2,
+)
+from transformer_lens.rs.callum2.utils import ( 
+    get_effective_embedding,
 )
 from transformer_lens.rs.callum.orthogonal_query_investigation import (
     decompose_attn_scores_full,
@@ -39,7 +41,7 @@ BATCH_SIZE = 30
 batched_tokens, targets = get_filtered_webtext(
     model, batch_size=BATCH_SIZE, seed=17717, device="cuda", max_seq_len=MAX_SEQ_LEN
 )
-effective_embeddings = get_effective_embedding_2(model)
+effective_embeddings = get_effective_embedding(model, use_codys_without_attention_changes=False)
 
 # %%
 

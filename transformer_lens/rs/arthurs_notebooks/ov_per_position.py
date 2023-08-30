@@ -10,8 +10,12 @@ from transformer_lens.cautils.notebook import *
 from transformer_lens.rs.arthurs_notebooks.arthurs_utils import dot_with_query
 from transformer_lens.rs.callum.keys_fixed import (
     project,
-    get_effective_embedding_2,
 )
+
+from transformer_lens.rs.callum2.utils import (
+    get_effective_embedding,
+)
+
 from transformer_lens.rs.callum.orthogonal_query_investigation import (
     decompose_attn_scores_full,
     create_fucking_massive_plot_1,
@@ -31,7 +35,7 @@ direct effect of NMS
 """
 
 from transformer_lens.cautils.notebook import *
-from transformer_lens.rs.callum.keys_fixed import project, get_effective_embedding_2
+from transformer_lens.rs.callum.keys_fixed import project
 from transformer_lens.rs.arthurs_notebooks.arthurs_utils import *
 import argparse
 
@@ -52,7 +56,7 @@ MAX_SEQ_LEN = 512
 BATCH_SIZE = 25
 SEED = 1
 batched_tokens, targets = get_filtered_webtext(model, batch_size=BATCH_SIZE, seed=SEED, device="cuda", max_seq_len=MAX_SEQ_LEN)
-effective_embeddings = get_effective_embedding_2(model)
+effective_embeddings = get_effective_embedding(model, use_codys_without_attention_changes=False)
 JSON_FNAME = "../arthur/json_data"
 TOTAL_EFFECT_MIDS = True
 

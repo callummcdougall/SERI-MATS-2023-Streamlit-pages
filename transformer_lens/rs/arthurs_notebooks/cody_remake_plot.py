@@ -10,7 +10,6 @@ from transformer_lens.cautils.notebook import *
 from transformer_lens.rs.arthurs_notebooks.arthurs_utils import *
 from transformer_lens.rs.callum.keys_fixed import (
     project,
-    get_effective_embedding_2,
 )
 from transformer_lens.rs.callum.orthogonal_query_investigation import (
     decompose_attn_scores_full,

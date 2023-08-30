@@ -29,6 +29,7 @@ from transformer_lens.rs.callum2.cspa.cspa_semantic_similarity import (
 )
 from transformer_lens.rs.callum2.utils import (
     ST_HTML_PATH,
+    get_effective_embedding,
     devices_are_equal,
     first_occurrence_2d,
     concat_dicts,
@@ -308,41 +309,6 @@ def model_fwd_pass_from_resid_pre(
     elif return_type == "loss":
         assert toks is not None
         return model.loss_fn(logits, toks, per_token=True)
-    
-
-
-def get_effective_embedding(model: HookedTransformer) -> Float[Tensor, "d_vocab d_model"]:
-    # TODO - implement Neel's variation; attention to self from the token
-    # TODO - make this consistent (i.e. change the func in `generate_bag_of_words_quad_plot` to also return W_U and W_E separately)
-
-    W_E = model.W_E.clone()
-    W_U = model.W_U.clone()
-    # t.testing.assert_close(W_E[:3, :3], W_U[:3, :3].T)  NOT TRUE, because of the center unembed part, and the folded weights
-
-    resid_pre = W_E.unsqueeze(0)
-    pre_attention = model.blocks[0].ln1(resid_pre)
-    attn_out = einops.einsum(
-        pre_attention, 
-        model.W_V[0],
-        model.W_O[0],
-        "b s d_model, num_heads d_model d_head, num_heads d_head d_model_out -> b s d_model_out",
-    )
-    resid_mid = attn_out + resid_pre
-    normalized_resid_mid = model.blocks[0].ln2(resid_mid)
-    mlp_out = model.blocks[0].mlp(normalized_resid_mid)
-    
-    W_EE = mlp_out.squeeze()
-    W_EE_full = resid_mid.squeeze() + mlp_out.squeeze()
-
-    t.cuda.empty_cache()
-
-    return {
-        "W_E (no MLPs)": W_E,
-        "W_U": W_U.T,
-        # "W_E (raw, no MLPs)": W_E,
-        "W_E (including MLPs)": W_EE_full,
-        "W_E (only MLPs)": W_EE
-    }
 
 @dataclass
 class QKProjectionConfig:
@@ -353,7 +319,7 @@ class QKProjectionConfig:
     use_same_scaling: bool = False 
     projection_directions: Optional[List[Float[torch.Tensor, "batch seq d_model"]]] = None # If we need to do precomputation, store in projection directions
     model: Optional[HookedTransformer] = None # model is required for precomputation
-    heads: Optional[List[Tuple[int, int]]] = field(default_factory=lambda: [ # heads also required for precomputation
+    heads: Optional[List[Tuple[int, int]]] = field(default_factory=lambda: [ # Heads also required for precomputation. SVD is probably O(heads^2) and so let's do it for a subset for now
         (8, 1), 
         (8, 8),
         (9, 2),
@@ -373,12 +339,12 @@ class QKProjectionConfig:
             Tuple[int, int], Float["d_vocab d_model"]
         ] = {}
 
-        W_EE = get_effective_embedding(self.model)["W_E (including MLPs)"]
+        W_EE = get_effective_embedding(self.model, use_codys_without_attention_changes=True)["W_E (including MLPs)"]
 
         for layer_idx, head_idx in self.heads:
             W_OV = self.model.W_V[layer_idx, head_idx] @ self.model.W_O[layer_idx, head_idx]
             queryside_matrix = W_EE @ W_OV
-            head_projection_matrices[(layer_idx, head_idx)] = queryside_matrix.cpu()
+            head_projection_matrices[(layer_idx, head_idx)] = queryside_matrix
             del queryside_matrix
             del W_OV 
             gc.collect()
@@ -427,14 +393,12 @@ def run_qk_projections(
             q_input[:, :, 0] = base_q_input
 
         elif config.q_direction == "earlier_heads":
-            projection_directions_per_k = [einops.repeat(direction.to(toks.device)[toks], "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len).clone().to(computation_device) for direction in config.projection_directions.values()] # TODO check that we broadcast up the Q dimension
-
+            projection_directions_per_k = [einops.repeat(direction[toks], "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len).clone() for direction in config.projection_directions.values()]
             q_input_per_position = config.q_input_multiplier * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len).clone()
 
-            q_input, _ = multi_project(
+            q_input, _ = multi_project( # This works but it's reeeeealllly slow
                 q_input_per_position,
                 projection_directions_per_k,
-                device="cuda:0",
             )
 
             # Keep BOS attention score the same
@@ -489,7 +453,7 @@ def run_qk_projections(
         att_probs = att_scores_causal.softmax(dim=-1)
 
     # Control attention to BOS ie keep the same BOS attention and scale all other attentions so things sum to 1
-    # TODO make this an option, and not tied to when "unembedding" is used
+    # TODO make this an option...
     if not config.use_same_scaling and config.q_direction != "layer9_heads":
         rest_of_attention_probs = att_probs[:, 1:, 1:].sum(dim=-1)
         scale_factor = (-pattern[:, 1:, 0] + 1.0) / rest_of_attention_probs # scale_factor * (sum of non BOS probs) + new BOS probs = 1.0

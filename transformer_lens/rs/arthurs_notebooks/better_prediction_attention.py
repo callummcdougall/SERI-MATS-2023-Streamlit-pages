@@ -6,7 +6,7 @@ Cribbed from key_and_query_projection.py
 
 import ast
 from transformer_lens.cautils.notebook import *
-from transformer_lens.rs.callum.keys_fixed import project, get_effective_embedding_2
+from transformer_lens.rs.callum2.utils import project, get_effective_embedding
 from transformer_lens.rs.arthurs_notebooks.arthurs_utils import *
 import argparse
 
@@ -26,7 +26,7 @@ model.set_use_attn_result(True)
 MAX_SEQ_LEN = 512 # half of 1024 as
 BATCH_SIZE = 30
 batched_tokens, targets = get_filtered_webtext(model, batch_size=BATCH_SIZE, seed=1727, device="cuda", max_seq_len=MAX_SEQ_LEN)
-effective_embeddings = get_effective_embedding_2(model)
+effective_embeddings = get_effective_embedding(model, use_codys_without_attention_changes=False)
 
 # %%
 
