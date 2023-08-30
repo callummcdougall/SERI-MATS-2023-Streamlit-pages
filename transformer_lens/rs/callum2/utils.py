@@ -254,6 +254,7 @@ def get_effective_embedding(model: HookedTransformer, use_codys_without_attentio
             "b s d_model, num_heads d_model d_head, num_heads d_head d_model_out -> b s d_model_out",
         )
         resid_mid = attn_out + resid_pre
+        del pre_attention, attn_out
     else:
         resid_mid = resid_pre
 
@@ -263,7 +264,7 @@ def get_effective_embedding(model: HookedTransformer, use_codys_without_attentio
     W_EE = mlp_out.squeeze()
     W_EE_full = resid_mid.squeeze() + mlp_out.squeeze()
 
-    del resid_pre, pre_attention, attn_out, resid_mid, normalized_resid_mid, mlp_out
+    del resid_pre, resid_mid, normalized_resid_mid, mlp_out
     t.cuda.empty_cache()
 
     return {
