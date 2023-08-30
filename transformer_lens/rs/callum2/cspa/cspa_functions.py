@@ -318,6 +318,7 @@ class QKProjectionConfig:
     # When calculating softmax over attention scores, should we use the denominator from the original forward pass? Note this means attention no longer sums to 1.0!
     use_same_scaling: bool = False 
     projection_directions: Optional[List[Float[torch.Tensor, "batch seq d_model"]]] = None # If we need to do precomputation, store in projection directions
+    mantain_bos_attention: bool = True
     model: Optional[HookedTransformer] = None # model is required for precomputation
     heads: Optional[List[Tuple[int, int]]] = field(default_factory=lambda: [ # Heads also required for precomputation. SVD is probably O(heads^2) and so let's do it for a subset for now
         (8, 1), 
@@ -325,6 +326,8 @@ class QKProjectionConfig:
         (9, 2),
         (9, 6),
         (9, 9),
+        (9, 3), 
+        (8, 6),
     ])
 
     def __post_init__(self):
@@ -454,7 +457,7 @@ def run_qk_projections(
 
     # Control attention to BOS ie keep the same BOS attention and scale all other attentions so things sum to 1
     # TODO make this an option...
-    if not config.use_same_scaling and config.q_direction != "layer9_heads":
+    if config.mantain_bos_attention and not config.use_same_scaling and config.q_direction != "layer9_heads":
         rest_of_attention_probs = att_probs[:, 1:, 1:].sum(dim=-1)
         scale_factor = (-pattern[:, 1:, 0] + 1.0) / rest_of_attention_probs # scale_factor * (sum of non BOS probs) + new BOS probs = 1.0
         att_probs[:, 1:, 1:] *= scale_factor.unsqueeze(-1)
@@ -464,7 +467,8 @@ def run_qk_projections(
     if config.use_same_scaling:
         assert t.allclose(scores[:, :, 0], att_scores_causal[:, :, 0], atol=1e-3, rtol=1e-3), (scores[:,:,0], "\n\n\n\n", att_scores_causal[:,:,0], "Projections don't match attention scores with BOS hack")
 
-    assert t.allclose(pattern[:, :, 0], att_probs[:, :, 0], atol=1e-3, rtol=1e-3), (pattern[:,:,0], "\n\n\n\n", att_probs[:,:,0], "Projections don't match attention scores with BOS hack")
+    if config.mantain_bos_attention:
+        assert t.allclose(pattern[:, :, 0], att_probs[:, :, 0], atol=1e-3, rtol=1e-3), (pattern[:,:,0], "\n\n\n\n", att_probs[:,:,0], "Projections don't match attention scores with BOS hack")
     if not config.use_same_scaling:
         assert torch.norm(att_probs.sum(dim=-1) - 1.0).item() < 1e-2, (att_probs.sum(dim=-1) - 1.0, "Attention probs don't sum to 1.0")
 
