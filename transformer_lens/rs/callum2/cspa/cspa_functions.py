@@ -2,13 +2,14 @@
 
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
+import gc
 import torch
 import warnings
 from typing import Dict, Any, Tuple, List, Optional, Literal, Union
 from transformer_lens import HookedTransformer, utils
 from functools import partial
 import einops
-from dataclasses import dataclass
+from dataclasses import dataclass, field, InitVar
 from transformer_lens.hook_points import HookPoint
 from jaxtyping import Int, Float, Bool
 import torch as t
@@ -19,7 +20,7 @@ import pandas as pd
 import numpy as np
 from copy import copy
 import math
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import pickle
 
 from transformer_lens.rs.callum2.cspa.cspa_semantic_similarity import (
@@ -311,7 +312,7 @@ def model_fwd_pass_from_resid_pre(
 
 
 def get_effective_embedding(model: HookedTransformer) -> Float[Tensor, "d_vocab d_model"]:
-
+    # TODO - implement Neel's variation; attention to self from the token
     # TODO - make this consistent (i.e. change the func in `generate_bag_of_words_quad_plot` to also return W_U and W_E separately)
 
     W_E = model.W_E.clone()
@@ -347,11 +348,44 @@ def get_effective_embedding(model: HookedTransformer) -> Float[Tensor, "d_vocab 
 class QKProjectionConfig:
     q_direction: Optional[str] = None
     k_direction: Optional[str] = None
-
-    double_q_inputs: bool = False # Hack as it seems generally the e.g unembedding has a pretty small impact...
-
+    q_input_multiplier: float = 1.0 # Make this >1.0 as a hack --- the unembedding is ~1/3 of total attention score so this can be pretty helpful
     # When calculating softmax over attention scores, should we use the denominator from the original forward pass? Note this means attention no longer sums to 1.0!
     use_same_scaling: bool = False 
+    projection_directions: Optional[List[Float[torch.Tensor, "batch seq d_model"]]] = None # If we need to do precomputation, store in projection directions
+    model: Optional[HookedTransformer] = None # model is required for precomputation
+    heads: Optional[List[Tuple[int, int]]] = field(default_factory=lambda: [ # heads also required for precomputation
+        (8, 1), 
+        (8, 8),
+        (9, 2),
+        (9, 6),
+        (9, 9),
+    ])
+
+    def __post_init__(self):
+        if self.q_direction != "earlier_heads":
+            # Most things don't require post init!
+            return
+
+        assert self.model is not None, "Need to pass model to QKProjectionConfig if you want to use earlier_heads"
+        assert self.heads is not None, "Need to pass heads to QKProjectionConfig if you want to use earlier_heads"
+
+        head_projection_matrices: Dict[
+            Tuple[int, int], Float["d_vocab d_model"]
+        ] = {}
+
+        W_EE = get_effective_embedding(self.model)["W_E (including MLPs)"]
+
+        for layer_idx, head_idx in self.heads:
+            W_OV = self.model.W_V[layer_idx, head_idx] @ self.model.W_O[layer_idx, head_idx]
+            queryside_matrix = W_EE @ W_OV
+            head_projection_matrices[(layer_idx, head_idx)] = queryside_matrix.cpu()
+            del queryside_matrix
+            del W_OV 
+            gc.collect()
+            torch.cuda.empty_cache()
+
+        self.projection_directions = head_projection_matrices
+
 
 @dataclass 
 class OVProjectionConfig:
@@ -377,10 +411,10 @@ def run_qk_projections(
     # Prepare q_input
     if config.q_direction is not None:
         # Note the 2.0 as we suck without this
-        q_shape = "batch seqQ seqK" if config.q_direction == "unembedding" else "batch seqQ"
+        q_shape = "batch seqQ seqK" if config.q_direction in ["unembedding", "earlier_heads"] else "batch seqQ"
         
         if config.q_direction == "unembedding":
-            q_input_per_position = (2.0 if config.double_q_inputs else 1.0) * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len).clone()
+            q_input_per_position = config.q_input_multiplier * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len).clone()
             unembeddings = model.W_U.T[toks]
             projection_directions_per_k = einops.repeat(unembeddings, "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len)
 
@@ -389,6 +423,20 @@ def run_qk_projections(
                 projection_directions_per_k,
                 device=computation_device,
             )
+            # Keep BOS attention score the same
+            q_input[:, :, 0] = base_q_input
+
+        elif config.q_direction == "earlier_heads":
+            projection_directions_per_k = [einops.repeat(direction.to(toks.device)[toks], "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len).clone().to(computation_device) for direction in config.projection_directions.values()] # TODO check that we broadcast up the Q dimension
+
+            q_input_per_position = config.q_input_multiplier * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len).clone()
+
+            q_input, _ = multi_project(
+                q_input_per_position,
+                projection_directions_per_k,
+                device="cuda:0",
+            )
+
             # Keep BOS attention score the same
             q_input[:, :, 0] = base_q_input
 
@@ -402,7 +450,7 @@ def run_qk_projections(
             ))
 
             q_input, _ = multi_project(
-                (2.0 if config.double_q_inputs else 1.0) * base_q_input,
+                config.q_input_multiplier * base_q_input,
                 projection_directions,
                 device=computation_device,
             )
@@ -442,7 +490,7 @@ def run_qk_projections(
 
     # Control attention to BOS ie keep the same BOS attention and scale all other attentions so things sum to 1
     # TODO make this an option, and not tied to when "unembedding" is used
-    if not config.use_same_scaling and config.q_direction == "unembedding":
+    if not config.use_same_scaling and config.q_direction != "layer9_heads":
         rest_of_attention_probs = att_probs[:, 1:, 1:].sum(dim=-1)
         scale_factor = (-pattern[:, 1:, 0] + 1.0) / rest_of_attention_probs # scale_factor * (sum of non BOS probs) + new BOS probs = 1.0
         att_probs[:, 1:, 1:] *= scale_factor.unsqueeze(-1)
@@ -740,6 +788,7 @@ def get_cspa_results(
         # "logits_ablated": logits_mean_ablated,
         "kl_div_ablated_to_orig": kl_div(logits, logits_mean_ablated),
         "kl_div_cspa_to_orig": kl_div(logits, logits_cspa),
+        "pattern": pattern.detach().cpu(),
     }
     if return_dla: 
         cspa_results["dla"] = dla_cspa
@@ -807,7 +856,6 @@ def get_cspa_results_batched(
     TOP_K_AND_KSEM_PER_DEST_TOKEN = t.empty((0, 4), dtype=t.long, device=target_device)
     LOGIT_LENS_FOR_TOP_K_KSEM = t.empty((0,), dtype=t.float, device=target_device)
     SEMANTICALLY_SIMILAR_TOKS = t.empty((0, seq_len, K_semantic), dtype=t.long, device=target_device)
-
 
     for i, _toks in enumerate(t.chunk(toks, chunks=chunks)):
         if verbose and i == 0:
