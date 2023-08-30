@@ -24,7 +24,6 @@ import pickle
 
 from transformer_lens.rs.callum2.cspa.cspa_semantic_similarity import (
     concat_lists,
-    make_list_correct_length,
     get_list_with_no_repetitions,
 )
 from transformer_lens.rs.callum2.utils import (
@@ -33,6 +32,7 @@ from transformer_lens.rs.callum2.utils import (
     first_occurrence_2d,
     concat_dicts,
     kl_div,
+    make_list_correct_length,
 )
 
 Head = Tuple[int, int]

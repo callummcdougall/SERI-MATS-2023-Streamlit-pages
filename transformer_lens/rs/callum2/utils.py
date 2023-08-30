@@ -202,14 +202,33 @@ def first_occurrence_2d(tensor_2D):
 def concat_lists(list_of_lists):
     return [item for sublist in list_of_lists for item in sublist]
 
+def make_list_correct_length(L, K, pad_tok: Optional[str] = None):
+    '''
+    If len(L) < K, pad list L with its last element until it is of length K.
+    If len(L) > K, truncate.
+
+    Special case when len(L) == 0, we just put the BOS token in it.
+    '''
+    if len(L) == 0:
+        L = ["<|endoftext|>"]
+
+    if pad_tok is None:
+        pad_tok = L[-1]
+
+    if len(L) <= K:
+        L = L + [pad_tok] * (K - len(L))
+    else:
+        L = L[:K]
+
+    assert len(L) == K
+    return L
+
 def update_mean(current_value: Tensor, new_value: Tensor, num_samples_so_far: int, num_new_samples: int):
     '''
     Updates a running mean.
     '''
     assert current_value.shape == new_value.shape, f"Shapes mismatch: old = {current_value.shape}, new = {new_value.shape}"
     return (num_samples_so_far * current_value + num_new_samples * new_value) / (num_samples_so_far + num_new_samples)
-
-
 
 
 # =============================================================================
