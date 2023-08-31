@@ -328,15 +328,15 @@ fig.show() # all seems good bro to do attention scores on max - BOS : )
 # Also do this for queryside, too
 
 attention_score_query_components = dot_with_query(
-    unnormalized_keys=einops.repeat(resid_sum[torch.arange(BATCH_SIZE),top5p_max_non_bos_attention_indices], "b d -> c b d", c=len(top5p_keys_in_normalized)).clone(),
+    unnormalized_keys=einops.repeat(resid_sum[torch.arange(BATCH_SIZE), top5p_max_non_bos_attention_indices], "b d -> c b d", c=len(top5p_keys_in_normalized)).clone(),
     unnormalized_queries=torch.stack([top5p_element[torch.arange(BATCH_SIZE), top5p_seq_indices] for top5p_element in top5p_keys_in_normalized.values()], dim=0).clone(),
     model=model,
     layer_idx=NEGATIVE_LAYER_IDX,
     head_idx=NEGATIVE_HEAD_IDX,
     add_key_bias=False,
-    add_query_bias=True,
+    add_query_bias=False,
     normalize_keys=False,
-    normalize_queries=True,
+    normalize_queries=False,
     use_tqdm=True,
 )
 
