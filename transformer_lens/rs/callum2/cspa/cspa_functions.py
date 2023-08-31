@@ -329,31 +329,34 @@ class QKProjectionConfig:
         (9, 3), 
         (8, 6),
     ])
+    W_EE: Optional[torch.Tensor] = None
 
     def __post_init__(self):
-        if self.q_direction != "earlier_heads":
-            # Most things don't require post init!
-            return
+        if self.q_direction == "earlier_heads":
+            W_EE = get_effective_embedding(self.model, use_codys_without_attention_changes=True)["W_E (including MLPs)"]
+            assert self.model is not None, "Need to pass model to QKProjectionConfig if you want to use earlier_heads"
+            assert self.heads is not None, "Need to pass heads to QKProjectionConfig if you want to use earlier_heads"
 
-        assert self.model is not None, "Need to pass model to QKProjectionConfig if you want to use earlier_heads"
-        assert self.heads is not None, "Need to pass heads to QKProjectionConfig if you want to use earlier_heads"
+            head_projection_matrices: Dict[
+                Tuple[int, int], Float["d_vocab d_model"]
+            ] = {}
 
-        head_projection_matrices: Dict[
-            Tuple[int, int], Float["d_vocab d_model"]
-        ] = {}
+            W_EE = get_effective_embedding(self.model, use_codys_without_attention_changes=True)["W_E (including MLPs)"]
 
-        W_EE = get_effective_embedding(self.model, use_codys_without_attention_changes=True)["W_E (including MLPs)"]
+            for layer_idx, head_idx in self.heads:
+                W_OV = self.model.W_V[layer_idx, head_idx] @ self.model.W_O[layer_idx, head_idx]
+                queryside_matrix = W_EE @ W_OV
+                head_projection_matrices[(layer_idx, head_idx)] = queryside_matrix
+                del queryside_matrix
+                del W_OV 
+                gc.collect()
+                torch.cuda.empty_cache()
 
-        for layer_idx, head_idx in self.heads:
-            W_OV = self.model.W_V[layer_idx, head_idx] @ self.model.W_O[layer_idx, head_idx]
-            queryside_matrix = W_EE @ W_OV
-            head_projection_matrices[(layer_idx, head_idx)] = queryside_matrix
-            del queryside_matrix
-            del W_OV 
-            gc.collect()
-            torch.cuda.empty_cache()
+            self.projection_directions = head_projection_matrices
 
-        self.projection_directions = head_projection_matrices
+        if self.k_direction == "effective_embedding":
+            W_EE = get_effective_embedding(self.model, use_codys_without_attention_changes=True)["W_E (including MLPs)"]
+            self.W_EE = W_EE
 
 
 @dataclass 
@@ -431,9 +434,16 @@ def run_qk_projections(
     base_k_input = scaled_resid_pre.clone() # [batch seqK d_model]
     # Prepare k input
     if config.k_direction is not None:
-        k_input = einops.repeat(base_k_input, "batch seqK d_model -> batch seqQ seqK d_model", seqQ=batch_size)
         k_shape = "batch seqQ seqK"
-        raise NotImplementedError("TODO implement some QK ablation")
+        k_input = project(
+            base_k_input,
+            config.W_EE[toks],
+            device=computation_device,
+        )
+        k_input = einops.repeat(k_input, "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len).clone()
+        k_input[:, :, 0] = base_k_input[:, 0].unsqueeze(1) # BOS the same...
+
+
     else:
         k_input = base_k_input
         k_shape = "batch seqK"
