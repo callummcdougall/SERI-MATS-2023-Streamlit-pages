@@ -37,7 +37,7 @@ model.set_use_attn_result(True)
 # %%
 
 MAX_SEQ_LEN = 512
-BATCH_SIZE = 30
+BATCH_SIZE = 15
 batched_tokens, targets = get_filtered_webtext(
     model, batch_size=BATCH_SIZE, seed=17717, device="cuda", max_seq_len=MAX_SEQ_LEN
 )
@@ -266,13 +266,13 @@ attention_score_components = dot_with_query(
 
 #%%
 
-attention_score_key_component = einops.repeat(dot_with_query(
+attention_score_key_bias_component = einops.repeat(dot_with_query(
     unnormalized_keys=torch.zeros((top5p_query_in.shape[0], model.cfg.d_model)).cuda(),
     unnormalized_queries=top5p_query_in.clone(),
     model=model,
     layer_idx=NEGATIVE_LAYER_IDX,   
     head_idx=NEGATIVE_HEAD_IDX,
-    add_key_bias=True, # look!!!
+    add_key_bias=True,
     add_query_bias=True,
     normalize_keys=False,   
     normalize_queries=True,
@@ -281,7 +281,7 @@ attention_score_key_component = einops.repeat(dot_with_query(
 
 #%%
 
-total_attention_score = attention_score_components.sum(dim=0) + attention_score_key_component
+total_attention_score = attention_score_components.sum(dim=0) + attention_score_key_bias_component
 
 #%%
 
@@ -323,6 +323,22 @@ fig.add_trace(
     )
 )
 fig.show() # all seems good bro to do attention scores on max - BOS : ) 
+
+#%%
+# Also do this for queryside, too
+
+attention_score_query_components = dot_with_query(
+    unnormalized_keys=einops.repeat(resid_sum[torch.arange(BATCH_SIZE),top5p_max_non_bos_attention_indices], "b d -> c b d", c=len(top5p_keys_in_normalized)).clone(),
+    unnormalized_queries=torch.stack([top5p_element[torch.arange(BATCH_SIZE), top5p_seq_indices] for top5p_element in top5p_keys_in_normalized.values()], dim=0).clone(),
+    model=model,
+    layer_idx=NEGATIVE_LAYER_IDX,
+    head_idx=NEGATIVE_HEAD_IDX,
+    add_key_bias=False,
+    add_query_bias=True,
+    normalize_keys=False,
+    normalize_queries=True,
+    use_tqdm=True,
+)
 
 #%%
 
@@ -417,8 +433,12 @@ attention_score_to_max_bias = dot_with_query(
 
 # %%
 
-difference_in_scores = attention_score_to_max - bos_attention_score_components
-correct_difference_in_scores =  top5p_max_non_bos_attention_values.cpu() - top5p_bos_attention.cpu()
+SUBTRACT = False
+if not SUBTRACT:
+    warnings.warn("Deleting the baseline to see what happens")
+
+difference_in_scores = attention_score_to_max # - bos_attention_score_components
+correct_difference_in_scores =  top5p_max_non_bos_attention_values.cpu() # - top5p_bos_attention.cpu()
 
 px.scatter(
     x = bos_attention_score_components.cpu().sum(dim=0) + bos_attention_bias.cpu(),
@@ -435,12 +455,13 @@ px.scatter(
     y = correct_difference_in_scores.cpu().numpy(),
 ).show()
 
-torch.testing.assert_allclose(
-    difference_in_scores.cpu().sum(dim=0),
-    correct_difference_in_scores,
-    atol=1e-2,
-    rtol=1e-2,
-)
+if SUBTRACT:
+    torch.testing.assert_allclose(
+        difference_in_scores.cpu().sum(dim=0),
+        correct_difference_in_scores,
+        atol=1e-2,
+        rtol=1e-2,
+    )
 
 # go.Figure(
 #     data = [
@@ -451,7 +472,7 @@ torch.testing.assert_allclose(
 
 # %%
 
-for thing_name, thing in zip(["score on max", "bos", "difference between max and BOS"], [attention_score_to_max, bos_attention_score_components, difference_in_scores], strict=True):
+for thing_name, thing in zip(["score through model components for query", "score on max", "bos", "difference between max and BOS"], [attention_score_query_components, attention_score_to_max, bos_attention_score_components, difference_in_scores], strict=True):
     print(thing.sum())
     fig=px.bar(
         x = top5p_key_attention_max_in.keys(),
@@ -463,4 +484,5 @@ for thing_name, thing in zip(["score on max", "bos", "difference between max and
         # yaxis = dict(range=[0, 1]),
     )
     fig.show()
+
 # %%
