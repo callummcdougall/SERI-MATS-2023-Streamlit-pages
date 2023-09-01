@@ -453,8 +453,8 @@ def get_model_results(
             - They're linked via tokenization weirdness (e.g. "keley" and " Berkeley")
             - They're synonyms (e.g. " researcher" and " academic")
     '''
-    from transformer_lens.rs.callum.keys_fixed import get_effective_embedding_2
-    W_EE_dict = get_effective_embedding_2(model)
+    from transformer_lens.rs.callum.keys_fixed import get_effective_embedding
+    W_EE_dict = get_effective_embedding(model, use_codys_without_attention_changes=False)
     W_EE = W_EE_dict["W_E (including MLPs)"]
     W_EE = W_EE / W_EE.norm(dim=-1, keepdim=True)
     W_EE0 = W_EE_dict["W_E (only MLPs)"]

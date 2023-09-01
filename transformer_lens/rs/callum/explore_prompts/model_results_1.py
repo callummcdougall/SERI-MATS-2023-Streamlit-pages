@@ -419,8 +419,8 @@ def get_model_results(
         for (layer, head) in negative_heads:
             unembeddings_CS[layer, head]: Float[Tensor, "batch seq d_model 1"] = unembeddings.unsqueeze(-1)
     else:
-        from transformer_lens.rs.callum.keys_fixed import get_effective_embedding_2
-        W_EE_dict = get_effective_embedding_2(model)
+        from transformer_lens.rs.callum.keys_fixed import get_effective_embedding
+        W_EE_dict = get_effective_embedding(model, use_codys_without_attention_changes=False)
         W_EE = W_EE_dict["W_E (including MLPs)"]
         W_U = W_EE_dict["W_U"].T
         for layer, head in negative_heads:

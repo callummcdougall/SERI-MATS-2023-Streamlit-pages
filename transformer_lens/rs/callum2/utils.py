@@ -242,8 +242,8 @@ def update_mean(current_value: Tensor, new_value: Tensor, num_samples_so_far: in
 # ! Effective embeddings, and other model weight stuff
 # =============================================================================
 
-def get_effective_embedding(model: HookedTransformer) -> Float[Tensor, "d_vocab d_model"]:
-
+def get_effective_embedding(model: HookedTransformer, use_codys_without_attention_changes=True) -> Float[Tensor, "d_vocab d_model"]:
+    # TODO - implement Neel's variation; attention to self from the token
     # TODO - make this consistent (i.e. change the func in `generate_bag_of_words_quad_plot` to also return W_U and W_E separately)
 
     W_E = model.W_E.clone()
@@ -251,30 +251,35 @@ def get_effective_embedding(model: HookedTransformer) -> Float[Tensor, "d_vocab 
     # t.testing.assert_close(W_E[:10, :10], W_U[:10, :10].T)  NOT TRUE, because of the center unembed part!
 
     resid_pre = W_E.unsqueeze(0)
-    pre_attention = model.blocks[0].ln1(resid_pre)
-    attn_out = einops.einsum(
-        pre_attention, 
-        model.W_V[0],
-        model.W_O[0],
-        "b s d_model, num_heads d_model d_head, num_heads d_head d_model_out -> b s d_model_out",
-    )
-    resid_mid = attn_out + resid_pre
+
+    if not use_codys_without_attention_changes:
+        pre_attention = model.blocks[0].ln1(resid_pre)
+        attn_out = einops.einsum(
+            pre_attention, 
+            model.W_V[0],
+            model.W_O[0],
+            "b s d_model, num_heads d_model d_head, num_heads d_head d_model_out -> b s d_model_out",
+        )
+        resid_mid = attn_out + resid_pre
+        del pre_attention, attn_out
+    else:
+        resid_mid = resid_pre
+
     normalized_resid_mid = model.blocks[0].ln2(resid_mid)
-    mlp_out = cast(Tensor, model.blocks[0].mlp(normalized_resid_mid))
+    mlp_out = model.blocks[0].mlp(normalized_resid_mid)
     
     W_EE = mlp_out.squeeze()
     W_EE_full = resid_mid.squeeze() + mlp_out.squeeze()
 
+    del resid_pre, resid_mid, normalized_resid_mid, mlp_out
     t.cuda.empty_cache()
 
     return {
         "W_E (no MLPs)": W_E,
-        "W_U": W_U.T,
-        # "W_E (raw, no MLPs)": W_E,
         "W_E (including MLPs)": W_EE_full,
-        "W_E (only MLPs)": W_EE
+        "W_E (only MLPs)": W_EE,
+        "W_U": W_U.T,
     }
-
 
 
 

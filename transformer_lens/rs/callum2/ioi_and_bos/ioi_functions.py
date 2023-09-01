@@ -37,7 +37,7 @@ def attn_scores_as_linear_func_of_queries(
         keys_S1 = keys_all[batch_idx, ioi_dataset.word_idx["S1"][batch_idx]]
     else:
         assert only_effective_embeddings in ["W_E (no MLPs)", "W_E (including MLPs)", "W_E (only MLPs)"]
-        effective_embeddings = get_effective_embedding(model)[only_effective_embeddings] # shape (d_vocab, d_model)
+        effective_embeddings = get_effective_embedding(model, use_codys_without_attention_changes=False)[only_effective_embeddings] # shape (d_vocab, d_model)
         keys_IO = effective_embeddings[ioi_dataset.io_tokenIDs][batch_idx]
         keys_S1 = effective_embeddings[ioi_dataset.s_tokenIDs][batch_idx]
         keys_IO = (keys_IO / keys_IO.std(dim=-1, keepdim=True)) @ model.W_K[layer, head_idx] + model.b_K[layer, head_idx] # shape (all_batch, d_head)
@@ -215,7 +215,7 @@ def get_attn_scores_as_linear_func_of_keys_for_histogram(
     model: HookedTransformer,
     subtract_S1_attn_scores: bool = False,
 ):
-    effective_embeddings = get_effective_embedding(model) 
+    effective_embeddings = get_effective_embedding(model, use_codys_without_attention_changes=False) 
 
     W_E = effective_embeddings["W_E (no MLPs)"]
     W_EE = effective_embeddings["W_E (including MLPs)"]
@@ -392,7 +392,7 @@ def decompose_attn_scores(
 
     # * Get the MLP0 output (note that we need to be careful here if we're subtracting the S1 baseline, because we actually need the 2 different MLP0s)
     if use_effective_embedding:
-        W_EE_dict = get_effective_embedding(model)
+        W_EE_dict = get_effective_embedding(model, use_codys_without_attention_changes=False)
         W_EE = (W_EE_dict["W_E (including MLPs)"] - W_EE_dict["W_E (no MLPs)"]) if use_layer0_heads else W_EE_dict["W_E (only MLPs)"]
         MLP0_output = W_EE[ioi_dataset.io_tokenIDs]
         MLP0_output_S1 = W_EE[ioi_dataset.s_tokenIDs]
@@ -826,7 +826,7 @@ def decompose_attn_scores_full(
 
     # * Get the MLP0 output (note that we need to be careful here if we're subtracting the S1 baseline, because we actually need the 2 different MLP0s)
     if use_effective_embedding:
-        W_EE_dict = get_effective_embedding(model)
+        W_EE_dict = get_effective_embedding(model, use_codys_without_attention_changes=False)
         W_EE = (W_EE_dict["W_E (including MLPs)"] - W_EE_dict["W_E (no MLPs)"]) if use_layer0_heads else W_EE_dict["W_E (only MLPs)"]
         MLP0_output = W_EE[ioi_dataset.io_tokenIDs]
         MLP0_output_S1 = W_EE[ioi_dataset.s_tokenIDs]

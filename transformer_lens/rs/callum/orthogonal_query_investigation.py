@@ -1,5 +1,6 @@
 from transformer_lens.cautils.utils import *
-from transformer_lens.rs.callum.keys_fixed import project, get_effective_embedding_2
+from transformer_lens.rs.callum.keys_fixed import project
+from transformer_lens.rs.callum2.utils import get_effective_embedding
 
 
 def token_to_qperp_projection(
@@ -18,7 +19,7 @@ def token_to_qperp_projection(
     '''
     # Get our effective embeddings dictionary
     if isinstance(effective_embedding, str):
-        W_EE_dict = get_effective_embedding_2(model)
+        W_EE_dict = get_effective_embedding(model, use_codys_without_attention_changes=False)
         W_EE = W_EE_dict['W_E (including MLPs)']
         W_EE0 = W_EE_dict['W_E (only MLPs)']
         W_E = model.W_E
@@ -80,7 +81,7 @@ def decompose_attn_scores_full(
 
     if project_onto_comms_space is not None: 
         assert project_onto_comms_space in ["W_EE", "W_EE0", "W_E", "W_EE0A"]
-        W_EE_dict = get_effective_embedding_2(model)
+        W_EE_dict = get_effective_embedding(model, use_codys_without_attention_changes=False)
         W_EE = W_EE_dict['W_E (including MLPs)']
         W_EE0 = W_EE_dict['W_E (only MLPs)']
         W_E = model.W_E
@@ -106,7 +107,7 @@ def decompose_attn_scores_full(
 
     # * Get the MLP0 output (note that we need to be careful here if we're subtracting the S1 baseline, because we actually need the 2 different MLP0s)
     if use_effective_embedding:
-        W_EE_dict = get_effective_embedding_2(model)
+        W_EE_dict = get_effective_embedding(model, use_codys_without_attention_changes=False)
         W_EE = (W_EE_dict["W_E (including MLPs)"] - W_EE_dict["W_E (no MLPs)"]) if use_layer0_heads else W_EE_dict["W_E (only MLPs)"]
         MLP0_output = W_EE[ioi_dataset.io_tokenIDs]
         MLP0_output_S1 = W_EE[ioi_dataset.s_tokenIDs]

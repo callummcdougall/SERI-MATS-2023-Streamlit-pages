@@ -1,6 +1,7 @@
 #%% [markdown] [4]:
 
 from transformer_lens.cautils.notebook import *
+from transformer_lens.rs.callum2.utils import get_effective_embedding
 
 model = HookedTransformer.from_pretrained(
     "gpt2-small",
@@ -22,47 +23,7 @@ from transformer_lens import FactoredMatrix
 
 # TODO legend groups
 
-#%% [markdown] [5]:
-
-def get_effective_embedding(model: HookedTransformer) -> Float[Tensor, "d_vocab d_model"]:
-
-    W_E = model.W_E.clone()
-    W_U = model.W_U.clone()
-    # t.testing.assert_close(W_E[:10, :10], W_U[:10, :10].T)  NOT TRUE, because of the center unembed part!
-
-    embeds = W_E.unsqueeze(0)
-    pre_attention = model.blocks[0].ln1(embeds)
-
-    # !!! b_O is not zero. Seems like b_V is, but we'll add it to be safe rather than sorry 
-    assert model.b_V[0].norm().item() < 1e-4
-    assert model.b_O[0].norm().item() > 1e-4
-
-    vout = einops.einsum(
-        pre_attention,
-        model.W_V[0],
-        "b s d_model, num_heads d_model d_head -> b s num_heads d_head",
-    ) + model.b_V[0]
-    post_attention = einops.einsum(
-        vout,
-        model.W_O[0],
-        "b s num_heads d_head, num_heads d_head d_model_out -> b s d_model_out",
-    ) + model.b_O[0]
-
-    resid_mid = post_attention + embeds
-    normalized_resid_mid = model.blocks[0].ln2(resid_mid)
-    mlp_out = model.blocks[0].mlp(normalized_resid_mid)
-    
-    W_EE = mlp_out.squeeze()
-    W_EE_full = resid_mid.squeeze() + mlp_out.squeeze()
-
-    return {
-        "W_U (or W_E, no MLPs)": W_U.T,
-        # "W_E (raw, no MLPs)": W_E,
-        "W_E (including MLPs)": W_EE_full,
-        "W_E (only MLPs)": W_EE
-    }
-
-embeddings_dict = get_effective_embedding(model)
+embeddings_dict = get_effective_embedding(model, use_codys_without_attention_changes=False)
 
 # $$
 # W_E^Q W_Q W_K^T W_E^K

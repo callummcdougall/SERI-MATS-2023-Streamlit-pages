@@ -11,7 +11,7 @@ assert torch.cuda.device_count() == 1
 
 from transformer_lens.cautils.notebook import *
 from transformer_lens.cautils.utils import lock_attn
-from transformer_lens.rs.callum.keys_fixed import get_effective_embedding_2
+from transformer_lens.rs.callum2.utils import get_effective_embedding
 from transformer_lens.rs.arthurs_notebooks.arthurs_utils import dot_with_query
 
 # In[2]:
@@ -181,7 +181,7 @@ if OVERWRITE_WITH_ALL_VOCAB:
 
 # In[10]:
 
-embeddings_dict = get_effective_embedding_2(model, use_codys_without_attention_changes=True)
+embeddings_dict = get_effective_embedding(model, use_codys_without_attention_changes=True)
 
 #%%
 

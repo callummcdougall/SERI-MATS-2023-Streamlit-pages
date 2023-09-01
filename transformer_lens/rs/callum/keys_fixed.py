@@ -1,44 +1,6 @@
 from torch import native_dropout
 from transformer_lens.cautils.utils import *
-# from transformer_lens.rs.callum.generate_bag_of_words_quad_plot import get_effective_embedding
-
-
-def get_effective_embedding_2(model: HookedTransformer, use_codys_without_attention_changes=False) -> Float[Tensor, "d_vocab d_model"]:
-
-    # TODO - make this consistent (i.e. change the func in `generate_bag_of_words_quad_plot` to also return W_U and W_E separately)
-
-    W_E = model.W_E.clone()
-    W_U = model.W_U.clone()
-    # t.testing.assert_close(W_E[:10, :10], W_U[:10, :10].T)  NOT TRUE, because of the center unembed part!
-
-    resid_pre = W_E.unsqueeze(0)
-
-    if not use_codys_without_attention_changes:
-        pre_attention = model.blocks[0].ln1(resid_pre)
-        attn_out = einops.einsum(
-            pre_attention, 
-            model.W_V[0],
-            model.W_O[0],
-            "b s d_model, num_heads d_model d_head, num_heads d_head d_model_out -> b s d_model_out",
-        )
-        resid_mid = attn_out + resid_pre
-    else:
-        resid_mid = resid_pre
-
-    normalized_resid_mid = model.blocks[0].ln2(resid_mid)
-    mlp_out = model.blocks[0].mlp(normalized_resid_mid)
-    
-    W_EE = mlp_out.squeeze()
-    W_EE_full = resid_mid.squeeze() + mlp_out.squeeze()
-
-    t.cuda.empty_cache()
-
-    return {
-        "W_E (no MLPs)": W_E,
-        "W_E (including MLPs)": W_EE_full,
-        "W_E (only MLPs)": W_EE,
-        "W_U": W_U.T,
-    }
+from transformer_lens.rs.callum2.utils import get_effective_embedding
 
 
 
@@ -207,7 +169,7 @@ def get_attn_scores_as_linear_func_of_keys_for_histogram(
     model: HookedTransformer,
     subtract_S1_attn_scores: bool = False,
 ):
-    effective_embeddings = get_effective_embedding_2(model) 
+    effective_embeddings = get_effective_embedding(model, use_codys_without_attention_changes=False) 
 
     W_E = effective_embeddings["W_E (no MLPs)"]
     W_EE = effective_embeddings["W_E (including MLPs)"]
@@ -363,7 +325,7 @@ def decompose_attn_scores(
 
     # * Get the MLP0 output (note that we need to be careful here if we're subtracting the S1 baseline, because we actually need the 2 different MLP0s)
     if use_effective_embedding:
-        W_EE_dict = get_effective_embedding_2(model)
+        W_EE_dict = get_effective_embedding(model, use_codys_without_attention_changes=False)
         W_EE = (W_EE_dict["W_E (including MLPs)"] - W_EE_dict["W_E (no MLPs)"]) if use_layer0_heads else W_EE_dict["W_E (only MLPs)"]
         MLP0_output = W_EE[ioi_dataset.io_tokenIDs]
         MLP0_output_S1 = W_EE[ioi_dataset.s_tokenIDs]
@@ -921,7 +883,7 @@ def decompose_attn_scores_full(
 
     # * Get the MLP0 output (note that we need to be careful here if we're subtracting the S1 baseline, because we actually need the 2 different MLP0s)
     if use_effective_embedding:
-        W_EE_dict = get_effective_embedding_2(model)
+        W_EE_dict = get_effective_embedding(model, use_codys_without_attention_changes=False)
         W_EE = (W_EE_dict["W_E (including MLPs)"] - W_EE_dict["W_E (no MLPs)"]) if use_layer0_heads else W_EE_dict["W_E (only MLPs)"]
         MLP0_output = W_EE[ioi_dataset.io_tokenIDs]
         MLP0_output_S1 = W_EE[ioi_dataset.s_tokenIDs]
