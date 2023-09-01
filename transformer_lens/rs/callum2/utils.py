@@ -202,6 +202,10 @@ def first_occurrence_2d(tensor_2D):
 def concat_lists(list_of_lists):
     return [item for sublist in list_of_lists for item in sublist]
 
+def rearrange_list(my_list, list_length):
+    assert len(my_list) % list_length == 0
+    return [my_list[i:i+list_length] for i in range(0, len(my_list), list_length)]
+
 def make_list_correct_length(L, K, pad_tok: Optional[str] = None):
     '''
     If len(L) < K, pad list L with its last element until it is of length K.
@@ -222,6 +226,9 @@ def make_list_correct_length(L, K, pad_tok: Optional[str] = None):
 
     assert len(L) == K
     return L
+
+def clamp(x, min_val, max_val):
+    return max(min_val, min(x, max_val))
 
 def update_mean(current_value: Tensor, new_value: Tensor, num_samples_so_far: int, num_new_samples: int):
     '''
