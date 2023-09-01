@@ -5,18 +5,64 @@
 # <p> We find the examples for which (head_10_7_attn_result * W_U).norm() is maximised </p>
 # <p> Since TransformerLens subtracts the mean from output, this is a somewhat reasonable thing to do!s </p>
 
-from transformer_lens.cautils.notebook import * # use from transformer_lens.cautils.utils import * instead for the same effect without autoreload
+# import os; os.chdir("/root/SERI-MATS-2023-Streamlit-pages")
+import torch as t
+import einops
+# from transformer_lens.cautils.notebook import * # use from transformer_lens.cautils.utils import * instead for the same effect without autoreload
 DEVICE = t.device("cuda" if t.cuda.is_available() else "cpu")
+
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 #%%
 
-MODEL_NAME = "gpt2"
+hf_model = AutoModelForCausalLM.from_pretrained("decapoda-research/llama-7b-hf")
+tokenizer = AutoTokenizer.from_pretrained("NousResearch/Yarn-Llama-2-13b-128k")
+
+#%%
+
+import torch
+hf_model = hf_model.to("cpu")
+import gc
+gc.collect()
+torch.cuda.empty_cache()
+
+#%%
+
+from transformer_lens.HookedTransformer import HookedTransformer
+model = HookedTransformer.from_pretrained("llama-7b", hf_model=hf_model, low_cpu_mem_usage=True, device="cpu")
+model.set_tokenizer(tokenizer)
+
+#%%
+
+del hf_model 
+del tokenizer
+gc.collect()
+torch.cuda.empty_cache()
+
+#%%
+
 # MODEL_NAME = "solu-10l" # WARNING: this model does not seem to have interpretable directions
-model = HookedTransformer.from_pretrained(MODEL_NAME, device=DEVICE)
+# model = HookedTransformer.from_pretrained(MODEL_NAME, device=DEVICE)
 model.set_use_attn_result(True)
 
 #%%
 
+import numpy as np
+from datasets import load_dataset
+
+def get_webtext(seed: int = 420, dataset="stas/openwebtext-10k"):
+    """Get 10,000 sentences from the OpenWebText dataset"""
+
+    # Let's see some WEBTEXT
+    raw_dataset = load_dataset(dataset)
+    train_dataset = raw_dataset["train"]
+    dataset = [train_dataset[i]["text"] for i in range(len(train_dataset))]
+
+    # Shuffle the dataset (I don't want the Hitler thing being first so use a seeded shuffle)
+    np.random.seed(seed)
+    np.random.shuffle(dataset)
+
+    return dataset
 data = get_webtext(seed=5)
 
 #%%
@@ -24,9 +70,14 @@ data = get_webtext(seed=5)
 LAYER_IDX, HEAD_IDX = {
     "SoLU_10L1280W_C4_Code": (9, 18),
     "gpt2": (10, 7),
+    "llama-7b-hf": (30, 14),
 }[model.cfg.model_name]
 unembedding = model.W_U.clone()
 HEAD_HOOK_NAME = f"blocks.{LAYER_IDX}.attn.hook_result"
+
+#%%
+
+model = model.to("cuda:0")
 
 #%%
 
@@ -47,6 +98,7 @@ NUM_PROMPTS = 10
 NUM_TOP_TOKENS = 10
 contributions = []
 
+from tqdm import tqdm
 for i in tqdm(range(NUM_PROMPTS)):
     tokens = model.tokenizer(
         data[i], 
@@ -58,12 +110,13 @@ for i in tqdm(range(NUM_PROMPTS)):
     tokens = tokens[0:1, :256]
 
     model.reset_hooks()
+    print("sdjkl")
     logits, cache = model.run_with_cache(
         tokens,
         names_filter = lambda name: name in [HEAD_HOOK_NAME, "ln_final.hook_scale"],
     )
+    print("seqlhk")
     output = cache[HEAD_HOOK_NAME][0, :, HEAD_IDX] / cache["ln_final.hook_scale"][0, :, 0].unsqueeze(dim=-1) # account for layer norm scaling
-    
     contribution = einops.einsum(
         output,
         unembedding,
@@ -87,6 +140,7 @@ for i in tqdm(range(NUM_PROMPTS)):
             print("BOTTOM TOKENS")
             for tok in bottom_tokens:
                 print(model.tokenizer.decode(tok))
+
 # %% [markdown]
 
 contribution_norms = [
