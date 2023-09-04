@@ -125,7 +125,7 @@ def hist(tensor, renderer=None, **kwargs):
     static = kwargs_pre.pop("static", False)
     return_fig = kwargs_pre.pop("return_fig", False)
     if isinstance(tensor, list):
-        if isinstance(tensor[0], t.Tensor): arr = [to_numpy(tn) for tn in tensor]
+        if isinstance(tensor[0], (t.Tensor, np.ndarray)): arr = [to_numpy(tn) for tn in tensor]
         elif isinstance(tensor[0], list): arr = [np.array(tn) for tn in tensor]
         else: arr = np.array(tensor)
     else:
@@ -144,7 +144,9 @@ def hist(tensor, renderer=None, **kwargs):
         kwargs_post["hovermode"] = "x unified"
     if "autosize" not in kwargs_post:
         kwargs_post["autosize"] = False
-    fig = px.histogram(x=arr, **kwargs_pre).update_layout(**kwargs_post)
+    # print(kwargs_pre, "and", kwargs_post)
+    fig = px.histogram(x=arr, **kwargs_pre)
+    fig.update_layout(**kwargs_post)
     if add_mean_line:
         if arr.ndim == 1:
             fig.add_vline(x=arr.mean(), line_width=3, line_dash="dash", line_color="black", annotation_text=f"Mean = {arr.mean():.3f}", annotation_position="top")

@@ -3,7 +3,7 @@
 """Quad plots but I pivoted away from dot_with_query"""
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 import torch 
 # One device assertion
@@ -35,14 +35,13 @@ clear_output()
 
 # In[3]:
 
-LAYER_IDX, HEAD_IDX = 9, 6
+# LAYER_IDX, HEAD_IDX = 9, 6
+# warnings.warn("Using wrong thing")
 
-warnings.warn("Using wrong thing")
-
-# LAYER_IDX, HEAD_IDX = {
-#     "SoLU_10L1280W_C4_Code": (9, 18), # (9, 18) is somewhat cheaty
-#     "gpt2": (10, 7),
-# }[model.cfg.model_name]
+LAYER_IDX, HEAD_IDX = {
+    "SoLU_10L1280W_C4_Code": (9, 18), # (9, 18) is somewhat cheaty
+    "gpt2": (10, 7),
+}[model.cfg.model_name]
 
 
 W_U = model.W_U
@@ -248,7 +247,7 @@ print(failures[:100])
 #%%
  
 better_labels = {
-    'W_E (including MLPs)': 'Att_0 + W_E + MLP0', 
+    'W_E (including MLPs)': 'W_EE', 
     'W_E (no MLPs)': 'W_E',
     'W_E (only MLPs)': 'MLP0',
     'W_U': 'W_U',
@@ -301,9 +300,10 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict.
     if "K = W_U" in labels[-1]: 
         labels = labels[:-1]
         continue
-    if "Q = W_E" in labels[-1]: 
-        labels = labels[:-1]
-        continue
+
+    # if "Q = W_E<" in labels[-1]: 
+    #     labels = labels[:-1]
+    #     continue
 
     results = []
 
@@ -331,10 +331,40 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict.
 
 # In[21]:
 
+# Make bar chart of distribution
+
+relevant_labels = [
+    'Q = W_U<br>K = W_EE',
+    'Q = W_EE<br>K = W_EE',
+    # 'Q = W_E<br>K = W_E', # TODO add this too...
+]
+
+relevant_distributions = [
+    log_attentions_to_self_element[1].cpu() for log_attentions_to_self_element in enumerate(all_log_attentions_to_self) if labels[log_attentions_to_self_element[0]] in relevant_labels
+]
+
+#%%
+
+hist(
+    relevant_distributions,
+    # names = relevant_labels,
+    labels={"variable": "input component", "value": "Change in attention"},
+    width=1600,
+    height=600,
+    opacity=0.7,
+    # marginal="box",
+    template="simple_white",
+)
+
+#%%
+
+indices = [i for i, label in enumerate(labels) if "Q = W_E<" not in label]
+# TODO filter lines to just include these indices etc.
+
 square_of_values = einops.rearrange(torch.tensor(lines), "(height width) -> height width", height=3)
 # square_of_values = t.stack([square_of_values[:, 0], square_of_values[:, 2], square_of_values[:, 1]], dim=-1)
-labels = square_of_values.tolist()
-labels = [[int(label) for label in row] for row in labels]
+square_labels = square_of_values.tolist()
+square_labels = [[int(square_label) for square_label in row] for row in square_labels]
 
 fig = imshow(
     square_of_values.log(),
@@ -354,7 +384,7 @@ fig = imshow(
     return_fig=True,
 )
 
-for i, row in enumerate(labels):
+for i, row in enumerate(square_labels):
     for j, label in enumerate(row):
         fig.add_annotation(
             x=j, # x-coordinate of the annotation
