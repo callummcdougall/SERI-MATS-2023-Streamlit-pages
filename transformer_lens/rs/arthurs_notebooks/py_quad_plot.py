@@ -286,6 +286,14 @@ t.cuda.empty_cache()
 
 #%%
 
+# Make bar chart of distribution
+
+relevant_labels = [
+    'Q = W_U<br>K = W_EE',
+    'Q = W_EE<br>K = W_EE',
+    # 'Q = W_E<br>K = W_E', # TODO add this too...
+]
+
 for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict.keys(), embeddings_dict.keys()))):
 
     print(f"{q_side_matrix=} {k_side_matrix=}")
@@ -297,14 +305,9 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict.
     except:
         log_attentions_to_self = torch.zeros(len(bags_of_words))
 
-    if "K = W_U" in labels[-1]: 
+    if labels[-1] not in relevant_labels:
         labels = labels[:-1]
         continue
-
-    # if "Q = W_E<" in labels[-1]: 
-    #     labels = labels[:-1]
-
-    # continue
 
     results = []
 
@@ -332,38 +335,93 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict.
 
 # In[21]:
 
-# Make bar chart of distribution
-
-relevant_labels = [
-    'Q = W_U<br>K = W_EE',
-    'Q = W_EE<br>K = W_EE',
-    # 'Q = W_E<br>K = W_E', # TODO add this too...
-]
-
 relevant_distributions = [
     log_attentions_to_self_element[1].cpu() for log_attentions_to_self_element in enumerate(all_log_attentions_to_self) if labels[log_attentions_to_self_element[0]] in relevant_labels
 ]
 
 #%%
 
-hist(
-    relevant_distributions,
-    names = relevant_labels,
-    labels={"variable": "Query and Key Inputs", "value": "Token rank"},
+DO_FILTERED = True
+filtered = [torch.minimum(x, torch.ones_like(x)*20) for x in relevant_distributions]
+true_names = [label.replace("_EE", "<sub>EE</sub>").replace("_U", "<sub>U</sub>") for label in relevant_labels]
+
+yaxis_label = "Percentage of Model Vocabulary"
+
+fig = hist(
+    # filtered,
+    relevant_distributions if not DO_FILTERED else filtered,
+    names = true_names,
+    labels={"variable": "Query and Key Inputs:", "value": "Token rank"},
     width=600,
     height=600,
-    nbins=50256,
+    nbins=21,
     opacity=0.7,
     # marginal="box",
     template="simple_white",
-    yaxis_type="log",
+    # yaxis_type="log",
+    histnorm="percent",
     return_fig=True,
-).update_layout(
-    xaxis=dict(range=[0, 20]),
-    yaxis=dict(range=[-0.5, 5])
-).show()
+)
+fig.update_layout(
+    xaxis=dict(range=[0, 21]),
+    yaxis=dict(range=[-0.05, 100])
+)
 
-print("You ")
+fig.update_layout(
+    yaxis_title=yaxis_label,
+)
+
+# Font size bigger
+fig.update_layout(
+    font=dict(
+        size=18,
+    ),
+)
+
+fig.add_annotation(
+    x=10,
+    y=48000,
+    text="Vocab size",
+
+    showarrow=False,
+
+
+    # font=dict(
+    #     size=16,
+    #     color="black",
+    # ),
+)
+
+fig.update_layout(
+    title_text="Distribution of token ranks in QK circuit",
+    # text="Distribution of token ranks in QK circuit",
+)
+
+# Add x tick labels 
+fig.update_layout(
+    xaxis=dict(
+        tickvals=[1, 5, 10, 15, 20, 20],
+        ticktext=["1", "5", "10", "15", "≥20"],
+    )
+)
+
+# Move legend into the figure
+fig.update_layout(
+    legend=dict(
+        x=0.8,
+        y=0.9,
+        xanchor="center",
+        yanchor="top",
+    )
+)
+
+fig.show()
+print("You")
+
+#%%
+
+# Save as PDF
+fig.write_image("ranks_plot.pdf")
 
 #%%
 
