@@ -1,6 +1,6 @@
 <h1>To view our Streamlit, visit https://self-repair.streamlit.app/ </h1>
 
-(If you're interested in our research, please reach out! Our emails are `{arthurconmy, cal.s.mcdougall, thisiscodyr}@gmail.com`)
+(If you're interested in our research, please reach out! Our emails are `{cal.s.mcdougall, arthurconmy, thisiscodyr}@gmail.com`)
 
 This repo serves two purposes: 
 
