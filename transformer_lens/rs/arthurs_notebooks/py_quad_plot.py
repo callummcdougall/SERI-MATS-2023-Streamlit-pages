@@ -303,7 +303,8 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict.
 
     # if "Q = W_E<" in labels[-1]: 
     #     labels = labels[:-1]
-    #     continue
+
+    # continue
 
     results = []
 
@@ -322,7 +323,7 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict.
     attention_scores = attention_scores.to("cpu")
     gc.collect()
     t.cuda.empty_cache()
-    log_attentions_to_self = (attention_scores >= (attention_scores[torch.arange(len(bags_of_words)), bags_of_words])[:, None]).int().sum(dim=-1) # TODO I don't think that the 1e-5 is necessary
+    log_attentions_to_self = (attention_scores >= (attention_scores[torch.arange(len(bags_of_words)), bags_of_words])[:, None]).int().sum(dim=-1)
 
     all_log_attentions_to_self.append(log_attentions_to_self.cpu())
     sorted_log_attention = log_attentions_to_self.sort(descending=True).values
@@ -347,21 +348,37 @@ relevant_distributions = [
 
 hist(
     relevant_distributions,
-    # names = relevant_labels,
-    labels={"variable": "input component", "value": "Change in attention"},
-    width=1600,
+    names = relevant_labels,
+    labels={"variable": "Query and Key Inputs", "value": "Token rank"},
+    width=600,
     height=600,
+    nbins=50256,
     opacity=0.7,
     # marginal="box",
     template="simple_white",
-)
+    yaxis_type="log",
+    return_fig=True,
+).update_layout(
+    xaxis=dict(range=[0, 20]),
+    yaxis=dict(range=[-0.5, 5])
+).show()
+
+print("You ")
 
 #%%
 
 indices = [i for i, label in enumerate(labels) if "Q = W_E<" not in label]
-# TODO filter lines to just include these indices etc.
 
-square_of_values = einops.rearrange(torch.tensor(lines), "(height width) -> height width", height=3)
+the_lines = [lines[i] for i in indices]
+the_labels = [labels[i] for i in indices]
+the_log_attentions_to_self = [all_log_attentions_to_self[i] for i in indices]
+
+#%%
+
+# values_shown = lines
+values_shown = [(x==1).int().sum().item() for x in the_log_attentions_to_self]
+
+square_of_values = einops.rearrange(torch.tensor(values_shown), "(height width) -> height width", height=3)
 # square_of_values = t.stack([square_of_values[:, 0], square_of_values[:, 2], square_of_values[:, 1]], dim=-1)
 square_labels = square_of_values.tolist()
 square_labels = [[int(square_label) for square_label in row] for row in square_labels]
@@ -369,8 +386,8 @@ square_labels = [[int(square_label) for square_label in row] for row in square_l
 fig = imshow(
     square_of_values.log(),
     # text_auto=True,
-    title=f"Median rank of L{LAYER_IDX}H{HEAD_IDX}", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
-    labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Average Rank"},
+    title=f"Number of tokens that are top rank", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
+    labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Count"},
     x = ["W<sub>E</sub>", "W<sub>EE</sub>", "MLP<sub>0</sub>"], # sadly these are hardcoded
     y = ["W<sub>E</sub>", "W<sub>EE</sub>", "W<sub>U</sub>"],
     color_continuous_midpoint=None,
@@ -380,7 +397,7 @@ fig = imshow(
         tickvals=np.log(np.array([1, 10, 100, 1000, 10000])),
         ticktext=['1', '10', '100', '1000', '10000']
     )),
-    color_continuous_scale="Blues_r",
+    color_continuous_scale="Blues",
     return_fig=True,
 )
 
@@ -391,9 +408,9 @@ for i, row in enumerate(square_labels):
             y=i, # y-coordinate of the annotation
             text=str(round(label, 2)), # text label
             showarrow=False, # don't show an arrow pointing to the annotation
-            # color="white",
+            # color="white" if "W_U" in the_labels[i] else "black",
             font=dict(
-                color="white" if label < 10 else "black",
+                color="white" if label > 1000 else "black",
             ),
         )
 
@@ -412,11 +429,10 @@ fig.update_layout(
 
 fig.show()
 
-
 # %%
 
 # Save as JSON
 # fig.write_json("quad_plot.json")
-fig.write_image("quad_plot2.pdf")
+# fig.write_image("quad_plot2.pdf")
 
 # %%
