@@ -80,6 +80,7 @@ def get_metric_from_end_state(
         ]
 
     elif len(targets.shape) == 1:
+        warnings.warn("Uh, this looks somewhat sketchy - check?")
         assert loss.shape[0]==1, loss.shape
         loss = -log_probs[
             :, torch.arange(targets.shape[0]), targets
