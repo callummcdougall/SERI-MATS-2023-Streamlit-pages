@@ -317,7 +317,9 @@ class QKProjectionConfig:
     q_input_multiplier: float = 1.0 # Make this >1.0 as a hack --- the unembedding is ~1/3 of total attention score so this can be pretty helpful
     # When calculating softmax over attention scores, should we use the denominator from the original forward pass? Note this means attention no longer sums to 1.0!
     use_same_scaling: bool = False 
-    projection_directions: Optional[List[Float[torch.Tensor, "batch seq d_model"]]] = None # If we need to do precomputation, store in projection directions
+
+    # Note: projection_directions has a cursed type as we use the first for earlier_heads, and second for use_copying_as_query
+    projection_directions: Optional[Union[List[Float[torch.Tensor, "batch seq d_model"]], Float[torch.Tensor, "batch seqQ seqK d_model"]]] = None
     mantain_bos_attention: bool = True
     model: Optional[HookedTransformer] = None # model is required for precomputation
     heads: Optional[List[Tuple[int, int]]] = field(default_factory=lambda: [ # Heads also required for precomputation. SVD is probably O(heads^2) and so let's do it for a subset for now
@@ -358,6 +360,50 @@ class QKProjectionConfig:
             W_EE = get_effective_embedding(self.model, use_codys_without_attention_changes=True)["W_E (including MLPs)"]
             self.W_EE = W_EE
 
+    def compute_copying_as_query_directions(self, cache: "ActivationCache", negative_head):
+        # Let's compute what the directions need be from the cache
+
+        assert self.q_direction.startswith("use_copying_as_query")
+        if self.q_direction == "use_copying_as_query_testing":
+            same_place_hook_names = ["hook_pos_embed", "hook_embed"] + [utils.get_act_name("mlp_out", layer) for layer in range(negative_head[0])]
+            residual = sum([cache[name] for name in same_place_hook_names]) # [batch seq d_model]
+
+            for layer in range(negative_head[0]):
+                v = cache[utils.get_act_name("v", layer)] # [batch seq d_model]
+                pattern = cache[utils.get_act_name("pattern", layer)] # [batch head seqQ seqK]
+                results = einops.einsum(
+                    v,
+                    pattern,
+                    self.model.W_O[layer],
+                    "batch seqK head d_head, batch head seqQ seqK, head d_head d_model -> batch seqQ d_model", # batch query_pos head_index d_head
+                )
+                residual += results
+                residual += self.model.b_O[layer]
+
+            torch.testing.assert_close(
+                residual,
+                cache["blocks.10.hook_resid_pre"],
+                atol=1e-3,
+                rtol=1e-3,
+            )
+            print("Passed!")
+        
+        batch_size, seq_len, d_model = cache[f"blocks.{negative_head[0]}.hook_resid_pre"].shape
+        self.projection_directions = torch.zeros(batch_size, seq_len, seq_len, d_model) # [batch seqQ seqK d_model]
+
+        original_model_device = self.model.cfg.device
+        self.model = self.model.to("cpu")
+
+        for layer in range(negative_head[0]): # 20% not 30% when restricting to last two heads
+            current_resid = einops.einsum(
+                cache[utils.get_act_name("v", layer)].cpu(), # TODO see if speedup w/ CUDA possible
+                cache[utils.get_act_name("pattern", layer)].cpu(),
+                self.model.W_O[layer].cpu(),
+                "batch seqK head d_head, batch head seqQ seqK, head d_head d_model -> batch seqQ seqK d_model",
+            )
+            self.projection_directions += current_resid
+
+        self.model = self.model.to(original_model_device)
 
 @dataclass 
 class OVProjectionConfig:
@@ -383,7 +429,7 @@ def run_qk_projections(
     # Prepare q_input
     if config.q_direction is not None:
         # Note the 2.0 as we suck without this
-        q_shape = "batch seqQ seqK" if config.q_direction in ["unembedding", "earlier_heads"] else "batch seqQ"
+        q_shape = "batch seqQ seqK" if config.q_direction in ["unembedding", "earlier_heads", "use_copying_as_query", "use_copying_as_query_testing"] else "batch seqQ"
         
         if config.q_direction == "unembedding":
             q_input_per_position = config.q_input_multiplier * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len).clone()
@@ -399,8 +445,8 @@ def run_qk_projections(
             q_input[:, :, 0] = base_q_input
 
         elif config.q_direction == "earlier_heads":
-            projection_directions_per_k = [einops.repeat(direction[toks], "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len).clone() for direction in config.projection_directions.values()]
             q_input_per_position = config.q_input_multiplier * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len).clone()
+            projection_directions_per_k = [einops.repeat(direction[toks], "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len).clone() for direction in config.projection_directions.values()]
 
             q_input, _ = multi_project( # This works but it's reeeeealllly slow
                 q_input_per_position,
@@ -409,6 +455,18 @@ def run_qk_projections(
 
             # Keep BOS attention score the same
             q_input[:, :, 0] = base_q_input
+
+        elif config.q_direction.startswith("use_copying_as_query"):
+            q_input_per_position = config.q_input_multiplier * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len).clone()
+
+            q_input = project(
+                q_input_per_position.cpu(), # TODO more standardisation of how devices are handled
+                config.projection_directions.cpu(), # [batch, seqQ, seqK, d_model]
+            )
+
+            # Keep BOS attention score the same
+            q_input[:, :, 0] = base_q_input
+            q_input = q_input.to(base_q_input.device)
 
         else:
             warnings.warn("I think this projection is pretty sketchy: it does give ~70% KL recovered but the baselines look about as good, and it's fairly unprincipled")
@@ -616,6 +674,16 @@ def get_cspa_results(
 
     t_clean_and_ablated = time.time()
 
+    if qk_projection_config is not None and qk_projection_config.q_direction.startswith("use_copying_as_query"):
+        hook_names_to_cache.extend(
+            [utils.get_act_name("pattern", layer) for layer in range(LAYER)] + [utils.get_act_name("v", layer) for layer in range(LAYER)]
+        )
+
+        if qk_projection_config.q_direction == "use_copying_as_query_testing":
+            hook_names_to_cache.extend(
+                [utils.get_act_name("mlp_out", layer) for layer in range(LAYER)] + ["hook_embed", "hook_pos_embed"]
+            )
+
     # * Get clean results (also use this to get residual stream before layer 10)
     model.reset_hooks()
     logits, cache = model.run_with_cache(
@@ -624,6 +692,7 @@ def get_cspa_results(
         names_filter = lambda name: name in hook_names_to_cache
     )
     loss = model.loss_fn(logits, toks, per_token=True)
+
     resid_post_final = cache[resid_final_hook_name] # [batch seqQ d_model]
     resid_pre = cache[resid_hook_name] # [batch seqK d_model]
     # TODO odd thing; sometimes it seems like scale isn't recorded as different across heads. why?
@@ -637,6 +706,10 @@ def get_cspa_results(
     scores = cache[scores_hook_name][:, HEAD] # [batch seqQ seqK]
     scaled_resid_pre = cache[resid_hook_name].clone() / cache[scale_hook_name]
     pre_head_result_orig = cache[pre_result_hook_name] # [batch seq n_heads d_model]
+
+    if qk_projection_config is not None and qk_projection_config.q_direction.startswith("use_copying_as_query"):
+        qk_projection_config.compute_copying_as_query_directions(cache, negative_head)
+
     del cache
 
     # * Perform complete ablation (via a direct calculation)

@@ -2,12 +2,20 @@
 
 """
 Try and do experiments on our Q and K and V approximations
+
+WARNING: The Q projection projects onto the *massive subspace*. Use with care!
+... and the results on short sequence lengths seem worse than mean ablation, so I would not use
 """
 
+import os 
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+import torch
+assert torch.cuda.device_count() == 1
+
 from transformer_lens.cautils.notebook import *
+from transformer_lens.rs.arthurs_notebooks.arthurs_utils import *
 from transformer_lens.rs.callum.keys_fixed import project
 from transformer_lens.rs.callum2.utils import get_effective_embedding
-from transformer_lens.rs.arthurs_notebooks.arthurs_utils import *
 import argparse
 
 #%%
@@ -23,9 +31,9 @@ model.set_use_attn_result(True)
 
 # %%
 
-MAX_SEQ_LEN = 512
-BATCH_SIZE = 30
-batched_tokens, targets = get_filtered_webtext(model, batch_size=BATCH_SIZE, seed=1717, device="cuda", max_seq_len=MAX_SEQ_LEN)
+MAX_SEQ_LEN = 100
+BATCH_SIZE = 300
+batched_tokens, targets = get_filtered_webtext(model, batch_size=BATCH_SIZE, seed=1718, device="cuda", max_seq_len=MAX_SEQ_LEN)
 effective_embeddings = get_effective_embedding(model, use_codys_without_attention_changes=False)
 
 # %%
@@ -98,6 +106,10 @@ max_importance_examples = sorted(
 )
 
 # %%
+
+warnings.warn("Not sorting by loss...")
+np.random.seed(799)
+np.random.shuffle(max_importance_examples)
 
 # Get the top 5% of things by importance
 all_top_5_percent = max_importance_examples[: len(max_importance_examples)//20]
@@ -212,18 +224,18 @@ model.set_use_split_qkv_normalized_input(True)
 model.reset_hooks()
 
 # # Add the hook approximation
-model.add_hook(
-    get_act_name("k_normalized_input", NEGATIVE_LAYER_IDX),
-    partial(set_to_value, head_idx=NEGATIVE_HEAD_IDX, new_value=keyside_projections.cuda()),
-    level=1,
-)
-
-# # UNCOMMENT TO ALSO DO SOME QUERYSIDE PROJECTIONS
 # model.add_hook(
-#     get_act_name("q_input", NEGATIVE_LAYER_IDX),
-#     partial(set_to_value, head_idx=NEGATIVE_HEAD_IDX, seq_indices = top5p_seq_indices, new_value=queryside_vectors.to("cuda")),
+#     get_act_name("k_normalized_input", NEGATIVE_LAYER_IDX),
+#     partial(set_to_value, head_idx=NEGATIVE_HEAD_IDX, new_value=keyside_projections.cuda()),
 #     level=1,
 # )
+
+# # UNCOMMENT TO ALSO DO SOME QUERYSIDE PROJECTIONS
+model.add_hook(
+    get_act_name("q_input", NEGATIVE_LAYER_IDX),
+    partial(set_to_value, head_idx=NEGATIVE_HEAD_IDX, seq_indices = top5p_seq_indices, new_value=queryside_vectors.to("cuda")),
+    level=1,
+)
 
 model.to("cuda")
 logits, top_5p_cache = model.run_with_cache(
@@ -305,13 +317,18 @@ fig.add_trace(
         name = "y=x",
     )
 )
+fig.update_layout(
+    title = "Projected Keys Losses vs. Actual Losses",
+    xaxis_title = "Model Losses",
+    yaxis_title = "Intervention losses",
+)
 fig.show()
 
 #%%
 
 print(
     "Proportion loss recovered:",
-    (the_mean_ablated_loss - loss.cpu()).mean() / (the_mean_ablated_loss - top5p_losses.cpu()).mean(),
+    (-(loss.cpu() - top5p_losses.cpu()).mean() / (the_mean_ablated_loss.cpu() - top5p_losses.cpu()).mean()) + 1.0,
 )
 
 # %%
