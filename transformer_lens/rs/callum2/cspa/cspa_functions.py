@@ -332,6 +332,7 @@ class QKProjectionConfig:
         (8, 6),
     ])
     W_EE: Optional[torch.Tensor] = None
+    use_semantic: bool = False
 
     def __post_init__(self):
         if self.q_direction == "earlier_heads":
@@ -414,7 +415,7 @@ def run_qk_projections(
     LAYER: int,
     HEAD: int,
     config: QKProjectionConfig,
-    toks: Int[Tensor, "batch seq"],
+    semantically_similar_toks: Int[Tensor, "batch seq"],
     scores: Float[Tensor, "batch seqQ seqK"],
     pattern: Float[Tensor, "batch seqQ seqK"],
     scaled_resid_pre: Float[Tensor, "batch seq d_model"],
@@ -423,7 +424,7 @@ def run_qk_projections(
 ):
     """Compute the attention patterns with projections"""
 
-    batch_size, seq_len = toks.shape
+    batch_size, seq_len, k_semantic = semantically_similar_toks.shape
     base_q_input = scaled_resid_pre.clone() # [batch seqQ d_model]
 
     # Prepare q_input
@@ -433,12 +434,11 @@ def run_qk_projections(
         
         if config.q_direction == "unembedding":
             q_input_per_position = config.q_input_multiplier * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len).clone()
-            unembeddings = model.W_U.T[toks]
-            projection_directions_per_k = einops.repeat(unembeddings, "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len)
-
-            q_input = project(
+            unembeddings = model.W_U.T[semantically_similar_toks]
+            projection_directions_per_k = einops.repeat(unembeddings, "batch seqK K_semantic d_model -> K_semantic batch seqQ seqK d_model", seqQ=seq_len)
+            q_input, _ = multi_project(
                 q_input_per_position,
-                projection_directions_per_k,
+                list(projection_directions_per_k),
                 device=computation_device,
             )
             # Keep BOS attention score the same
@@ -446,7 +446,7 @@ def run_qk_projections(
 
         elif config.q_direction == "earlier_heads":
             q_input_per_position = config.q_input_multiplier * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len).clone()
-            projection_directions_per_k = [einops.repeat(direction[toks], "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len).clone() for direction in config.projection_directions.values()]
+            projection_directions_per_k = [einops.repeat(direction[semantically_similar_toks.squeeze(-1)], "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len).clone() for direction in config.projection_directions.values()]
 
             q_input, _ = multi_project( # This works but it's reeeeealllly slow
                 q_input_per_position,
@@ -495,7 +495,7 @@ def run_qk_projections(
         k_shape = "batch seqQ seqK"
         k_input = project(
             base_k_input,
-            config.W_EE[toks],
+            config.W_EE[semantically_similar_toks.squeeze(-1)],
             device=computation_device,
         )
         k_input = einops.repeat(k_input, "batch seqK d_model -> batch seqQ seqK d_model", seqQ=seq_len).clone()
@@ -731,12 +731,13 @@ def get_cspa_results(
     # ====================================================================
 
     if qk_projection_config is not None: # Overwrite the attention pattern with something that we've recomputed
+        normal_pattern = pattern.detach().cpu().clone() # Save the old pattern...
         pattern = run_qk_projections(
             model=model,
             LAYER=LAYER,
             HEAD=HEAD,
             config=qk_projection_config,
-            toks=toks,
+            semantically_similar_toks=semantically_similar_toks,
             pattern=pattern,
             scores=scores,
             scaled_resid_pre=scaled_resid_pre,
@@ -841,6 +842,8 @@ def get_cspa_results(
         "kl_div_cspa_to_orig": kl_div(logits, logits_cspa),
         "pattern": pattern.detach().cpu(),
     }
+    if qk_projection_config is not None:
+        cspa_results["normal_pattern"] = normal_pattern.detach().cpu()
     if return_dla: 
         cspa_results["dla"] = dla_cspa
     if return_logits:
