@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  .node {
+    fill: black;
+  }
+  .link {
+    fill: none;
+    stroke: black;
+  }
+  .label {
+    font-size: 12px;
+  }
+  .title {
+    font-size: 16px;
+    text-anchor: middle;
+  }
+</style>
+
+</head>
+
+
+<body>
+
+<div id="my-graph"></div>
+
+<script src="/home/arthur/Documents/Sources/figu/my_figure/my_script.js"></script>
+
+<script>
+
+const numLeft = 3;
+const numRight = 24;
+const values = [[0.014416900463402271, 0.8920016288757324, 0.0], [5.459349267766811e-06, 0.19580762088298798, 0.0], [0.7943492531776428, 0.7061830163002014, 0.0], [0.0002929598558694124, 0.014416900463402271, 0.0], [4.1996848978032714e-14, 7.481605280190706e-05, 0.0], [4.465158909283673e-08, 3.690027450264921e-11, 0.0], [0.0210088063031435, 0.43318864703178406, 0.0], [0.892001211643219, 0.892001211643219, 0.0], [1.3721104252795158e-09, 5.012662995795836e-07, 0.0], [1.3721104252795158e-09, 5.2214965684527215e-09, 0.0], [0.7061830163002014, 0.5551589727401733, 0.0], [3.690063185568526e-11, 0.004133462905883789, 0.0], [0.011861160397529602, 0.005162140820175409, 0.021008789539337158], [0.03581878915429115, 0.0945717915892601, 0.0945717915892601], [1.0, 1.0, 1.0], [0.050167303532361984, 0.17016670107841492, 0.7943492531776428], [9.767143183125881e-07, 1.640501956501339e-08, 0.002599234227091074], [0.005162140820175409, 1.640501956501339e-08, 2.421034821509238e-07], [0.7061830163002014, 0.7061830163002014, 0.29412388801574707], [0.00029296023421920836, 0.0020396430045366287, 0.0020396430045366287], [2.500361679855234e-12, 2.421034821509238e-07, 3.690063185568526e-11], [0.0015884427120909095, 0.004133462905883789, 0.030100800096988678], [0.892001211643219, 0.892001211643219, 0.892001211643219], [0.014416900463402271, 0.009710993617773056, 0.2247677892446518]];
+const colorList = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, true, true, true, false, false, true, false, true, true, false, true, true, true, true, true, true, true, true, false, false, false, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, true, true, true, false, true, true, true, false, true, false, true, true, false, false, false, true, true, false];
+const labelsRight = ['L10H0', 'L10H1', 'L10H2', 'L10H3', 'L10H4', 'L10H5', 'L10H6', 'L10H7', 'L10H8', 'L10H9', 'L10H10', 'L10H11', 'L11H0', 'L11H1', 'L11H2', 'L11H3', 'L11H4', 'L11H5', 'L11H6', 'L11H7', 'L11H8', 'L11H9', 'L11H10', 'L11H11'];
+const labelsLeft = ["L9H9", "L9H6", "L10H0"];
+const title = "Attention Score Q-Composition";
+const width = 600;
+const height = 500;
+
+const graphHTML = createNetworkGraph(numLeft, numRight, values, colorList, labelsLeft, labelsRight, width, height, title);
+document.write(graphHTML);
+
+</script>
+</body>
+</html>
