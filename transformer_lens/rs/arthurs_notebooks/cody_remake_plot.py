@@ -225,13 +225,6 @@ for mode in MODES:
         y_data[mode].extend(head_logit_diffs[mode][layer_idx][layer_heads[layer_idx]].tolist())
         text_data[mode].extend([f"{layer_idx}.{head_idx}" for head_idx in layer_heads[layer_idx]])
 
-# Increase font size
-fig.update_layout(
-    font=dict(
-        size=14,
-    )
-)
-
 # Add the traces for each mode
 for mode in MODES:
     fig.add_trace(
@@ -247,25 +240,94 @@ for mode in MODES:
         )
     )
 
-# Add y=x line
+#%%
+
+# Create a DataFrame to hold the data
+MODES = ['parallel', 'perp']
+df = pd.DataFrame()
+
+
+fig = go.Figure()
+
+for mode in MODES:
+    x = deepcopy(x_data[mode]) # Replace with your logit_diffs_per_head data
+    y = deepcopy(y_data[mode])  # Replace with your head_logit_diffs data
+    text = deepcopy(text_data[mode])
+    temp_df = pd.DataFrame({
+        'x_data': x,
+        'y_data': y,
+        'text_data': text,
+        'mode': mode,
+    })
+
+    textpositions = ['top right' if (mode == 'parallel') == (idx%2 == 1) else 'bottom right' for idx in range(len(x))]
+    for idx in range(len(x)):
+        if text[idx] in ['10.6', '10.2']:
+            textpositions[idx] = "middle left"
+
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=y,
+            mode='markers+text',
+            text=text,
+            textposition=textpositions,
+            marker=dict(size=5, color='red' if mode == 'parallel' else 'blue'),
+            # Use linebreak after IO
+            name=f"""Only include Name Moving Heads' IO<br>{'perpendicular' if mode=='perp' else 'parallel'} directions in the query""",
+        )
+    )
+
+
+fig.update_layout(
+    paper_bgcolor='rgba(255,255,255,255)',
+    plot_bgcolor='rgba(255,255,255,255)'
+)
+# fig.update_traces(textposition='top center')
+fig.update_yaxes(showgrid=True)
+fig.update_xaxes(showgrid=True)
+fig.update_xaxes(showline=True, linewidth=2, linecolor='black', showgrid=True, gridwidth=1, gridcolor='gray')
+fig.update_yaxes(showline=True, linewidth=2, linecolor='black', showgrid=True, gridwidth=1, gridcolor='gray')
+fig.update_layout(
+    shapes=[
+        dict(
+            type='line',
+            x0=0,
+            x1=1,
+            xref='paper',
+            y0=0,
+            y1=0,
+            yref='y',
+            line=dict(color='black', width=2)
+        ),
+        dict(
+            type='line',
+            x0=0,
+            x1=0,
+            xref='x',
+            y0=0,
+            y1=1,
+            yref='paper',
+            line=dict(color='black', width=2)
+        )
+    ]
+)
+# Add a y=x line
 fig.add_trace(
     go.Scatter(
-        x=[-3, 3],
-        y=[-3, 3],
-        mode="lines",
-        name="y=x",
-        marker=dict(
-            color="black",
-        )
+        x=[-2.5, 1],
+        y=[-2.5, 1],
+        mode='lines',
+        name='y=x',
+        line=dict(color='black', width=2, dash='dash')
     )
 )
 
-fig.update_traces(textposition='top left')
-
+# Add y axis label
 fig.update_layout(
-    title="Self-repairing attention heads under query interventions",
-    xaxis_title="Clean logit difference",
     yaxis_title="Post-intervention logit difference",
+    xaxis_title="Pre-intervention logit difference",
+    title = "Self-repairing attention heads under projection interventions",
 )
 
 fig.show()
