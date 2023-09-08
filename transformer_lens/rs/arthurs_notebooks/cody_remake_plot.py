@@ -223,7 +223,7 @@ for mode in MODES:
     for layer_idx in range(10, 12):
         x_data[mode].extend(logit_diffs_per_head[layer_idx][layer_heads[layer_idx]].tolist())
         y_data[mode].extend(head_logit_diffs[mode][layer_idx][layer_heads[layer_idx]].tolist())
-        text_data[mode].extend([f"{layer_idx}.{head_idx}" for head_idx in layer_heads[layer_idx]])
+        text_data[mode].extend([f"L{layer_idx}H{head_idx}" for head_idx in layer_heads[layer_idx]])
 
 # Add the traces for each mode
 for mode in MODES:
@@ -253,6 +253,14 @@ for mode in MODES:
     x = deepcopy(x_data[mode]) # Replace with your logit_diffs_per_head data
     y = deepcopy(y_data[mode])  # Replace with your head_logit_diffs data
     text = deepcopy(text_data[mode])
+    textpositions = ['top left' if (mode == 'parallel') == (idx%2 == 1) else 'bottom left' for idx in range(len(x))]
+
+    # # Remove an extra label that looks ugly
+    # if mode == 'perp':
+    #     for i in range(len(x)):
+    #         if text[i] == 'L10H6':
+    #             text[i] = ""
+
     temp_df = pd.DataFrame({
         'x_data': x,
         'y_data': y,
@@ -260,10 +268,18 @@ for mode in MODES:
         'mode': mode,
     })
 
-    textpositions = ['top right' if (mode == 'parallel') == (idx%2 == 1) else 'bottom right' for idx in range(len(x))]
     for idx in range(len(x)):
-        if text[idx] in ['10.6', '10.2']:
-            textpositions[idx] = "middle left"
+        if text[idx] == 'L10H10':
+            textpositions[idx] = "middle right"
+        
+        if text[idx] == "L10H6":
+            textpositions[idx] = "middle left" if mode == "parallel" else "bottom left"
+
+        if text[idx] in ['L10H2']:
+            if "bottom" in textpositions[idx]:
+                textpositions[idx] = textpositions[idx].replace("bottom", "top")
+            elif "top" in textpositions[idx]:
+                textpositions[idx] = textpositions[idx].replace("top", "bottom")
 
     fig.add_trace(
         go.Scatter(
@@ -274,7 +290,7 @@ for mode in MODES:
             textposition=textpositions,
             marker=dict(size=5, color='red' if mode == 'parallel' else 'blue'),
             # Use linebreak after IO
-            name=f"""Only include Name Moving Heads' IO<br>{'perpendicular' if mode=='perp' else 'parallel'} directions in the query""",
+            name=("onto" if mode == "parallel" else "away from") + " W<sub>U</sub>[IO]",
         )
     )
 
@@ -284,8 +300,8 @@ fig.update_layout(
     plot_bgcolor='rgba(255,255,255,255)'
 )
 # fig.update_traces(textposition='top center')
-fig.update_yaxes(showgrid=True)
-fig.update_xaxes(showgrid=True)
+# fig.update_yaxes(showgrid=True)
+# fig.update_xaxes(showgrid=True)
 fig.update_xaxes(showline=True, linewidth=2, linecolor='black', showgrid=True, gridwidth=1, gridcolor='gray')
 fig.update_yaxes(showline=True, linewidth=2, linecolor='black', showgrid=True, gridwidth=1, gridcolor='gray')
 fig.update_layout(
@@ -312,14 +328,14 @@ fig.update_layout(
         )
     ]
 )
-# Add a y=x line
+# Add a y=x line, that doesn't appear on the legend
 fig.add_trace(
     go.Scatter(
         x=[-2.5, 1],
         y=[-2.5, 1],
         mode='lines',
-        name='y=x',
-        line=dict(color='black', width=2, dash='dash')
+        showlegend=False,
+        line=dict(color='black', width=2, dash='dash'),
     )
 )
 
@@ -330,7 +346,26 @@ fig.update_layout(
     title = "Self-repairing attention heads under projection interventions",
 )
 
+# Call the Legend 'Project onto'
+fig.update_layout(
+    legend=dict(
+        title="Project:",
+    )
+)
+
+# Increase all font sizes
+fig.update_layout(
+    font=dict(
+        size=14,
+    )
+)
+fig.update_xaxes(showgrid=True, linecolor='rgba(128, 128, 128, 0.5)', linewidth=1)
+fig.update_yaxes(showgrid=True, linecolor='rgba(128, 128, 128, 0.5)', linewidth=1)
+
 fig.show()
 
 #%%
 
+fig.write_image("cody_remake_plot.pdf") # width=1000, height=1000)
+
+# %%
