@@ -36,7 +36,7 @@ model.set_use_split_qkv_normalized_input(True)
 
 # %%
 
-N=100
+N=200
 ioi_dataset = IOIDataset(
     prompt_type="mixed",
     N=N,
@@ -80,7 +80,7 @@ logits, cache = model.run_with_cache(
 )
 
 pre_neg_resid = cache[hook_pre_name][torch.arange(N), ioi_dataset.word_idx["end"]]
-pre_scales = torch.zeros(12, 100, 1).cuda()
+pre_scales = torch.zeros(12, N, 1).cuda()
 for layer, an_ln_pre_name in zip([10, 11], [ln_pre10_name, ln_pre11_name]):
     pre_scales[layer] = cache[an_ln_pre_name][torch.arange(N), ioi_dataset.word_idx["end"], 0]
 end_scale = cache[ln_final_name][torch.arange(N), ioi_dataset.word_idx["end"]]
@@ -120,7 +120,7 @@ imshow(
 
 #%%
 
-name_mover_head_outputs = torch.zeros(12, 12, 100, model.cfg.d_model).cuda()
+name_mover_head_outputs = torch.zeros(12, 12, N, model.cfg.d_model).cuda()
 
 NMHs = [
     # (8, 0), 
@@ -137,7 +137,7 @@ NMHs = [
     # (10, 6),
 ]
 
-parallel_component, perp_component = torch.zeros((12, 12, 100, model.cfg.d_model)).cuda(), torch.zeros((12, 12, 100, model.cfg.d_model)).cuda()
+parallel_component, perp_component = torch.zeros((12, 12, N, model.cfg.d_model)).cuda(), torch.zeros((12, 12, N, model.cfg.d_model)).cuda()
 
 for layer_idx, head_idx in NMHs:
     NMH = (layer_idx, head_idx)
@@ -202,11 +202,9 @@ for mode in MODES:
 
 #%%
 
-fig = go.Figure()
-
 colors = {
-    "parallel": "red",
-    "perp": "blue",
+    "parallel": "green",
+    "perp": "orange",
 }
 
 layer_heads = {
@@ -225,27 +223,11 @@ for mode in MODES:
         y_data[mode].extend(head_logit_diffs[mode][layer_idx][layer_heads[layer_idx]].tolist())
         text_data[mode].extend([f"L{layer_idx}H{head_idx}" for head_idx in layer_heads[layer_idx]])
 
-# Add the traces for each mode
-for mode in MODES:
-    fig.add_trace(
-        go.Scatter(
-            x=x_data[mode],
-            y=y_data[mode],
-            mode="markers" + ("+text" if mode == "parallel" else ""),
-            name=f"Only include Name Moving Heads' IO-{mode} directions in the query",
-            text=text_data[mode],
-            marker=dict(
-                color=colors[mode],
-            ),
-        )
-    )
-
 #%%
 
 # Create a DataFrame to hold the data
 MODES = ['parallel', 'perp']
 df = pd.DataFrame()
-
 
 fig = go.Figure()
 
@@ -255,11 +237,11 @@ for mode in MODES:
     text = deepcopy(text_data[mode])
     textpositions = ['top left' if (mode == 'parallel') == (idx%2 == 1) else 'bottom left' for idx in range(len(x))]
 
-    # # Remove an extra label that looks ugly
-    # if mode == 'perp':
-    #     for i in range(len(x)):
-    #         if text[i] == 'L10H6':
-    #             text[i] = ""
+    # Remove an extra label that looks ugly
+    if mode == 'perp':
+        for i in range(len(x)):
+            if text[i] == 'L10H6':
+                text[i] = ""
 
     temp_df = pd.DataFrame({
         'x_data': x,
@@ -288,9 +270,31 @@ for mode in MODES:
             mode='markers+text',
             text=text,
             textposition=textpositions,
-            marker=dict(size=5, color='red' if mode == 'parallel' else 'blue'),
-            # Use linebreak after IO
-            name=("onto" if mode == "parallel" else "away from") + " W<sub>U</sub>[IO]",
+            marker=dict(size=15, color=[("red" if tex in ["L10H7", "L11H10"] else "dodgerblue") for tex in text], symbol="x" if mode == "perp" else "triangle-up", line = dict(width = 2)),
+            textfont=dict(size=15),  # Increase font size here
+            # name=("onto" if mode == "parallel" else "away from") + " W<sub>U</sub>[IO]",
+            # color = ,
+            showlegend = False,
+        )
+    )
+
+for symbol, name in zip(
+    ["x", "triangle-up"],
+    ["away from W<sub>U</sub>[IO]", "onto W<sub>U</sub>[IO]"],
+    strict=True,
+):
+    fig.add_trace(
+        go.Scatter(
+            x = [-10],
+            y = [-10],
+            mode = 'markers',
+            marker = dict(
+                color = "white",
+                size = 15,
+                symbol = symbol,
+                line = dict(width = 2),
+            ),
+            name = name,
         )
     )
 
@@ -352,7 +356,6 @@ fig.update_layout(
         title="Project:",
     )
 )
-
 # Increase all font sizes
 fig.update_layout(
     font=dict(
@@ -361,9 +364,19 @@ fig.update_layout(
 )
 fig.update_xaxes(showgrid=True, linecolor='rgba(128, 128, 128, 0.5)', linewidth=1)
 fig.update_yaxes(showgrid=True, linecolor='rgba(128, 128, 128, 0.5)', linewidth=1)
-
+fig.update_layout(legend=dict(
+        title="Project:",
+        x=1,  # x position
+        y=0,  # y position
+        xanchor='right',  # anchor point
+        yanchor='bottom',  # anchor point
+        bordercolor="Black",
+        borderwidth=2
+    ),
+)
+fig.update_xaxes(range=[-2.5, 1])
+fig.update_yaxes(range=[-2.5, 1])
 fig.show()
-
 #%%
 
 fig.write_image("cody_remake_plot.pdf") # width=1000, height=1000)
