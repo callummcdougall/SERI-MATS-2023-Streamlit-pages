@@ -334,6 +334,9 @@ class QKProjectionConfig:
     W_EE: Optional[torch.Tensor] = None
     use_semantic: bool = False
 
+    save_scores: bool = False
+    scores: Optional[Float[torch.Tensor, "batch seqQ seqK"]] = None
+
     def __post_init__(self):
         if self.q_direction == "earlier_heads":
             W_EE = get_effective_embedding(self.model, use_codys_without_attention_changes=True)["W_E (including MLPs)"]
@@ -545,6 +548,9 @@ def run_qk_projections(
         assert t.allclose(att_probs, pattern, atol=1e-3, rtol=1e-3), "Projections don't match attention scores"
     else:
         assert not t.allclose(att_probs, pattern, atol=1e-3, rtol=1e-3)
+
+    if config.save_scores:
+        config.scores = att_scores_causal.detach().cpu()   
 
     # Pattern is actually what we use in CSPA
     pattern = att_probs
@@ -841,9 +847,12 @@ def get_cspa_results(
         "kl_div_ablated_to_orig": kl_div(logits, logits_mean_ablated),
         "kl_div_cspa_to_orig": kl_div(logits, logits_cspa),
         "pattern": pattern.detach().cpu(),
+        "normal_scores": scores.detach().cpu(),
     }
     if qk_projection_config is not None:
         cspa_results["normal_pattern"] = normal_pattern.detach().cpu()
+        if qk_projection_config.save_scores:
+            cspa_results["scores"] = qk_projection_config.scores
     if return_dla: 
         cspa_results["dla"] = dla_cspa
     if return_logits:
