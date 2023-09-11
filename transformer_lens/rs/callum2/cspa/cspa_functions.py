@@ -713,7 +713,7 @@ def get_cspa_results(
     scaled_resid_pre = cache[resid_hook_name].clone() / cache[scale_hook_name]
     pre_head_result_orig = cache[pre_result_hook_name] # [batch seq n_heads d_model]
 
-    if qk_projection_config is not None and qk_projection_config.q_direction.startswith("use_copying_as_query"):
+    if qk_projection_config is not None and qk_projection_config.q_direction is not None and qk_projection_config.q_direction.startswith("use_copying_as_query"):
         qk_projection_config.compute_copying_as_query_directions(cache, negative_head)
 
     del cache
