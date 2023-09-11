@@ -336,6 +336,8 @@ class QKProjectionConfig:
 
     save_scores: bool = False
     scores: Optional[Float[torch.Tensor, "batch seqQ seqK"]] = None
+    save_scaled_resid_pre: bool = False
+    scaled_resid_pre: Optional[Float[torch.Tensor, "batch seq d_model"]] = None
 
     def __post_init__(self):
         if self.q_direction == "earlier_heads":
@@ -551,6 +553,8 @@ def run_qk_projections(
 
     if config.save_scores:
         config.scores = att_scores_causal.detach().cpu()   
+    if config.save_scaled_resid_pre:
+        config.scaled_resid_pre = scaled_resid_pre.detach().cpu()
 
     # Pattern is actually what we use in CSPA
     pattern = att_probs

@@ -5,3 +5,4 @@ __pycache__*
 # **/callum2/**/*.pkl
 # **/callum2/**/*.json
 transformer_lens/rs/arthurs_notebooks/cspa_with_projection.py
+cspa_results_q_projection_on_cpu.pt
