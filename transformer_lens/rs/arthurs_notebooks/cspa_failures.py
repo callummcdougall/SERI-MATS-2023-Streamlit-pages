@@ -307,20 +307,28 @@ def show_model_cspa_attentions(
         contexts = interweave(contexts)
     
     if verbose:
-        for i in range(len(indices)):
-            pass
-        
-            # print(
-            #     "The context was",
-            #     contexts[i],
-            #     "and the model's top word was",
-            #     models_words[i],
-            #     "probability",
-            #     ys[i],
-            #     "and our word was",
-            #     our_words[i],
+        for i in range(0, len(indices), 2):
+            print(
+                "The context was",
+                contexts[i],
+                end=" ",
+            )
 
-            # )
+            next_things = [
+                f"and the model's{' top'} word was",
+                models_words[i+1].replace("<|endoftext|>", "<|BOS|>"),
+                "with probability",
+                str(round(ys[i+1], 2)),
+                f"and our top word was",
+                our_words[i].replace("<|endoftext|>", "<|BOS|>"), 
+                "with probability",
+                str(round(xs[i], 2)),                
+            ]
+
+            if i%2 == 0:
+                next_things = next_things[4:] + ["and the model's probability was", str(round(ys[i], 2))] + next_things[:4]+ ["and our probability was", str(round(xs[i], 2))]
+
+            print("; ".join(next_things))
 
     px.scatter(
         x = xs,
@@ -358,6 +366,6 @@ print(
 
 # %%
 
-show_model_cspa_attentions(fail_indices, show_both_maxes=True)
+show_model_cspa_attentions(fail_indices, show_both_maxes=True, verbose=True)
 
 # %%
