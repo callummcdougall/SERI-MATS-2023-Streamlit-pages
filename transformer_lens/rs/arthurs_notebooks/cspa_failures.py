@@ -162,7 +162,7 @@ if RECALC_CSPA_RESULTS:
         save_scores = True,
         swap_model_and_our_max_attention = False,
         save_scaled_resid_pre = True,    
-        capital_adder = 2.0,
+        capital_adder = 0.5,
     )
 
     # ov_projection_config = OVProjectionConfig()

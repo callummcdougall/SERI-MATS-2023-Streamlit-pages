@@ -564,7 +564,7 @@ def run_qk_projections(
             [begins_with_capital_letter(x) for x in all_str_tokens]
         )
 
-        adder = capital_start_tens.to(toks.device)[toks].float()
+        adder = capital_start_tens.to(toks.device)[toks].float() * config.capital_adder
         att_scores += adder.unsqueeze(1) # Unsqueeze into the Q dimension, as this is a fact about K
 
     att_scores_causal = att_scores.masked_fill_(t.triu(t.ones_like(att_scores), diagonal=1).bool(), -float("inf"))
