@@ -354,6 +354,8 @@ class QKProjectionConfig:
 
     swap_model_and_our_max_attention: bool = False # Testing whether we are wrong because we just get our top attention wrong. Let's hope so!
 
+    query_bias_multiplier: float = 1.0 # Do we want to multiply query bias up???
+
     def __post_init__(self):
         if self.q_direction == "earlier_heads":
             """Precompute some OV circuit for earlier heads... this apprach didn't work well I think <60% KL and other heads in the model outcompeted the L10H7"""
@@ -533,8 +535,8 @@ def run_qk_projections(
     k = einops.einsum(k_input, model.W_K[LAYER, HEAD], f"{k_shape} d_model, d_model d_head -> {k_shape} d_head")
 
     # Broadcast on last dim :-) 
-    q += model.b_Q[LAYER, HEAD] 
-    k += model.b_K[LAYER, HEAD]
+    q += model.b_Q[LAYER, HEAD] * config.query_bias_multiplier
+    k += model.b_K[LAYER, HEAD] * config.query_bias_multiplier
 
     att_scores = einops.einsum(q, k, f"{q_shape} d_head, {k_shape} d_head -> batch seqQ seqK") / math.sqrt(model.cfg.d_head)
 
@@ -999,7 +1001,7 @@ def get_cspa_results_batched(
         CSPA_RESULTS = concat_dicts(CSPA_RESULTS, cspa_results)
 
         if do_running_updates:
-            print("Currently", get_performance_recovered(cspa_results))
+            print("Currently", get_performance_recovered(CSPA_RESULTS))
 
         TOP_K_AND_KSEM_PER_DEST_TOKEN = t.cat([TOP_K_AND_KSEM_PER_DEST_TOKEN, top_K_and_Ksem_per_dest_token], dim=0)
         LOGIT_LENS_FOR_TOP_K_KSEM = t.cat([LOGIT_LENS_FOR_TOP_K_KSEM, logit_lens_for_top_K_Ksem], dim=0)

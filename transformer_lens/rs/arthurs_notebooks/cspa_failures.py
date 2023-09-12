@@ -152,11 +152,12 @@ if RECALC_CSPA_RESULTS:
         q_direction="unembedding",
         k_direction=None,
         q_input_multiplier=2.0,
+        query_bias_multiplier = 2.0,
         use_same_scaling=False,
         mantain_bos_attention=True,
         model = model,
         save_scores = True,
-        swap_model_and_our_max_attention = True,
+        swap_model_and_our_max_attention = False,
         save_scaled_resid_pre = True,    
     )
 
@@ -285,63 +286,94 @@ print("studying", len(indices), "of", index_relevant.shape[0]*index_relevant.sha
 
 # In[ ]:
 
+def get_first_letter(tok: str):
+    assert isinstance(tok, str)
+    if tok[0] != " " or len(tok) == 1:
+        return tok[0]
+    return tok[1]
+
+@dataclass
+class HiAttentionCounter:
+    """Track what the cases where model/CSPA attended to something most were"""
+    bos: int = 0
+    capital: int = 0
+    function_word: int = 0
+
 def show_model_cspa_attentions(
     indices,
     cspa_results = cspa_results_q_projection,
-    score_key = "scores",
+    attention_key = "scores",
     show_both_maxes = False,
     verbose=False,
+    do_counting=False,
 ):
+    """Vizualize where the model's and CSPA's attention scores are going
+    Also collect some statistics on what the failure cases are. Capital letters? Function words? BOS?"""
+
+    if do_counting:
+        assert attention_key == "pattern", "We need to use the pattern for stats because of summing across token positions"
+
     xs=[]
     ys=[]
     cols = []
     models_words = []
     our_words = []
     contexts = []
-    model_cnt = 0
-    our_cnt = 0
+
+    if do_counting:
+        model_hi_counter = HiAttentionCounter()
+        our_hi_counter = HiAttentionCounter()
 
     for batch_idx, seq_idx in indices:
-        current_scores = cspa_results_q_projection[score_key][batch_idx, seq_idx, :seq_idx]
-        model_scores = cspa_results_q_projection["normal_"+score_key][batch_idx, seq_idx, :seq_idx]
-        assert len(current_scores.shape)==1
+        current_attention = cspa_results_q_projection[attention_key][batch_idx, seq_idx, :seq_idx+1]
+        model_attention = cspa_results_q_projection["normal_"+attention_key][batch_idx, seq_idx, :seq_idx+1]
+        assert len(current_attention.shape)==1
         
-        max_attention = torch.topk(current_scores, k=1)
+        max_attention = torch.topk(current_attention, k=1)
         xs.append(max_attention.values.item())
         max_attention_index = max_attention.indices.item()
-        ys.append(model_scores[max_attention_index].item())
+        ys.append(model_attention[max_attention_index].item())
         # WARNING: we're not passing model nor DATA_TOKS to this function, so handle with care
         our_words.append(model.to_string(DATA_TOKS[batch_idx, max_attention_index].item())) 
         contexts.append("|".join(model.to_str_tokens(DATA_TOKS[batch_idx, max(0,seq_idx-5):seq_idx+1])))
        
-        max_model_attention = torch.topk(model_scores, k=1)
+        max_model_attention = torch.topk(model_attention, k=1)
         max_model_attention_index = max_model_attention.indices.item()
         models_words.append(model.to_string(DATA_TOKS[batch_idx, max_model_attention_index].item())) 
 
         if show_both_maxes:
             ys.append(max_model_attention.values.item())
-            xs.append(current_scores[max_model_attention_index].item())
+            xs.append(current_attention[max_model_attention_index].item())
             cols.extend(["Token CSPA had max attention on", "Token that model had max attention on"])
         else:
             cols.append("BOS" if max_attention_index == 0 else "Not BOS")
 
-        # Checks on capitalised letters
-        current_model_word = models_words[-1]
-        if models_words[-1][0] == " " and len(models_words[-1])>1:
-            current_model_word = models_words[-1][1]
-        else:
-            current_model_word = models_words[-1][0]
-        if ord("A") <= ord(current_model_word) <= ord("Z"):
-            model_cnt+=1
-        current_our_word = our_words[-1]
-        if our_words[-1][0] == " " and len(our_words[-1])>1:
-            current_our_word = our_words[-1][1]
-        else:
-            current_our_word = our_words[-1][0]
-        if ord("A") <= ord(current_our_word) <= ord("Z"):
-            our_cnt+=1
+        # # Process all the counting things...
+        if do_counting:
+            current_toks = list(set(DATA_TOKS[batch_idx, :seq_idx+1].tolist()))
+            model_token_atts = {k: 0.0 for k in current_toks}
+            cspa_token_atts = deepcopy(model_token_atts)
+            for i in range(seq_idx+1):
+                model_token_atts[DATA_TOKS[batch_idx, i].item()] += model_attention[i].item()
+                cspa_token_atts[DATA_TOKS[batch_idx, i].item()] += current_attention[i].item()
+            model_max_token = max(current_toks, key=lambda x: model_token_atts[x])
+            cspa_max_token = max(current_toks, key=lambda x: cspa_token_atts[x])
 
-    print(f"Model had lots of attention on capital {model_cnt} out of {len(models_words)} times, and we had {our_cnt} out of {len(our_words)} times")
+            # Was the model's token something it attended to more?
+            for token, active_attention, other_attention, active_counter in zip(
+                [model_max_token, cspa_max_token],
+                [model_token_atts, cspa_token_atts],
+                [cspa_token_atts, model_token_atts],
+                [model_hi_counter, our_hi_counter],
+                strict=True,
+            ):
+                if token == 50256:
+                    active_counter.bos += 1
+                if active_attention[token] > other_attention[token]:
+                    if model.to_single_str_token(token) in FUNCTION_STR_TOKS:
+                        active_counter.function_word += 1
+                    if ord("A") <= ord(get_first_letter(model.to_single_str_token(token))) <= ord("Z"):
+                        active_counter.capital += 1
 
     from itertools import chain, repeat
     def interweave(lis):
@@ -389,6 +421,9 @@ def show_model_cspa_attentions(
         },
     ).show()
 
+    if do_counting:
+        print("Model's hi attention summary:", model_hi_counter, "(and less importantly, our hi attention counter)", our_hi_counter, " and there were a total", len(indices) // (2 if show_both_maxes else 1), "cases")
+
 show_model_cspa_attentions(success_indices)
 
 # Conclusions: in cases where mean ablation was destructuve and projctive CSPA did a reaosnable job, attention in max is somewhat well correlated, and overall there is not muuuch bias; projective just puts slightly more attention (also high BOS attention never happens here)
@@ -407,16 +442,38 @@ fail_indices = list(zip(
 ))
 
 print(
-    "studying", len(fail_indices_raw), "of", fail_index_relevant.shape[0]*fail_index_relevant.shape[1], "cases",
+    "We're studying", len(fail_indices_raw), "of", fail_index_relevant.shape[0]*fail_index_relevant.shape[1], "cases",
 )
 
 # %%
 
-show_model_cspa_attentions(fail_indices, show_both_maxes=True, verbose=True)
+show_model_cspa_attentions(fail_indices, show_both_maxes=True, verbose=True, do_counting=True, attention_key="pattern")
 
 # %%
 
 # Seed 8 was the second batch of things...
 # Another observation: we have the max attention on BOS loads more than the model too...
 
+# %%
+
+# Okay so we've identified several issues
+# * Underweighting capitals?
+# * BOS attention too much?
+# * How many function words, too?
+# 
+# Remember, we have 148 cases
+#
+# Proportion underweighting capitals: >1/5 seems a big deal. And also needs to be ~4x as big a deal as the inverse
+# Function words: >1/15 seems a big deal, needs 3x as many as the inverse.
+# BOS too much: >1/4 and needs to be 5x as big as the inverse.
+# 
+# All of these are plucked out of my ass. The reason that the fractions and factors aren't the same is that some are more interesting than others + smaller subspaces so will be easier to analyse
+
+# %%
+# 
+# Model's hi attention summary: HiAttentionCounter(bos=6, capital=93, function_word=0) (and less importantly, our hi attention counter) HiAttentionCounter(bos=17, capital=17, function_word=3)  and there were a total 148 cases 
+# 
+# Wow, we're at >1/2 of the cases being captial cases! The function word does not reproduce, and the BOS thing isn't very siginifcant (~3x as freqent. Still a fiar big though)
+#
+# Freaking 5x as much, too!
 # %%
