@@ -162,7 +162,7 @@ if RECALC_CSPA_RESULTS:
         save_scores = True,
         swap_model_and_our_max_attention = False,
         save_scaled_resid_pre = True,    
-        capital_multiplier = 1.5,
+        capital_adder = 2.0,
     )
 
     # ov_projection_config = OVProjectionConfig()
@@ -189,7 +189,6 @@ if RECALC_CSPA_RESULTS:
     )
     gc.collect()
     t.cuda.empty_cache()
-    clear_output()
     cached_cspa = {k:v.detach().cpu() for k,v in cspa_results_q_projection.items()}
     torch.save(cached_cspa, os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu_again_seed_{SEED}.pt"))
 
