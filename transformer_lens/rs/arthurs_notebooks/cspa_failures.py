@@ -148,7 +148,7 @@ RECALC_CSPA_RESULTS = True
 if RECALC_CSPA_RESULTS:
 
     # Empirically, as long as SEQ_LEN large, small BATCH_SIZE gives quite good estimates (experiments about this deleted, too in the weeds)
-    Q_PROJECTION_BATCH_SIZE = 10
+    Q_PROJECTION_BATCH_SIZE = 60
     Q_PROJECTION_SEQ_LEN = 300
 
     qk_projection_config = QKProjectionConfig(
@@ -162,7 +162,7 @@ if RECALC_CSPA_RESULTS:
         save_scores = True,
         swap_model_and_our_max_attention = False,
         save_scaled_resid_pre = True,    
-        capital_adder = 0.5,
+        capital_adder = 0.5, # ... so hacky and worth about a percent
     )
 
     # ov_projection_config = OVProjectionConfig()
@@ -171,7 +171,7 @@ if RECALC_CSPA_RESULTS:
     print("Starting...")
     cspa_results_q_projection = get_cspa_results_batched(
         model = model,
-        toks = DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN],
+        toks = DATA_TOKS[-Q_PROJECTION_BATCH_SIZE:, :Q_PROJECTION_SEQ_LEN],
         max_batch_size = 1,
         negative_head = (10, 7),
         interventions = [],
