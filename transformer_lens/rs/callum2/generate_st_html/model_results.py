@@ -821,6 +821,8 @@ def get_model_results_batched(
         if not(store_in_cuda): model_results_new = model_results_new.to("cpu")
         model_results = model_results_new if (model_results is None) else model_results.concat_results(model_results_new, keep_logits=keep_logits)
 
+        get_performance_rev
+
         gc.collect()
         t.cuda.empty_cache()
 

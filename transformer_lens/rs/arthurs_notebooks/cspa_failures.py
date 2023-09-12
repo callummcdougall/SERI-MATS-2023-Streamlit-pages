@@ -69,9 +69,10 @@ SEQ_LEN = 1000 # 61 for viz
 
 current_batch_size = 17 # These are smaller values we use for vizualization since only these appear on streamlit
 current_seq_len = 61
+SEED=6
 
 NEGATIVE_HEADS = [(10, 7), (11, 10)]
-DATA_TOKS, DATA_STR_TOKS_PARSED, indices = process_webtext(seed=6, batch_size=BATCH_SIZE, seq_len=SEQ_LEN, model=model, verbose=True, return_indices=True)
+DATA_TOKS, DATA_STR_TOKS_PARSED, indices = process_webtext(seed=SEED, batch_size=BATCH_SIZE, seq_len=SEQ_LEN, model=model, verbose=True, return_indices=True)
 
 #%%
 
@@ -137,7 +138,6 @@ if USE_SEMANTICITY:
 
 # Finally, let's save a mean for later use...
 result_mean = get_result_mean([(10, 7), (11, 10)], DATA_TOKS[:100, :], model, verbose=True)
-
 # In[30]:
 
 RECALC_CSPA_RESULTS = True
@@ -145,7 +145,7 @@ RECALC_CSPA_RESULTS = True
 if RECALC_CSPA_RESULTS:
 
     # Empirically, as long as SEQ_LEN large, small BATCH_SIZE gives quite good estimates (experiments about this deleted, too in the weeds)
-    Q_PROJECTION_BATCH_SIZE = 20
+    Q_PROJECTION_BATCH_SIZE = 10
     Q_PROJECTION_SEQ_LEN = 300
 
     qk_projection_config = QKProjectionConfig(
@@ -156,6 +156,7 @@ if RECALC_CSPA_RESULTS:
         mantain_bos_attention=True,
         model = model,
         save_scores = True,
+        swap_model_and_our_max_attention = True,
         save_scaled_resid_pre = True,    
     )
 
@@ -178,17 +179,18 @@ if RECALC_CSPA_RESULTS:
         use_cuda = True,
         verbose = True,
         compute_s_sstar_dict = False,
-        computation_device = "cpu",
+        computation_device = "cuda:0",
+        do_running_updates = True,
     )
     gc.collect()
     t.cuda.empty_cache()
     clear_output()
     cached_cspa = {k:v.detach().cpu() for k,v in cspa_results_q_projection.items()}
-    torch.save(cached_cspa, os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu_again.pt"))
+    torch.save(cached_cspa, os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu_again_seed_{SEED}.pt"))
 
 else:
     # This is just a presaved one of mine...
-    cspa_results_q_projection = torch.load(os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu.pt"))
+    cspa_results_q_projection = torch.load(os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu_again_seed_{SEED}.pt"))
 
 # In[31]:
 
@@ -196,6 +198,10 @@ print(
     "The performance recovered is...",
     get_performance_recovered(cspa_results_q_projection), # ~64
 )
+
+#%%
+
+# All of this is seed=6
 
 #%%
 
@@ -282,7 +288,7 @@ print("studying", len(indices), "of", index_relevant.shape[0]*index_relevant.sha
 def show_model_cspa_attentions(
     indices,
     cspa_results = cspa_results_q_projection,
-    score_key = "pattern",
+    score_key = "scores",
     show_both_maxes = False,
     verbose=False,
 ):
@@ -292,6 +298,8 @@ def show_model_cspa_attentions(
     models_words = []
     our_words = []
     contexts = []
+    model_cnt = 0
+    our_cnt = 0
 
     for batch_idx, seq_idx in indices:
         current_scores = cspa_results_q_projection[score_key][batch_idx, seq_idx, :seq_idx]
@@ -313,16 +321,33 @@ def show_model_cspa_attentions(
         if show_both_maxes:
             ys.append(max_model_attention.values.item())
             xs.append(current_scores[max_model_attention_index].item())
-            cols.extend(["Our max", "Model's max"])
-
+            cols.extend(["Token CSPA had max attention on", "Token that model had max attention on"])
         else:
             cols.append("BOS" if max_attention_index == 0 else "Not BOS")
+
+        # Checks on capitalised letters
+        current_model_word = models_words[-1]
+        if models_words[-1][0] == " " and len(models_words[-1])>1:
+            current_model_word = models_words[-1][1]
+        else:
+            current_model_word = models_words[-1][0]
+        if ord("A") <= ord(current_model_word) <= ord("Z"):
+            model_cnt+=1
+        current_our_word = our_words[-1]
+        if our_words[-1][0] == " " and len(our_words[-1])>1:
+            current_our_word = our_words[-1][1]
+        else:
+            current_our_word = our_words[-1][0]
+        if ord("A") <= ord(current_our_word) <= ord("Z"):
+            our_cnt+=1
+
+    print(f"Model had lots of attention on capital {model_cnt} out of {len(models_words)} times, and we had {our_cnt} out of {len(our_words)} times")
 
     from itertools import chain, repeat
     def interweave(lis):
         """Turn [1,2,3] -> [1,1,2,2,3,3]"""
         return list(chain.from_iterable(repeat(x, 2) for x in lis))
-    
+
     if show_both_maxes:
         indices = interweave(indices)
         our_words = interweave(our_words)
@@ -347,9 +372,7 @@ def show_model_cspa_attentions(
                 "with probability",
                 str(round(xs[i], 2)),                
             ]
-
-            if i%2 == 0:
-                next_things = next_things[4:] + ["and the model's probability was", str(round(ys[i], 2))] + next_things[:4]+ ["and our probability was", str(round(xs[i], 2))]
+            next_things = next_things[4:] + ["and the model's probability was", str(round(ys[i], 2))] + next_things[:4]+ ["and our probability was", str(round(xs[i], 2))]
 
             print("; ".join(next_things))
 
@@ -362,7 +385,7 @@ def show_model_cspa_attentions(
         labels = {
             "x": "CSPA attention",
             "y": "Model attention",
-            "color": "Is max attention on BOS?" if not show_both_maxes else "Which max was taken?",
+            "color": "Is max attention on BOS?" if not show_both_maxes else "What token are we studying here?",
         },
     ).show()
 
@@ -390,5 +413,10 @@ print(
 # %%
 
 show_model_cspa_attentions(fail_indices, show_both_maxes=True, verbose=True)
+
+# %%
+
+# Seed 8 was the second batch of things...
+# Another observation: we have the max attention on BOS loads more than the model too...
 
 # %%
