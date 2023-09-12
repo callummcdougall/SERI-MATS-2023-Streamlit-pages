@@ -11,6 +11,8 @@ t.set_grad_enabled(False)
 
 from transformer_lens.rs.callum2.cspa.cspa_functions import (
     FUNCTION_STR_TOKS,
+    get_first_letter,
+    begins_with_capital_letter,
     rescale_to_retain_bos,
     get_cspa_results,
     get_cspa_results_batched,
@@ -150,16 +152,17 @@ if RECALC_CSPA_RESULTS:
     Q_PROJECTION_SEQ_LEN = 300
 
     qk_projection_config = QKProjectionConfig(
-        q_direction="unembedding",
-        k_direction=None,
-        q_input_multiplier=1.0,
+        q_direction = "unembedding",
+        k_direction = None,
+        q_input_multiplier = 2.0,
         query_bias_multiplier = 1.0,
-        use_same_scaling=False,
-        mantain_bos_attention=True,
+        use_same_scaling = False,
+        mantain_bos_attention = True,
         model = model,
         save_scores = True,
         swap_model_and_our_max_attention = False,
         save_scaled_resid_pre = True,    
+        capital_multiplier = 1.5,
     )
 
     # ov_projection_config = OVProjectionConfig()
@@ -286,16 +289,6 @@ success_indices = list(zip(
 print("studying", len(indices), "of", index_relevant.shape[0]*index_relevant.shape[1], "cases")
 
 # In[ ]:
-
-def get_first_letter(tok: str):
-    assert isinstance(tok, str)
-    if tok[0] != " " or len(tok) == 1:
-        return tok[0]
-    return tok[1]
-
-def begins_with_capital_letter(tok: str):
-    str_tok = get_first_letter(tok)
-    return ord("A") <= ord(str_tok) <= ord("Z")
 
 @dataclass
 class HiAttentionCounter:
@@ -529,3 +522,5 @@ for multiple in [2.5, 2.75, 2.9, 0.0]:
 # 2.6 is best!
 
 # %%
+
+# Ah failure, performance looks much worse (<50% KL recovered) when we do 2.0 multiplier. Even 1.5x mutliplier seems to be slightly worse than normal (59% recovered [:-(] )

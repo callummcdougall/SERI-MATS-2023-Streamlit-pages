@@ -170,6 +170,15 @@ FUNCTION_STR_TOKS =  [
     # Need to go through these words and add more to them, I suspect this list is minimal
 ]
 
+def get_first_letter(tok: str):
+    assert isinstance(tok, str)
+    if tok[0] != " " or len(tok) == 1:
+        return tok[0]
+    return tok[1]
+
+def begins_with_capital_letter(tok: str):
+    str_tok = get_first_letter(tok)
+    return ord("A") <= ord(str_tok) <= ord("Z")
 
 
 def get_performance_recovered(cspa_results: Dict[str, t.Tensor], metric: str = "kl_div_cspa_to_orig", verbose=False):
@@ -362,7 +371,7 @@ class QKProjectionConfig:
     scaled_resid_pre: Optional[Float[torch.Tensor, "batch seq d_model"]] = None
     swap_model_and_our_max_attention: bool = False # Testing whether we are wrong because we just get our top attention wrong. Let's hope so!
     query_bias_multiplier: float = 1.0 # Do we want to multiply query bias up???
-    save_dot_prod_direction: bool = False # Save the direction which helped (for keys) to get high attention score
+    capital_multiplier: Optional[float] = None # Do we want to multiply attention scores on capital letters
 
     def __post_init__(self):
         if self.q_direction == "earlier_heads":
@@ -447,6 +456,7 @@ def run_qk_projections(
     model: HookedTransformer,
     LAYER: int,
     HEAD: int,
+    toks: Int[Tensor, "batch seq"],
     config: QKProjectionConfig,
     semantically_similar_toks: Int[Tensor, "batch seq"],
     scores: Float[Tensor, "batch seqQ seqK"],
@@ -548,22 +558,17 @@ def run_qk_projections(
 
     att_scores = einops.einsum(q, k, f"{q_shape} d_head, {k_shape} d_head -> batch seqQ seqK") / math.sqrt(model.cfg.d_head)
 
-    if config.save_dot_prod_direction:
-        # Make some assumptions...
-        assert k_shape == "batch seqK"
-        assert q_shape == "batch seqQ seqK"
-        # assert 
-
-        important_directions = einops.einsum(
-            "batch seqK, d_model d_head, d_model d_head -> batch seqK d_model",
-            k_input,
-            model.W_Q[LAYER, HEAD],
-            model.W_K[LAYER, HEAD],
+    if config.capital_multiplier is not None:
+        all_str_tokens = model.to_str_tokens(torch.arange(model.cfg.d_vocab))
+        capital_start_tens = torch.tensor(
+            [begins_with_capital_letter(x) for x in all_str_tokens]
         )
-        # removed_ # ... it's really unclear that taking a ton of orthogonal components will help, since our 2.0 assumption already assumes some of the orthogonal components are unembedding related, ugh
 
-        # From that calculate missing attention score
-        # Test this with q_multiplier=1 and reconstructing...
+        multiplier = capital_start_tens.to(toks.device)[toks].float()
+        multiplier *= (config.capital_multiplier - 1.0)
+        multiplier += 1
+
+        att_scores *= multiplier.unsqueeze(1) # Unsqueeze into the Q dimension, as this is a fact about K
 
     att_scores_causal = att_scores.masked_fill_(t.triu(t.ones_like(att_scores), diagonal=1).bool(), -float("inf"))
 
@@ -817,6 +822,7 @@ def get_cspa_results(
             model=model,
             LAYER=LAYER,
             HEAD=HEAD,
+            toks=toks,
             config=qk_projection_config,
             semantically_similar_toks=semantically_similar_toks,
             pattern=pattern,
