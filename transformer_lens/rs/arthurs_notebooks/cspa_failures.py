@@ -55,8 +55,9 @@ model = HookedTransformer.from_pretrained(
     center_unembed=True,
     center_writing_weights=True,
     fold_ln=True,
-    device="cuda",
+    device="cpu",
 )
+warnings.warn("Using CPU for CSPA, so it's slow!")
 model.set_use_split_qkv_input(False)
 model.set_use_attn_result(True)
 clear_output()
@@ -139,9 +140,29 @@ result_mean = get_result_mean([(10, 7), (11, 10)], DATA_TOKS[:100, :], model, ve
 
 # In[30]:
 
-RECALC_CSPA_RESULTS = False
+RECALC_CSPA_RESULTS = True
 
 if RECALC_CSPA_RESULTS:
+
+    # Empirically, as long as SEQ_LEN large, small BATCH_SIZE gives quite good estimates (experiments about this deleted, too in the weeds)
+    Q_PROJECTION_BATCH_SIZE = 20
+    Q_PROJECTION_SEQ_LEN = 300
+
+    qk_projection_config = QKProjectionConfig(
+        q_direction="unembedding",
+        k_direction=None,
+        q_input_multiplier=2.0,
+        use_same_scaling=False,
+        mantain_bos_attention=True,
+        model = model,
+        save_scores = True,
+        save_scaled_resid_pre = True,    
+    )
+
+    # ov_projection_config = OVProjectionConfig()
+    ov_projection_config = None
+
+    print("Starting...")
     cspa_results_q_projection = get_cspa_results_batched(
         model = model,
         toks = DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN],
@@ -162,6 +183,8 @@ if RECALC_CSPA_RESULTS:
     gc.collect()
     t.cuda.empty_cache()
     clear_output()
+    cached_cspa = {k:v.detach().cpu() for k,v in cspa_results_q_projection.items()}
+    torch.save(cached_cspa, os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu_again.pt"))
 
 else:
     # This is just a presaved one of mine...
@@ -169,7 +192,7 @@ else:
 
 # In[31]:
 
-print(
+print(  
     "The performance recovered is...",
     get_performance_recovered(cspa_results_q_projection), # ~64
 )
