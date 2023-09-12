@@ -11,6 +11,7 @@ t.set_grad_enabled(False)
 
 from transformer_lens.rs.callum2.cspa.cspa_functions import (
     FUNCTION_STR_TOKS,
+    rescale_to_retain_bos,
     get_cspa_results,
     get_cspa_results_batched,
     get_performance_recovered,
@@ -151,8 +152,8 @@ if RECALC_CSPA_RESULTS:
     qk_projection_config = QKProjectionConfig(
         q_direction="unembedding",
         k_direction=None,
-        q_input_multiplier=2.0,
-        query_bias_multiplier = 2.0,
+        q_input_multiplier=1.0,
+        query_bias_multiplier = 1.0,
         use_same_scaling=False,
         mantain_bos_attention=True,
         model = model,
@@ -292,6 +293,10 @@ def get_first_letter(tok: str):
         return tok[0]
     return tok[1]
 
+def begins_with_capital_letter(tok: str):
+    str_tok = get_first_letter(tok)
+    return ord("A") <= ord(str_tok) <= ord("Z")
+
 @dataclass
 class HiAttentionCounter:
     """Track what the cases where model/CSPA attended to something most were"""
@@ -372,7 +377,7 @@ def show_model_cspa_attentions(
                 if active_attention[token] > other_attention[token]:
                     if model.to_single_str_token(token) in FUNCTION_STR_TOKS:
                         active_counter.function_word += 1
-                    if ord("A") <= ord(get_first_letter(model.to_single_str_token(token))) <= ord("Z"):
+                    if begins_with_capital_letter(model.to_single_str_token(token)):
                         active_counter.capital += 1
 
     from itertools import chain, repeat
@@ -476,4 +481,51 @@ show_model_cspa_attentions(fail_indices, show_both_maxes=True, verbose=True, do_
 # Wow, we're at >1/2 of the cases being captial cases! The function word does not reproduce, and the BOS thing isn't very siginifcant (~3x as freqent. Still a fiar big though)
 #
 # Freaking 5x as much, too!
+# %%
+#
+# OK, how do we locate the mystical ` is captial` (presumably!) part of the query resid stream?
+# 
+# Look at cosine similarities between these secret other directions???
+# # Hmm problematic because if it's low we need rethink...
+# Is there a "What is the best case scenario experiment to run???" 
+# Get all the pairs of (What else other than unembedding shit pointed in the score direction?, How much attention score did it add?s)
+#
+# Here's another approach: feed in our "failure" sentences into a forward pass, look at diff between capitalised version and not (on keyside?!
+# 
+# Lol let's find the optimal multiplier to times capital letter words by...
+#
+#%%
+
+for multiple in [2.5, 2.75, 2.9, 0.0]: 
+    batch_size, seq_len, _ = cspa_results_q_projection["scores"].shape
+    all_str_tokens = model.to_str_tokens(torch.arange(model.cfg.d_vocab))
+    capital_start_tens = torch.tensor(
+        [begins_with_capital_letter(x) for x in all_str_tokens]
+    )
+    toks_capital_letter_start = capital_start_tens[DATA_TOKS[:batch_size, :seq_len]]
+    multiplier = toks_capital_letter_start.float() * (multiple - 1.0)
+    multiplier += 1.0
+    new_scores = cspa_results_q_projection["scores"].clone()
+    new_scores *= multiplier.unsqueeze(1) # This should be a property of the key, so is the same across the query (middle) dimension 
+    new_bad_bos_pattern = new_scores.softmax(dim=-1)
+    new_pattern = rescale_to_retain_bos(
+        att_probs = new_bad_bos_pattern, 
+        old_bos_probs = cspa_results_q_projection["normal_pattern"][:, :, 0],
+    )
+
+    # Calculate distance to the model's probs...
+
+    old_pattern = cspa_results_q_projection["normal_pattern"].clone()
+
+    total_diff = 0
+
+    for batch_idx, seq_idx in fail_indices:
+        old_seq = old_pattern[batch_idx, seq_idx]
+        old_max_idx = torch.argmax(old_seq).item()
+        total_diff += (old_seq[old_max_idx] - new_pattern[batch_idx, seq_idx, old_max_idx]).abs().item()
+
+    print(multiple, total_diff) # break
+
+# 2.6 is best!
+
 # %%

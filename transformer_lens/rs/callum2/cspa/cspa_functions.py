@@ -187,6 +187,17 @@ def get_performance_recovered(cspa_results: Dict[str, t.Tensor], metric: str = "
     return 1 - numerator.mean().item() / denominator.mean().item()
 
 
+def rescale_to_retain_bos(
+    att_probs: Float[t.Tensor, "batch seqQ seqK"],
+    old_bos_probs: Float[t.Tensor, "batch seqQ"]
+):
+    new_att_probs = att_probs.clone()  # Kinda scared of modifying this in place
+    rest_of_attention_probs = new_att_probs[:, 1:, 1:].sum(dim=-1)
+    scale_factor = (-old_bos_probs[:, 1:] + 1.0) / rest_of_attention_probs  # scale_factor * (sum of non BOS probs) + new BOS probs = 1.0
+    new_att_probs[:, 1:, 1:] *= scale_factor.unsqueeze(-1)
+    new_att_probs[:, 1:, 0] = old_bos_probs[:, 1:]
+    return new_att_probs
+
 def gram_schmidt(basis: Float[Tensor, "... d num"], device=None) -> Float[Tensor, "... d num"]:
     '''
     Performs Gram-Schmidt orthonormalization on a batch of vectors, returning a basis.
@@ -330,7 +341,6 @@ class QKProjectionConfig:
     q_input_multiplier: float = 1.0 # Make this >1.0 as a hack --- the unembedding is ~1/3 of total attention score so this can be pretty helpful
     # When calculating softmax over attention scores, should we use the denominator from the original forward pass? Note this means attention no longer sums to 1.0!
     use_same_scaling: bool = False 
-
     # Note: projection_directions has a cursed type as we use the first for earlier_heads, and second for use_copying_as_query
     projection_directions: Optional[Union[List[Float[torch.Tensor, "batch seq d_model"]], Float[torch.Tensor, "batch seqQ seqK d_model"]]] = None
     mantain_bos_attention: bool = True
@@ -346,15 +356,13 @@ class QKProjectionConfig:
     ])
     W_EE: Optional[torch.Tensor] = None
     use_semantic: bool = False
-
     save_scores: bool = False
     scores: Optional[Float[torch.Tensor, "batch seqQ seqK"]] = None
     save_scaled_resid_pre: bool = False
     scaled_resid_pre: Optional[Float[torch.Tensor, "batch seq d_model"]] = None
-
     swap_model_and_our_max_attention: bool = False # Testing whether we are wrong because we just get our top attention wrong. Let's hope so!
-
     query_bias_multiplier: float = 1.0 # Do we want to multiply query bias up???
+    save_dot_prod_direction: bool = False # Save the direction which helped (for keys) to get high attention score
 
     def __post_init__(self):
         if self.q_direction == "earlier_heads":
@@ -540,6 +548,23 @@ def run_qk_projections(
 
     att_scores = einops.einsum(q, k, f"{q_shape} d_head, {k_shape} d_head -> batch seqQ seqK") / math.sqrt(model.cfg.d_head)
 
+    if config.save_dot_prod_direction:
+        # Make some assumptions...
+        assert k_shape == "batch seqK"
+        assert q_shape == "batch seqQ seqK"
+        # assert 
+
+        important_directions = einops.einsum(
+            "batch seqK, d_model d_head, d_model d_head -> batch seqK d_model",
+            k_input,
+            model.W_Q[LAYER, HEAD],
+            model.W_K[LAYER, HEAD],
+        )
+        # removed_ # ... it's really unclear that taking a ton of orthogonal components will help, since our 2.0 assumption already assumes some of the orthogonal components are unembedding related, ugh
+
+        # From that calculate missing attention score
+        # Test this with q_multiplier=1 and reconstructing...
+
     att_scores_causal = att_scores.masked_fill_(t.triu(t.ones_like(att_scores), diagonal=1).bool(), -float("inf"))
 
     if config.use_same_scaling:
@@ -574,11 +599,11 @@ def run_qk_projections(
             att_probs[:, 2:, 0] = pattern[:, 2:, 0]
 
         else:
-            rest_of_attention_probs = att_probs[:, 1:, 1:].sum(dim=-1)
-            scale_factor = (-pattern[:, 1:, 0] + 1.0) / rest_of_attention_probs # scale_factor * (sum of non BOS probs) + new BOS probs = 1.0
-            att_probs[:, 1:, 1:] *= scale_factor.unsqueeze(-1)
-            att_probs[:, 1:, 0] = pattern[:, 1:, 0]
-
+            # Control the BOS attention
+            att_probs = rescale_to_retain_bos(
+                att_probs=att_probs, # Float[t.Tensor, "batch seqQ seqK"]
+                old_bos_probs=pattern[:, :, 0], # Float[t.Tensor, "batch seqQ"]
+            )
 
     # Testing that we did control BOS attention
     if config.use_same_scaling:
