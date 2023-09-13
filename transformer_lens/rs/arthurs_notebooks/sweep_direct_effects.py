@@ -121,7 +121,7 @@ for MODEL_NAME in ["Pythia-410M"] + [
 
 if ipython is not None:
     fig = go.Figure()
-    json_file = "/root/TransformerLens/transformer_lens/rs/arthur/json_data/head_survey.json"
+    json_file = "/root/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/arthur/json_data/head_survey.json"
     with open(json_file, "r") as f:
         cur_json = json.load(f)
 
@@ -132,8 +132,12 @@ if ipython is not None:
             go.Scatter(
                 x=[int(x.split()[0][1:-1]) for x in data.keys()],
                 y=[x for x in data.values()],
-                text=[str(x) for x in data.keys()],    
-                mode = "markers",        
+                text=[f"L{x[1]}H{x[4]}" for x in data.keys()],    
+                mode = "markers+text", 
+                textposition="top center",
+                textfont=dict(
+                    size=(1 if "gpt-neo" not in model_name else 10),
+                ),       
                 name=model_name if "gpt2-small" not in model_name else "stanford_gpt2_small",
                 marker=dict(
                     size=12 if "gpt2-small" in model_name or "gpt2" == model_name or "gpt2-medium" == model_name else 6,
@@ -144,7 +148,7 @@ if ipython is not None:
     fig.update_layout(
         title="Total effect of mean ablating attention heads. Fatter dots are models trained with dropout",
         xaxis_title="Layer of head",
-        yaxis_title="Percentage loss increase",
+        yaxis_title="Loss increase factor",
     )
 
     fig.show()
