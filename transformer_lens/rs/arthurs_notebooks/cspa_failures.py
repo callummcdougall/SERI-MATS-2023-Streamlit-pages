@@ -140,30 +140,42 @@ if USE_SEMANTICITY:
 # In[ ]:
 
 # Finally, let's save a mean for later use...
-result_mean = get_result_mean([(10, 7), (11, 10)], DATA_TOKS[:100, :], model, verbose=True)
+result_mean = get_result_mean([(10, 7), (11, 10)], DATA_TOKS[100:, :], model, verbose=True)
+
+#%%
+
+warnings.warn("Making DATA_TOKS be the suffix...")
+DATA_TOKS = DATA_TOKS[-30:]
+
 # In[30]:
+
+extra_direction = torch.load("/root/SERI-MATS-2023-Streamlit-pages/dir.pt") # A good direction for projection
+
+#%%
 
 RECALC_CSPA_RESULTS = True
 
 if RECALC_CSPA_RESULTS:
 
     # Empirically, as long as SEQ_LEN large, small BATCH_SIZE gives quite good estimates (experiments about this deleted, too in the weeds)
-    Q_PROJECTION_BATCH_SIZE = 60
+    Q_PROJECTION_BATCH_SIZE = 100
     Q_PROJECTION_SEQ_LEN = 300
 
     qk_projection_config = QKProjectionConfig(
-        q_direction = "unembedding",
+        q_direction = "layer9_heads",
         k_direction = None,
-        q_input_multiplier = 2.0,
+        q_input_multiplier = 1.0,
         query_bias_multiplier = 1.0,
         use_same_scaling = False,
-        mantain_bos_attention = True,
+        mantain_bos_attention = False,
         model = model,
         save_scores = True,
         swap_model_and_our_max_attention = False,
         save_scaled_resid_pre = True,    
-        capital_adder = 0.0, # ... so hacky and worth about a percent
+        capital_adder = 0.0, # 0.75, # 0.25, # 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
         save_q_remove_unembed = True,
+        save_query_input_dotter = True,
+        # another_direction = extra_direction,
     )
 
     # ov_projection_config = OVProjectionConfig()
@@ -172,7 +184,7 @@ if RECALC_CSPA_RESULTS:
     print("Starting...")
     cspa_results_q_projection = get_cspa_results_batched(
         model = model,
-        toks = DATA_TOKS[-Q_PROJECTION_BATCH_SIZE:, :Q_PROJECTION_SEQ_LEN],
+        toks = DATA_TOKS[Q_PROJECTION_BATCH_SIZE:, :Q_PROJECTION_SEQ_LEN],
         max_batch_size = 1,
         negative_head = (10, 7),
         interventions = [],
@@ -243,7 +255,6 @@ fig.show()
 # (8, 35): requiring" -> " rentals" is actually attended to. But " homeowners" is predicted more, and hence this ablation picks it more.
 # (33, 42): model attends to " remove" -> " Blackberry", we attend to " remove" -> " ban". And Blackberry is the top prediction! Ban is in fact third
 # (12, 26): we have half the amount of attention to ' Art' as we should. Context is "\n\n" -> " Art" and the only higher predicted thing is " This" (which is likely a function word)
-
 
 # In[ ]:
 
@@ -538,8 +549,8 @@ t.set_grad_enabled(True)
 #%%
 
 def evaluate_directions(
-    no_unembed_scaled_resid_pre: Float[torch.Tensor, "batch seq d_model"],
-    old_scores: Float[torch.Tensor, "batch seq d_model"],
+    no_unembed_scaled_resid_pre: Float[torch.Tensor, "batch seqQ seqK d_model"],
+    old_scores: Float[torch.Tensor, "batch seqQ seqK"],
     true_pattern: Float[torch.Tensor, "batch seq d_model"],
     directions: List[Float[torch.Tensor, "d_model"]],    
 ):
@@ -549,7 +560,7 @@ def evaluate_directions(
         no_unembed_scaled_resid_pre,
         directions[0],
         "batch seqQ seqK d_model, d_model -> batch seqQ seqK",
-    ) / np.sqrt(model.cfg.d_model)
+    ) / np.sqrt(model.cfg.d_model) # TODO meaningless, you need integrate K here...
 
     new_attention_score = old_scores + extra_attention_score
     raw_attention_pattern = new_attention_score.softmax(dim=-1)
@@ -562,11 +573,17 @@ def evaluate_directions(
 
 #%%
 
-TRAIN_SIZE = 1 # because we messed up how we're saving things, TODO make this bigger
+TRAIN_SIZE = 25 # because we messed up how we're saving things, TODO make this bigger
+
+assert TRAIN_SIZE <= Q_PROJECTION_BATCH_SIZE
 
 train_unembed_scores = cspa_results_q_projection["scores"][:TRAIN_SIZE]
 train_ground_truth = cspa_results_q_projection["normal_pattern"][:TRAIN_SIZE]
 train_no_unembed_scaled_resid_pre = cspa_results_q_projection["q_remove_unembed"][:TRAIN_SIZE]
+if len(train_no_unembed_scaled_resid_pre.shape) == 1:
+    # Some of our projections do not split by Q and K...
+    pass
+
 test_unembed_scores = cspa_results_q_projection["scores"][TRAIN_SIZE:]
 test_ground_truth = cspa_results_q_projection["normal_pattern"][TRAIN_SIZE:]
 test_no_unembed_scaled_resid_pre = cspa_results_q_projection["q_remove_unembed"][TRAIN_SIZE:]
@@ -592,10 +609,14 @@ for split_name, unembed_scores, ground_truth in zip(
 
 #%%
 
-direction = torch.nn.Parameter(torch.randn(model.cfg.d_model), requires_grad=True)
+# Set seed 
+torch.manual_seed(41)
+direction = torch.nn.Parameter(2.0 * torch.randn(model.cfg.d_model), requires_grad=True)
 opt = torch.optim.Adam([direction], lr=1)
 
 NUM_EPOCHS = 100
+
+all_directions = [direction.data.detach().clone()]
 
 for epoch_idx in tqdm(range(NUM_EPOCHS)):
     opt.zero_grad() 
@@ -609,7 +630,7 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
     )
 
     # Calculate loss
-    loss = all_losses.mean()
+    loss = all_losses.mean() + direction.abs().sum() * 2e-8
 
     # Backpropagate
     loss.backward()
@@ -617,23 +638,26 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
     # Update parameters
     opt.step()
 
-    # Evaluate on test set
-    if False: # TODO uncomment when we have more data
-        with torch.no_grad():
-            new_attention = evaluate_directions(
-                test_no_unembed_scaled_resid_pre,
-                test_unembed_scores,
-                test_ground_truth,
-                [direction],
-            )
+    all_directions.append(direction.data.detach().clone())
 
-            test_loss = ((new_attention - test_ground_truth)**2).mean()
+    # Evaluate on test set
+    with torch.no_grad():
+        all_test_losses = evaluate_directions(
+            test_no_unembed_scaled_resid_pre,
+            test_unembed_scores,
+            test_ground_truth,
+            [direction],
+        )
+
+        test_loss = all_test_losses.mean()
 
     # Print metrics
     print(
         f"Epoch {epoch_idx+1}/{NUM_EPOCHS}",
         f"Train Loss: {loss.item():.7f}",
-        # f"Test Loss: {test_loss.item():.4f}",
+        f"Test Loss: {test_loss.item():.7f}",
     )
 
 # %%
+
+# Okay we got 90% cosine similarity on this direction. Does it help

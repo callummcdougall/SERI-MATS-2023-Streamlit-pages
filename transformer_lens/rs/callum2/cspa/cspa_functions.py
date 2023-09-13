@@ -375,6 +375,9 @@ class QKProjectionConfig:
 
     save_q_remove_unembed: bool = False # Save what gets left over after doing
     q_remove_unembed: Optional[Float[torch.Tensor, "batch seq d_model"]] = None
+    another_direction: Optional[Float[torch.Tensor, "d_model"]] = None # If we want to use an additional direction for the query
+    save_query_input_dotter: bool = False
+    query_input_dotter: Optional[Float[torch.Tensor, "batch seqK d_model"]] = None
 
     def __post_init__(self):
         if self.q_direction == "earlier_heads":
@@ -482,6 +485,16 @@ def run_qk_projections(
             q_input_per_position = config.q_input_multiplier * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len).clone()
             unembeddings = model.W_U.T[semantically_similar_toks]
             projection_directions_per_k = einops.repeat(unembeddings, "batch seqK K_semantic d_model -> K_semantic batch seqQ seqK d_model", seqQ=seq_len)
+
+            if config.another_direction is not None:
+                # Work with another dimension on the Q side
+
+                # Expand K_semantic by 1 to account for additional direction
+                projection_directions_per_k = torch.cat([projection_directions_per_k, torch.zeros_like(projection_directions_per_k)[:1]]) # "K_semantic batch seqQ seqK d_model -> (K_semantic+1) batch seqQ seqK d_model")
+
+                # Fill last direction with another_direction
+                projection_directions_per_k[-1] = einops.repeat(config.another_direction, "d_model -> batch seqQ seqK d_model", batch=projection_directions_per_k.shape[1], seqQ=seq_len, seqK=projection_directions_per_k.shape[3])
+            
             q_input, _ = multi_project(
                 q_input_per_position,
                 list(projection_directions_per_k),
@@ -532,8 +545,11 @@ def run_qk_projections(
                 projection_directions,
                 device=computation_device,
             )
+
+            if config.save_q_remove_unembed:
+                config.q_remove_unembed = (base_q_input.cpu() - q_input.cpu())
+
             q_input = q_input.to(base_q_input.device) # TODO make this less verbose: why isn't this on the device
-            # Keep BOS attention score the same
 
     else:
         q_input = base_q_input
@@ -558,12 +574,19 @@ def run_qk_projections(
 
     q = einops.einsum(q_input, model.W_Q[LAYER, HEAD], f"{q_shape} d_model, d_model d_head -> {q_shape} d_head")
     k = einops.einsum(k_input, model.W_K[LAYER, HEAD], f"{k_shape} d_model, d_model d_head -> {k_shape} d_head")
-
     # Broadcast on last dim :-) 
     q += model.b_Q[LAYER, HEAD] * config.query_bias_multiplier
     k += model.b_K[LAYER, HEAD] * config.query_bias_multiplier
 
     att_scores = einops.einsum(q, k, f"{q_shape} d_head, {k_shape} d_head -> batch seqQ seqK") / math.sqrt(model.cfg.d_head)
+
+    if config.save_query_input_dotter:
+        query_input_dotter = einops.einsum(
+            k,
+            model.W_Q[LAYER, HEAD],
+            f"{k_shape} d_head, d_model d_head -> {k_shape} d_model",
+        ).cpu()
+        config.query_input_dotter = query_input_dotter
 
     if config.capital_adder is not None:
         all_str_tokens = model.to_str_tokens(torch.arange(model.cfg.d_vocab))
@@ -593,7 +616,7 @@ def run_qk_projections(
         # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(1, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices + 1] = models_attention_on_ours
 
     # Control attention to BOS ie keep the same BOS attention and scale all other attentions so things sum to 1
-    if config.mantain_bos_attention and not config.use_same_scaling and config.q_direction != "layer9_heads":
+    if config.mantain_bos_attention and not config.use_same_scaling: # and config.q_direction != "layer9_heads": # Did we ever get layer9_heads to work without BOS control?
 
         if config.swap_model_and_our_max_attention:
             rest_of_attention_probs = att_probs[:, 2:, 1:].sum(dim=-1)
@@ -940,6 +963,8 @@ def get_cspa_results(
             cspa_results["scores"] = qk_projection_config.scores
         if qk_projection_config.save_q_remove_unembed:
             cspa_results["q_remove_unembed"] = qk_projection_config.q_remove_unembed
+        if qk_projection_config.save_query_input_dotter:
+            cspa_results["query_input_dotter"] = qk_projection_config.query_input_dotter.cpu()
     if return_dla: 
         cspa_results["dla"] = dla_cspa
     if return_logits:

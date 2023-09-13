@@ -8,3 +8,5 @@ transformer_lens/rs/arthurs_notebooks/cspa_with_projection.py
 cspa_results_q_projection_on_cpu.pt
 cspa_results_q_projection_on_cpu_again_seed_6.pt
 cspa_results_q_projection_on_cpu_again_seed_6_big_stashed.pt
+dir.pt
+cspa_results_q_projection_on_cpu_again_seed_6_big_but_suffix.pt
