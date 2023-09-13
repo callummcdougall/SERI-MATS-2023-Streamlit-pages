@@ -540,6 +540,9 @@ def run_qk_projections(
                 "batch seqQ n_heads d_model -> n_heads batch seqQ d_model",
             ))
 
+            if config.another_direction is not None:
+                projection_directions.append(einops.repeat(config.another_direction, "d_model -> batch seqQ d_model", batch=projection_directions[0].shape[0], seqQ=projection_directions[0].shape[1]))
+
             q_input, _ = multi_project(
                 config.q_input_multiplier * base_q_input,
                 projection_directions,

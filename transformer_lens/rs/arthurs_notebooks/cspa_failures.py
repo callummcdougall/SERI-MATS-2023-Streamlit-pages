@@ -140,16 +140,16 @@ if USE_SEMANTICITY:
 # In[ ]:
 
 # Finally, let's save a mean for later use...
-result_mean = get_result_mean([(10, 7), (11, 10)], DATA_TOKS[100:, :], model, verbose=True)
+result_mean = get_result_mean([(10, 7), (11, 10)], DATA_TOKS[-100:, :], model, verbose=True)
 
 #%%
 
-warnings.warn("Making DATA_TOKS be the suffix...")
-DATA_TOKS = DATA_TOKS[-30:]
+# warnings.warn("Making DATA_TOKS be the suffix...")
+# DATA_TOKS = DATA_TOKS[-30:]
 
 # In[30]:
 
-extra_direction = torch.load("/root/SERI-MATS-2023-Streamlit-pages/dir.pt") # A good direction for projection
+extra_direction = torch.load("/root/SERI-MATS-2023-Streamlit-pages/a_new_saved_direction.pt") # A good direction for projection
 
 #%%
 
@@ -172,7 +172,7 @@ if RECALC_CSPA_RESULTS:
         save_scores = True,
         swap_model_and_our_max_attention = False,
         save_scaled_resid_pre = True,    
-        capital_adder = 0.0, # 0.75, # 0.25, # 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
+        capital_adder = 1.0, # 0.75, # 0.25, # 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
         save_q_remove_unembed = True,
         save_query_input_dotter = True,
         # another_direction = extra_direction,
@@ -184,7 +184,7 @@ if RECALC_CSPA_RESULTS:
     print("Starting...")
     cspa_results_q_projection = get_cspa_results_batched(
         model = model,
-        toks = DATA_TOKS[Q_PROJECTION_BATCH_SIZE:, :Q_PROJECTION_SEQ_LEN],
+        toks = DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN],
         max_batch_size = 1,
         negative_head = (10, 7),
         interventions = [],
@@ -549,44 +549,54 @@ t.set_grad_enabled(True)
 #%%
 
 def evaluate_directions(
-    no_unembed_scaled_resid_pre: Float[torch.Tensor, "batch seqQ seqK d_model"],
+    no_unembed_scaled_resid_pre: Float[torch.Tensor, "batch seqQ ... d_model"], # sometimes we have a K dimension too... also TODO rename from "no_unembed", this just means having removed a key dimension 
     old_scores: Float[torch.Tensor, "batch seqQ seqK"],
-    true_pattern: Float[torch.Tensor, "batch seq d_model"],
+    true_pattern: Float[torch.Tensor, "batch seqQ seqK"],
+    query_input_dotter: Float[torch.Tensor, "batch seqK d_model"],
     directions: List[Float[torch.Tensor, "d_model"]],    
+    do_rescale_to_retain_bos: bool = True,
 ):
+    no_unembed_scaled_resid_pre_shape_prefix = f"batch seqQ{' seqK' if len(no_unembed_scaled_resid_pre.shape)==4 else ''}"
+
     assert len(directions)==1, "Haven't implemented len(directions)>1 yet"
+    direction_projection = einops.einsum(
+        no_unembed_scaled_resid_pre,
+        directions[0] / directions[0].norm(),
+        f"{no_unembed_scaled_resid_pre_shape_prefix} d_model, d_model -> {no_unembed_scaled_resid_pre_shape_prefix}",
+    ).unsqueeze(-1) * directions[0]
 
     extra_attention_score = einops.einsum(
-        no_unembed_scaled_resid_pre,
-        directions[0],
-        "batch seqQ seqK d_model, d_model -> batch seqQ seqK",
-    ) / np.sqrt(model.cfg.d_model) # TODO meaningless, you need integrate K here...
+        direction_projection,
+        query_input_dotter,
+        f"{no_unembed_scaled_resid_pre_shape_prefix} d_model, batch seqK d_model -> batch seqQ seqK",
+    ) / np.sqrt(model.cfg.d_head)
 
     new_attention_score = old_scores + extra_attention_score
-    raw_attention_pattern = new_attention_score.softmax(dim=-1)
-    new_attention_pattern = rescale_to_retain_bos(
-        att_probs = raw_attention_pattern, 
-        old_bos_probs = true_pattern[:, :, 0],
-    )
+    new_attention_pattern = new_attention_score.softmax(dim=-1)
+
+    if do_rescale_to_retain_bos:
+        new_attention_pattern = rescale_to_retain_bos(
+            att_probs = new_attention_pattern, 
+            old_bos_probs = true_pattern[:, :, 0],
+        )
 
     return (new_attention_pattern - true_pattern) ** 2
 
 #%%
 
-TRAIN_SIZE = 25 # because we messed up how we're saving things, TODO make this bigger
+TRAIN_SIZE = 75 # because we messed up how we're saving things, TODO make this bigger
 
 assert TRAIN_SIZE <= Q_PROJECTION_BATCH_SIZE
 
 train_unembed_scores = cspa_results_q_projection["scores"][:TRAIN_SIZE]
 train_ground_truth = cspa_results_q_projection["normal_pattern"][:TRAIN_SIZE]
 train_no_unembed_scaled_resid_pre = cspa_results_q_projection["q_remove_unembed"][:TRAIN_SIZE]
-if len(train_no_unembed_scaled_resid_pre.shape) == 1:
-    # Some of our projections do not split by Q and K...
-    pass
-
 test_unembed_scores = cspa_results_q_projection["scores"][TRAIN_SIZE:]
 test_ground_truth = cspa_results_q_projection["normal_pattern"][TRAIN_SIZE:]
 test_no_unembed_scaled_resid_pre = cspa_results_q_projection["q_remove_unembed"][TRAIN_SIZE:]
+
+train_query_input_dotter = cspa_results_q_projection["query_input_dotter"][:TRAIN_SIZE]
+test_query_input_dotter = cspa_results_q_projection["query_input_dotter"][TRAIN_SIZE:]
 
 for split_name, unembed_scores, ground_truth in zip(
     ["train", "test"], 
@@ -612,7 +622,7 @@ for split_name, unembed_scores, ground_truth in zip(
 # Set seed 
 torch.manual_seed(41)
 direction = torch.nn.Parameter(2.0 * torch.randn(model.cfg.d_model), requires_grad=True)
-opt = torch.optim.Adam([direction], lr=1)
+opt = torch.optim.Adam([direction], lr=0.1)
 
 NUM_EPOCHS = 100
 
@@ -626,11 +636,14 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
         no_unembed_scaled_resid_pre = train_no_unembed_scaled_resid_pre,
         old_scores = train_unembed_scores,
         true_pattern = train_ground_truth,
+        query_input_dotter = train_query_input_dotter,
         directions = [direction],
+        do_rescale_to_retain_bos = False,
     )
 
     # Calculate loss
-    loss = all_losses.mean() + direction.abs().sum() * 2e-8
+    loss = all_losses.mean()
+    # loss = all_loss_mean_loss + direction.abs().sum() * 2e-8
 
     # Backpropagate
     loss.backward()
@@ -646,7 +659,9 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
             test_no_unembed_scaled_resid_pre,
             test_unembed_scores,
             test_ground_truth,
+            test_query_input_dotter,
             [direction],
+            do_rescale_to_retain_bos=False,
         )
 
         test_loss = all_test_losses.mean()
@@ -654,7 +669,7 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
     # Print metrics
     print(
         f"Epoch {epoch_idx+1}/{NUM_EPOCHS}",
-        f"Train Loss: {loss.item():.7f}",
+        f"Train Loss: {all_loss_mean_loss.item():.7f}",
         f"Test Loss: {test_loss.item():.7f}",
     )
 
