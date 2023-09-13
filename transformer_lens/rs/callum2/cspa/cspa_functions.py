@@ -371,7 +371,10 @@ class QKProjectionConfig:
     scaled_resid_pre: Optional[Float[torch.Tensor, "batch seq d_model"]] = None
     swap_model_and_our_max_attention: bool = False # Testing whether we are wrong because we just get our top attention wrong. Let's hope so!
     query_bias_multiplier: float = 1.0 # Do we want to multiply query bias up???
-    capital_adder: Optional[float] = None # Do we want to add attention scores on capital letters? Timesing didn't work
+    capital_adder: Optional[float] = None # Do we want to add attention scores on capital letters? (Note that timesing didn't work)
+
+    save_q_remove_unembed: bool = False # Save what gets left over after doing
+    q_remove_unembed: Optional[Float[torch.Tensor, "batch seq d_model"]] = None
 
     def __post_init__(self):
         if self.q_direction == "earlier_heads":
@@ -484,6 +487,10 @@ def run_qk_projections(
                 list(projection_directions_per_k),
                 device=computation_device,
             )
+
+            if config.save_q_remove_unembed:
+                config.q_remove_unembed = (q_input_per_position.cpu() - q_input.cpu()) / config.q_input_multiplier
+
             # Keep BOS attention score the same
             q_input[:, :, 0] = base_q_input
 
@@ -931,6 +938,8 @@ def get_cspa_results(
         cspa_results["normal_pattern"] = normal_pattern.detach().cpu()
         if qk_projection_config.save_scores:
             cspa_results["scores"] = qk_projection_config.scores
+        if qk_projection_config.save_q_remove_unembed:
+            cspa_results["q_remove_unembed"] = qk_projection_config.q_remove_unembed
     if return_dla: 
         cspa_results["dla"] = dla_cspa
     if return_logits:

@@ -162,7 +162,8 @@ if RECALC_CSPA_RESULTS:
         save_scores = True,
         swap_model_and_our_max_attention = False,
         save_scaled_resid_pre = True,    
-        capital_adder = 0.5, # ... so hacky and worth about a percent
+        capital_adder = 0.0, # ... so hacky and worth about a percent
+        save_q_remove_unembed = True,
     )
 
     # ov_projection_config = OVProjectionConfig()
@@ -523,3 +524,116 @@ for multiple in [2.5, 2.75, 2.9, 0.0]:
 # %%
 
 # Ah failure, performance looks much worse (<50% KL recovered) when we do 2.0 multiplier. Even 1.5x mutliplier seems to be slightly worse than normal (59% recovered [:-(] )
+
+#%%
+
+# New plan: can we learn the important directions (where maybe "capital-ness" is stored?)
+#
+# After having a think, linear and exact method seems variously flawed, let's train N directions (initially N=1) to minimize L2 of attention probs
+#
+#%%
+
+t.set_grad_enabled(True)
+
+#%%
+
+def evaluate_directions(
+    no_unembed_scaled_resid_pre: Float[torch.Tensor, "batch seq d_model"],
+    old_scores: Float[torch.Tensor, "batch seq d_model"],
+    true_pattern: Float[torch.Tensor, "batch seq d_model"],
+    directions: List[Float[torch.Tensor, "d_model"]],    
+):
+    assert len(directions)==1, "Haven't implemented len(directions)>1 yet"
+
+    extra_attention_score = einops.einsum(
+        no_unembed_scaled_resid_pre,
+        directions[0],
+        "batch seqQ seqK d_model, d_model -> batch seqQ seqK",
+    ) / np.sqrt(model.cfg.d_model)
+
+    new_attention_score = old_scores + extra_attention_score
+    raw_attention_pattern = new_attention_score.softmax(dim=-1)
+    new_attention_pattern = rescale_to_retain_bos(
+        att_probs = raw_attention_pattern, 
+        old_bos_probs = true_pattern[:, :, 0],
+    )
+
+    return (new_attention_pattern - true_pattern) ** 2
+
+#%%
+
+TRAIN_SIZE = 1 # because we messed up how we're saving things, TODO make this bigger
+
+train_unembed_scores = cspa_results_q_projection["scores"][:TRAIN_SIZE]
+train_ground_truth = cspa_results_q_projection["normal_pattern"][:TRAIN_SIZE]
+train_no_unembed_scaled_resid_pre = cspa_results_q_projection["q_remove_unembed"][:TRAIN_SIZE]
+test_unembed_scores = cspa_results_q_projection["scores"][TRAIN_SIZE:]
+test_ground_truth = cspa_results_q_projection["normal_pattern"][TRAIN_SIZE:]
+test_no_unembed_scaled_resid_pre = cspa_results_q_projection["q_remove_unembed"][TRAIN_SIZE:]
+
+for split_name, unembed_scores, ground_truth in zip(
+    ["train", "test"], 
+    [train_unembed_scores, test_unembed_scores],
+    [train_ground_truth, test_ground_truth],
+    strict=True,
+):
+    new_attention = unembed_scores.softmax(dim=-1)
+    new_attention = rescale_to_retain_bos(
+        att_probs = new_attention, 
+        old_bos_probs = ground_truth[:, :, 0],
+    )
+
+    print(
+        f"The initial {split_name} L2 performance is", 
+        round(((new_attention - ground_truth)**2).mean().item(), 5)
+    )
+
+# Interesting, values are pretty small
+
+#%%
+
+direction = torch.nn.Parameter(torch.randn(model.cfg.d_model), requires_grad=True)
+opt = torch.optim.Adam([direction], lr=1)
+
+NUM_EPOCHS = 100
+
+for epoch_idx in tqdm(range(NUM_EPOCHS)):
+    opt.zero_grad() 
+
+    # Forward pass
+    all_losses = evaluate_directions(
+        no_unembed_scaled_resid_pre = train_no_unembed_scaled_resid_pre,
+        old_scores = train_unembed_scores,
+        true_pattern = train_ground_truth,
+        directions = [direction],
+    )
+
+    # Calculate loss
+    loss = all_losses.mean()
+
+    # Backpropagate
+    loss.backward()
+
+    # Update parameters
+    opt.step()
+
+    # Evaluate on test set
+    if False: # TODO uncomment when we have more data
+        with torch.no_grad():
+            new_attention = evaluate_directions(
+                test_no_unembed_scaled_resid_pre,
+                test_unembed_scores,
+                test_ground_truth,
+                [direction],
+            )
+
+            test_loss = ((new_attention - test_ground_truth)**2).mean()
+
+    # Print metrics
+    print(
+        f"Epoch {epoch_idx+1}/{NUM_EPOCHS}",
+        f"Train Loss: {loss.item():.7f}",
+        # f"Test Loss: {test_loss.item():.4f}",
+    )
+
+# %%
