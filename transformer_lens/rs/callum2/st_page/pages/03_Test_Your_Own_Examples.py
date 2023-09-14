@@ -1,3 +1,4 @@
+#%%
 # Make sure explore_prompts is in path (it will be by default in Streamlit)
 import sys, os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
@@ -6,6 +7,7 @@ from pathlib import Path
 import streamlit as st
 st.set_page_config(layout="wide")
 from streamlit.components.v1 import html
+from contextlib import nullcontext
 from transformer_lens import HookedTransformer
 from collections import defaultdict
 import pickle
@@ -86,20 +88,31 @@ model, cspa_semantic_dict, result_mean = load_model_and_semantic_dict_and_result
 
 prompt = st.sidebar.text_area("Prompt", placeholder="Press 'Generate' button to run.", on_change=None)
 
+#%%
 
-def generate_html(HTML_PLOTS=None):
+def generate_html(
+    HTML_PLOTS=None,
+    return_html=False,
+):
 
     # Make sure there's some prompt which has been given
     assert prompt is not None
     assert prompt != ""
 
+    context_manager = nullcontext() if return_html else st.spinner("Generating data from prompt...")
+
     # Spinner while generating data
-    with st.spinner("Generating data from prompt..."):
+    with context_manager:
 
         # Get the number of prompts you've created so far (store it in a list in session state)
-        BATCH_SIZE = len(st.session_state["prompt_list"])
-        st.session_state["prompt"] = prompt
-        st.session_state["prompt_list"].append(prompt)
+
+        if return_html:
+            BATCH_SIZE = 1
+        else:
+            BATCH_SIZE = len(st.session_state["prompt_list"])
+            st.session_state["prompt"] = prompt
+            st.session_state["prompt_list"].append(prompt)
+
 
         # Get tokens from prompt, and deal with edge case where it's a single string (this shouldn't happen)
         toks = model.to_tokens(prompt)
@@ -123,18 +136,21 @@ def generate_html(HTML_PLOTS=None):
             negative_heads=[(10, 7), (11, 10)],
             model_results=model_results,
             save_files=False,
+            result_mean=result_mean,
         )
-        cspa_results, s_sstar_pairs = get_cspa_results(
+        cspa_results, s_sstar_pairs, _1, _2, _3 = get_cspa_results(
             model=model,
             toks=toks,
             negative_head=(10, 7), #  this currently doesn't do anything; it's always 10.7
-            components_to_project=["o"],
-            K_unembeddings=5,
-            K_semantic=3,
+            # components_to_project=["o"],
+            interventions = ["ov"],
+            K_unembeddings=1.0,
+            K_semantic=8,
             semantic_dict=cspa_semantic_dict,
-            effective_embedding="W_E (including MLPs)",
+            # effective_embedding="W_E (including MLPs)",
             result_mean=result_mean,
-            use_cuda=False,
+            return_logits=True,
+            # use_cuda=False,
             return_dla=True,
         )
         HTML_PLOTS_NEW = add_cspa_to_streamlit_page(
@@ -155,17 +171,39 @@ def generate_html(HTML_PLOTS=None):
                 for (first_key, *other_keys), html in dict_of_plots.items()
             })
         del HTML_PLOTS_NEW
-        st.session_state["HTML_PLOTS"] = HTML_PLOTS
-        
 
+        if return_html:
+            return HTML_PLOTS
 
-button = st.sidebar.button("Generate", on_click=generate_html)
+        else:
+            st.session_state["HTML_PLOTS"] = HTML_PLOTS
 
-BATCH_SIZE = len(st.session_state["prompt_list"])
-HTML_PLOTS = st.session_state.get("HTML_PLOTS", None)
+if True:
+    ht=generate_html(return_html=True)
+
+#%%
+
+# Skip
+if False:
+    button = st.sidebar.button("Generate", on_click=generate_html)
+
+#%%
+
+# Skip these
+if False:
+    BATCH_SIZE = len(st.session_state["prompt_list"])
+    HTML_PLOTS = st.session_state.get("HTML_PLOTS", None)
+
+#%%
+
+BATCH_SIZE = 1
+HTML_PLOTS = ht
+
+#%%
 
 if BATCH_SIZE > 0:
-    batch_idx = st.sidebar.radio("Pick a sequence", range(BATCH_SIZE), index=BATCH_SIZE-1, format_func=lambda x: st.session_state["prompt_list"][x])
+    # batch_idx = st.sidebar.radio("Pick a sequence", range(BATCH_SIZE), index=BATCH_SIZE-1, format_func=lambda x: (prompt if BATCH_SIZE==1 else st.session_state["prompt_list"][x]))
+    batch_idx = 1
     head_name = st.sidebar.radio("Pick a head", NEG_HEADS) #  + ["both"])
     if head_name == "10.7":
         EFFECTS = ["direct", "indirect", "indirect (excluding 11.10)", "both"]
@@ -473,3 +511,4 @@ In other words, we want to see very dark colors for all the bold words, because 
             HTML_DLA_ALL = CSS + HTML_DLA
             height = 500
         html(HTML_DLA_ALL, height=height)
+# %%

@@ -394,6 +394,10 @@ def add_cspa_to_streamlit_page(
         if verbose: print(f"{'Generating logit plots':<22} ...", end="\r"); t0 = time.time()
 
         # ! Get all logit visulisations (this can look janky because I like being able to compare different forms of CSPA!)
+
+        for k in cspa_results:
+            print(cspa_results[k].keys(), "islkfd")
+
         if not isinstance(cspa_results, dict): cspa_results = {"": cspa_results}
         html_logits_list = {
             k: generate_html_for_logit_plot(
