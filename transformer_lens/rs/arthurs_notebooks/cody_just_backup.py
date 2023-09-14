@@ -40,9 +40,7 @@ import plotly.express as px
 import circuitsvis as cv
 import os, sys
 
-
 # In[3]:
-
 
 # Arthur has to change a tad on his setup
 from transformer_lens.rs.arthurs_notebooks.path_patching import Node, IterNode, path_patch, act_patch
@@ -54,7 +52,6 @@ from transformer_lens.cautils.plotly_utils import * # covers imshow hist etc
 # In[5]:
 
 device
-
 
 # In[6]:
 

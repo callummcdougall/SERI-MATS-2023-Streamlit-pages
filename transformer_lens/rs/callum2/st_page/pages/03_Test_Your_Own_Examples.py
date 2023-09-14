@@ -187,14 +187,10 @@ if True:
 if False:
     button = st.sidebar.button("Generate", on_click=generate_html)
 
-#%%
-
 # Skip these
 if False:
     BATCH_SIZE = len(st.session_state["prompt_list"])
     HTML_PLOTS = st.session_state.get("HTML_PLOTS", None)
-
-#%%
 
 BATCH_SIZE = 1
 HTML_PLOTS = ht
