@@ -374,6 +374,7 @@ logit_lens_head_bottom_ten = torch.topk(
 ABS_MODE = True
 def to_string(toks):
     s = model.to_string(toks)
+    assert isinstance(s, str)
     s = s.replace("\n", "\\n")
     return "|" + s
 
@@ -395,7 +396,9 @@ top_probs = list(
 
 # %%
 
-CUTOFF = 10
+STEP_CUTOFFS = {1: 10, 2: 2, 3: 10}
+# See paper for Section 2.1 definitions
+
 intersecc = 0
 
 for batch_idx in range(BATCH_SIZE):  # range(len(top_unembeds_per_position)):
@@ -414,7 +417,6 @@ for batch_idx in range(BATCH_SIZE):  # range(len(top_unembeds_per_position)):
         the_logits - max_logits,
         to_string=to_string,
     )
-    # TODO where did the most contribution come from??? Sum across tokens that are the same
 
     cur_tokens = top5p_tokens[batch_idx][1 : top5p_seq_indices[batch_idx] + 1].tolist()
     list_set_of_tokens = list(set(cur_tokens))
@@ -427,18 +429,17 @@ for batch_idx in range(BATCH_SIZE):  # range(len(top_unembeds_per_position)):
     print(
         "\n10.7 Attentions for in context\n",
     )
-
     # head_pattern stores the attention pattern of 10.7
     cur_head_pattern = head_pattern[
         top5p_batch_indices[batch_idx],
         top5p_seq_indices[batch_idx],
         1 : top5p_seq_indices[batch_idx] + 1,
     ]
-
     tok_att = {k:0 for k in list_set_of_tokens}
     for i in range(0, top5p_seq_indices[batch_idx]):
         tok_att[cur_tokens[i]] += cur_head_pattern[i]
-    top_toks = sorted(cur_tokens, key=lambda tok: tok_att[tok], reverse=True)
+    top_toks = sorted(list_set_of_tokens, key=lambda tok: tok_att[tok], reverse=True)
+    top_str_toks = model.to_str_tokens(torch.tensor(top_toks))
 
     print(
         list(zip(
@@ -462,12 +463,7 @@ for batch_idx in range(BATCH_SIZE):  # range(len(top_unembeds_per_position)):
         )
     )
 
-    # Look into logit_lens_of_head ...
-    # top_negative_logit_changes = model.to_str_tokens(
-    #     logit_lens_head_bottom_ten.indices[
-    #         top5p_batch_indices[batch_idx], top5p_seq_indices[batch_idx]
-    #     ]
-    # )
+    # logit lens of head
     sorted_head_predictions = sorted(
         list_set_of_tokens,
         key = lambda tokk: logit_lens_of_head[top5p_batch_indices[batch_idx]][top5p_seq_indices[batch_idx]][tokk],
@@ -485,26 +481,9 @@ for batch_idx in range(BATCH_SIZE):  # range(len(top_unembeds_per_position)):
         "\nTop negative logit changes from 10.7:\n",
         top_negative_logit_changes,
     )
-
-    print("\nModel's top probs (EDIT: that come from in context!):")
-    sorted_predictions = sorted(
-        list_set_of_tokens,
-        key = lambda tokk: logit_lens_pre_ten[top5p_batch_indices[batch_idx]][top5p_seq_indices[batch_idx]][tokk],
-        reverse=True,
-    )
-    in_context_probs = model.to_str_tokens(torch.tensor(sorted_predictions))
-    print(
-        list(
-            zip(
-                in_context_probs,
-                logit_lens_pre_ten[top5p_batch_indices[batch_idx]][top5p_seq_indices[batch_idx]][sorted_predictions],
-                strict=True,
-            )
-        )
-    )
-
     intersection_size = len(
-        set(in_context_probs[:CUTOFF]).intersection(set(in_context_words[:CUTOFF])).intersection(set(in_context_head_probs[:CUTOFF])))
+        set(top_str_toks[:STEP_CUTOFFS[2]]).intersection(set(in_context_words[:STEP_CUTOFFS[1]])).intersection(set(in_context_head_probs[:STEP_CUTOFFS[3]]))
+    )
     if intersection_size > 0:
         intersecc+=1
     print("Intersection size", intersection_size)
@@ -521,7 +500,9 @@ for batch_idx in range(BATCH_SIZE):  # range(len(top_unembeds_per_position)):
     #     )
     # )
 
-    display(my_obj)
+    # display(my_obj)
+    print(set(top_str_toks[:STEP_CUTOFFS[2]]), set(in_context_words[:STEP_CUTOFFS[1]]), set(in_context_head_probs[:STEP_CUTOFFS[3]]))
+
 
 print(
     intersecc/BATCH_SIZE,
