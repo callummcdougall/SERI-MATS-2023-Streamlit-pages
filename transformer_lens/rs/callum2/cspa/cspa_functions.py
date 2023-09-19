@@ -634,7 +634,9 @@ def run_qk_projections(
         our_max_probs_indices = att_probs[:, 2:, 1:].topk(k=1, dim=-1).indices
         models_attention_on_ours = pattern[torch.arange(pattern.shape[0]).unsqueeze(1), torch.arange(2, pattern.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1]
 
-        att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), models_max_probs.indices.squeeze(-1) + 1] = models_max_probs.values.squeeze(-1)
+        # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), models_max_probs.indices.squeeze(-1) + 1] = models_max_probs.values.squeeze(-1)
+        att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1] = models_attention_on_ours
+        
 
         # NOTE: we'll redo this later...
         # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(1, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices + 1] = models_attention_on_ours
@@ -645,17 +647,16 @@ def run_qk_projections(
         if config.swap_model_and_our_max_attention:
             # We've already rewritten models_max_probs to on the relevant positions.
             rest_of_attention_probs = att_probs[:, 2:, 1:].sum(dim=-1)
-            rest_of_attention_probs -= models_max_probs.values.squeeze(-1)
+            # rest_of_attention_probs -= models_max_probs.values.squeeze(-1)
+            rest_of_attention_probs -= models_attention_on_ours
 
             # scale_factor * (sum of non other probs) + new BOS probs + new_probs = 1.0
-            scale_factor = (-models_max_probs.values.squeeze(-1)-pattern[:, 2:, 0]+1.0) / (rest_of_attention_probs) 
+            scale_factor = (-models_attention_on_ours-pattern[:, 2:, 0]+1.0) / (rest_of_attention_probs) 
             att_probs[:, 2:, 1:] *= scale_factor.unsqueeze(-1)
 
             # Redone
-            att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), models_max_probs.indices.squeeze(-1) + 1] = models_max_probs.values.squeeze(-1)
-
-            # This part seems wrong? Only replacing the model's stuff...
-            # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1] = models_attention_on_ours
+            # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), models_max_probs.indices.squeeze(-1) + 1] = models_max_probs.values.squeeze(-1)
+            att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1] = models_attention_on_ours
             
             att_probs[:, 2:, 0] = pattern[:, 2:, 0]
 
