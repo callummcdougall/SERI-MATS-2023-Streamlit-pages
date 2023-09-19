@@ -439,7 +439,7 @@ for batch_idx in range(BATCH_SIZE):
     # 2. Look into blocks.10.hook_resid_pre predictions
     print("\nTop model predictions before 10.7 of words in context:")
     cur_ten_probs = logit_lens_top_pre_ten_probs[top5p_batch_indices[batch_idx]]
-    in_context_words = model.to_str_tokens(cur_ten_probs[1][top5p_seq_indices[batch_idx]])
+    in_context_words = model.to_str_tokens(cur_ten_probs[1][top5p_seq_indices[batch_idx]]) # ?! These are not in context words though Arthur?!
     print(
         list(
             zip(
@@ -452,7 +452,10 @@ for batch_idx in range(BATCH_SIZE):
     )
 
     # TODO analyze proper noun stuff
-
-
+    if not (
+        []
+    ):
+        misses += 1
+        continue
 
 # %%
