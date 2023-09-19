@@ -173,8 +173,7 @@ if RECALC_CSPA_RESULTS:
         save_scores = True,
         swap_model_and_our_max_attention = False,
         swap_model_and_our_max_scores = False,
-        capital_adder = 0.0, # 0.75, # 0.25, # 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
-        proper_noun_adder = 1.0,
+        capital_adder = 1.0, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
         save_scaled_resid_pre = True,    
         save_q_remove_unembed = True,
         save_query_input_dotter = True,

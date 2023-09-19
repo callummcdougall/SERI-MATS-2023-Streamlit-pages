@@ -181,8 +181,21 @@ def begins_with_capital_letter(tok: str):
     str_tok = get_first_letter(tok)
     return ord("A") <= ord(str_tok) <= ord("Z")
 
-def is_proper_noun(tok: str):
-    stripped_tok = tok.strip()
+def get_proper_nouns(model):
+    nltk.download('punkt')
+    nltk.download('averaged_perceptron_tagger')
+    proper_nouns = torch.zeros(model.cfg.d_vocab).bool()
+    print("Computing proper nouns...")
+    for i in tqdm(range(model.cfg.d_vocab)):
+        s = model.to_single_str_token(i)
+        tokens = nltk.word_tokenize(s)
+        tagged = nltk.pos_tag(tokens)
+        proper_nouns = [word for word, pos in tagged if pos == 'NNP']
+        if len(proper_nouns)>0: 
+            proper_nouns[i] = True
+    if "gpt" in model.cfg.model_name:
+        proper_nouns[50256] = False # BOS is not a proper noun ... hacky
+    return proper_nouns
 
 
 def get_performance_recovered(cspa_results: Dict[str, t.Tensor], metric: str = "kl_div_cspa_to_orig", verbose=False):
@@ -422,19 +435,10 @@ class QKProjectionConfig:
         if self.proper_noun_adder is not None:
             warnings.warn("Proper noun adder seems to miss lots of things that the model considers proper nounds, e.g Vog, Qualcomm, Aurora")
             print("Downloading NLTK...")
-            nltk.download('punkt')
-            nltk.download('averaged_perceptron_tagger')
-            self.proper_nouns = torch.zeros(self.model.cfg.d_vocab).bool()
-            print("Computing proper nouns...")
-            for i in tqdm(range(self.model.cfg.d_vocab)):
-                s = self.model.to_single_str_token(i)
-                tokens = nltk.word_tokenize(s)
-                tagged = nltk.pos_tag(tokens)
-                proper_nouns = [word for word, pos in tagged if pos == 'NNP']
-                if len(proper_nouns)>0: 
-                    self.proper_nouns[i] = True
-            if "gpt" in self.model.cfg.model_name:
-                self.proper_nouns[50256] = False # BOS is not a proper noun
+            self.proper_nouns = get_proper_nouns(
+                self.model,
+            )
+
 
     def compute_copying_as_query_directions(self, cache: "ActivationCache", negative_head):
         """This was another idea that didn't really work, recovering pretty bad KL"""
