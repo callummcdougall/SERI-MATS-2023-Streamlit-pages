@@ -432,6 +432,8 @@ class QKProjectionConfig:
                 proper_nouns = [word for word, pos in tagged if pos == 'NNP']
                 if len(proper_nouns)>0: 
                     self.proper_nouns[i] = True
+            if "gpt" in self.model.cfg.model_name:
+                self.proper_nouns[50256] = False # BOS is not a proper noun
 
     def compute_copying_as_query_directions(self, cache: "ActivationCache", negative_head):
         """This was another idea that didn't really work, recovering pretty bad KL"""
@@ -632,7 +634,7 @@ def run_qk_projections(
         att_scores += adder.unsqueeze(1) # Unsqueeze into the Q dimension, as this is a fact about K
 
     if config.proper_noun_adder is not None:
-        adder = config.proper_nouns[toks].float() * config.proper_noun_adder
+        adder = config.proper_nouns.to(toks.device)[toks].float() * config.proper_noun_adder
         att_scores += adder.unsqueeze(1) # Unsqueeze into the Q dimension, as this is a fact about K
 
     att_scores_causal = att_scores.masked_fill_(t.triu(t.ones_like(att_scores), diagonal=1).bool(), -float("inf"))
