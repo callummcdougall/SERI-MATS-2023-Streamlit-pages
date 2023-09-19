@@ -703,8 +703,9 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
 # Let's train the biases for all the attention scores
 
 torch.set_grad_enabled(True)
-attention_score_bias = torch.nn.Parameter(torch.zeros(model.cfg.d_vocab), requires_grad=True)
-opt = torch.optim.AdamW([attention_score_bias], lr=0.01)
+attention_score_bias = torch.nn.Parameter(torch.zeros(model.cfg.d_vocab).double(), requires_grad=True)
+attention_score_scale = torch.nn.Parameter(torch.ones(model.cfg.d_vocab).double(), requires_grad=True)
+opt = torch.optim.Adam([attention_score_bias, attention_score_scale], lr=0.01)
 NUM_EPOCHS = 1000
 all_biases = [attention_score_bias.data.detach().clone()]
 
@@ -714,12 +715,14 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
 
     # Forward pass
     # TODO crucial to remove "pattern" -> "scores"
-    new_attention_score = cspa_results_q_projection["scores"][:, :Q_PROJECTION_SEQ_LEN//2] + attention_score_bias[einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)][:, :Q_PROJECTION_SEQ_LEN//2]
+    tok_indices = einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)
+    new_attention_score = (torch.maximum(cspa_results_q_projection["scores"][:, :Q_PROJECTION_SEQ_LEN//2].double(), torch.tensor(-30.0, dtype=torch.double))*attention_score_scale[tok_indices][:, :Q_PROJECTION_SEQ_LEN//2]) + attention_score_bias[tok_indices][:, :Q_PROJECTION_SEQ_LEN//2]
+
     new_attention_pattern = new_attention_score.softmax(dim=-1)
     loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN//2]) ** 2).mean()
 
     # Backpropagate
-    loss.backward()
+    loss.backward(retain_graph=True)
 
     # Update parameters
     opt.step()
@@ -728,7 +731,10 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
 
     # Evaluate on test set
     with torch.no_grad():
-        new_attention_score = cspa_results_q_projection["scores"][:Q_PROJECTION_BATCH_SIZE, Q_PROJECTION_SEQ_LEN//2:Q_PROJECTION_SEQ_LEN] + attention_score_bias[einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)][:, Q_PROJECTION_SEQ_LEN//2:]
+        # new_attention_score = cspa_results_q_projection["scores"][:Q_PROJECTION_BATCH_SIZE, Q_PROJECTION_SEQ_LEN//2:Q_PROJECTION_SEQ_LEN] + attention_score_bias[einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)][:, Q_PROJECTION_SEQ_LEN//2:]
+        test_tok_indices = einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)
+        new_attention_score = cspa_results_q_projection["scores"][:Q_PROJECTION_BATCH_SIZE, Q_PROJECTION_SEQ_LEN//2:Q_PROJECTION_SEQ_LEN]*attention_score_scale[test_tok_indices][:, Q_PROJECTION_SEQ_LEN//2:] + attention_score_bias[test_tok_indices][:, Q_PROJECTION_SEQ_LEN//2:]
+
         new_attention_pattern = new_attention_score.softmax(dim=-1)
         test_loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][:, Q_PROJECTION_SEQ_LEN//2:]) ** 2).mean()
 
@@ -741,3 +747,32 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
 # %%
 
 # Then actually evaluate this attention pattern on the original task! 
+
+#%%
+
+# Side project on query bias
+
+from transformer_lens.rs.callum2.utils import get_effective_embedding
+W_EE = get_effective_embedding(model)["W_E (only MLPs)"]
+b_Q = model.b_Q[10, 7]
+W_K = model.W_K[10, 7]
+query_bias_words = (+einops.einsum(
+    W_EE,
+    W_K,
+    b_Q,
+    "n_vocab d_model, d_model d_head, d_head -> n_vocab",
+)).topk(k=50)
+
+from pprint import pprint
+
+pprint(
+    list(
+        zip(
+            model.to_str_tokens(query_bias_words.indices)
+            , query_bias_words.values.tolist()
+        )
+    )
+)
+
+# %%
+
