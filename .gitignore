@@ -1,3 +1,6 @@
+eleven_ten_mean.pt
+my_attention_pattern.pt
+ten_seven_mean.pt
 __pycache__*
 *.ipynb
 !**/callum2/**/*.ipynb
@@ -10,3 +13,4 @@ cspa_results_q_projection_on_cpu_again_seed_6.pt
 cspa_results_q_projection_on_cpu_again_seed_6_big_stashed.pt
 dir.pt
 cspa_results_q_projection_on_cpu_again_seed_6_big_but_suffix.pt
+**/wandb/**

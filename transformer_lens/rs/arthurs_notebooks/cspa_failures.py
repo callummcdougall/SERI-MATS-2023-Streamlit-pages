@@ -182,10 +182,10 @@ if RECALC_CSPA_RESULTS:
         use_same_scaling = False,
         mantain_bos_attention = False,
         model = model,
-        save_scores = False,
+        save_scores = True,
         swap_model_and_our_max_attention = False,
         swap_model_and_our_max_scores = False,
-        capital_adder = 1.25, # 1.25, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
+        capital_adder = 0.0, # 1.25, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
         save_scaled_resid_pre = True,    
         # save_q_remove_unembed = True,
         # save_query_input_dotter = True,
@@ -506,7 +506,7 @@ show_model_cspa_attentions(sorted_fail_indices, show_both_maxes=True, verbose=Tr
 # Freaking 5x as much, too!
 # %%
 #
-# OK, how do we locate the mystical ` is captial` (presumably!) part of the query resid stream?
+# OK, how do we locate the mystical ` is capital` (presumably!) part of the query resid stream?
 # 
 # Look at cosine similarities between these secret other directions???
 # # Hmm problematic because if it's low we need rethink...
@@ -713,9 +713,10 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
     opt.zero_grad() 
 
     # Forward pass
-    new_attention_score = cspa_results_q_projection["scores"][:Q_PROJECTION_BATCH_SIZE//2] + attention_score_bias[einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE//2, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)]
+    # TODO crucial to remove "pattern" -> "scores"
+    new_attention_score = cspa_results_q_projection["scores"][:, :Q_PROJECTION_SEQ_LEN//2] + attention_score_bias[einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)][:, :Q_PROJECTION_SEQ_LEN//2]
     new_attention_pattern = new_attention_score.softmax(dim=-1)
-    loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][:Q_PROJECTION_BATCH_SIZE//2]) ** 2).mean()
+    loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN//2]) ** 2).mean()
 
     # Backpropagate
     loss.backward()
@@ -727,9 +728,9 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
 
     # Evaluate on test set
     with torch.no_grad():
-        new_attention_score = cspa_results_q_projection["scores"][Q_PROJECTION_BATCH_SIZE//2:] + attention_score_bias[einops.repeat(DATA_TOKS[Q_PROJECTION_BATCH_SIZE//2:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)]
+        new_attention_score = cspa_results_q_projection["scores"][:Q_PROJECTION_BATCH_SIZE, Q_PROJECTION_SEQ_LEN//2:Q_PROJECTION_SEQ_LEN] + attention_score_bias[einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)][:, Q_PROJECTION_SEQ_LEN//2:]
         new_attention_pattern = new_attention_score.softmax(dim=-1)
-        test_loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][Q_PROJECTION_BATCH_SIZE//2:, :Q_PROJECTION_SEQ_LEN]) ** 2).mean()
+        test_loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][:, Q_PROJECTION_SEQ_LEN//2:]) ** 2).mean()
 
     # Print metrics
     print(

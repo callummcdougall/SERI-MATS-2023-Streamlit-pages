@@ -906,24 +906,23 @@ def get_cspa_results(
     if qk_projection_config is not None: # Overwrite the attention pattern with something that we've recomputed
         normal_pattern = pattern.detach().cpu().clone() # Save the old pattern...
         
-        warnings.warn("Synthetic load in of pattern!")
-        pattern = torch.load(os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/my_attention_pattern.pt")).to(pattern.device)[global_range[0]:global_range[1]]
         gc.collect()
         t.cuda.empty_cache()
-
-        # run_qk_projections(
-        #     model=model,
-        #     LAYER=LAYER,
-        #     HEAD=HEAD,
-        #     toks=toks,
-        #     config=qk_projection_config,
-        #     semantically_similar_toks=semantically_similar_toks,
-        #     pattern=pattern,
-        #     scores=scores,
-        #     scaled_resid_pre=scaled_resid_pre,
-        #     pre_head_result_orig=pre_head_result_orig,
-        #     computation_device=computation_device,
-        # )
+        pattern = run_qk_projections(
+            model=model,
+            LAYER=LAYER,
+            HEAD=HEAD,
+            toks=toks,
+            config=qk_projection_config,
+            semantically_similar_toks=semantically_similar_toks,
+            pattern=pattern,
+            scores=scores,
+            scaled_resid_pre=scaled_resid_pre,
+            pre_head_result_orig=pre_head_result_orig,
+            computation_device=computation_device,
+        )
+        gc.collect()
+        t.cuda.empty_cache()
 
     # ====================================================================
     # ! STEP 4: Get CSPA results (this is the hard part!)
