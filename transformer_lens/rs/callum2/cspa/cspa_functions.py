@@ -420,6 +420,7 @@ class QKProjectionConfig:
             self.W_EE = W_EE
 
         if self.proper_noun_adder is not None:
+            warnings.warn("Proper noun adder seems to miss lots of things that the model considers proper nounds, e.g Vog, Qualcomm, Aurora")
             print("Downloading NLTK...")
             nltk.download('punkt')
             nltk.download('averaged_perceptron_tagger')
