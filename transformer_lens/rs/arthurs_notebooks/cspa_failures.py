@@ -171,10 +171,11 @@ if RECALC_CSPA_RESULTS:
         mantain_bos_attention = True,
         model = model,
         save_scores = True,
-        swap_model_and_our_max_attention = True,
+        swap_model_and_our_max_attention = False,
         swap_model_and_our_max_scores = False,
-        save_scaled_resid_pre = True,    
         capital_adder = 0.0, # 0.75, # 0.25, # 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
+        proper_noun_adder = 1.0,
+        save_scaled_resid_pre = True,    
         save_q_remove_unembed = True,
         save_query_input_dotter = True,
         # another_direction = extra_direction,
@@ -183,6 +184,8 @@ if RECALC_CSPA_RESULTS:
     # ov_projection_config = OVProjectionConfig()
     ov_projection_config = None
 
+    gc.collect()
+    t.cuda.empty_cache()
     print("Starting...")
     cspa_results_q_projection = get_cspa_results_batched(
         model = model,

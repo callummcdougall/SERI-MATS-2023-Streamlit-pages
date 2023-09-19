@@ -6,6 +6,7 @@ import gc
 import torch
 import warnings
 from typing import Dict, Any, Tuple, List, Optional, Literal, Union
+import nltk
 from transformer_lens import HookedTransformer, utils
 from functools import partial
 import einops
@@ -179,6 +180,9 @@ def get_first_letter(tok: str):
 def begins_with_capital_letter(tok: str):
     str_tok = get_first_letter(tok)
     return ord("A") <= ord(str_tok) <= ord("Z")
+
+def is_proper_noun(tok: str):
+    stripped_tok = tok.strip()
 
 
 def get_performance_recovered(cspa_results: Dict[str, t.Tensor], metric: str = "kl_div_cspa_to_orig", verbose=False):
@@ -374,6 +378,8 @@ class QKProjectionConfig:
     swap_model_and_our_max_scores: bool = False # Same for scores
     query_bias_multiplier: float = 1.0 # Do we want to multiply query bias up???
     capital_adder: Optional[float] = None # Do we want to add attention scores on capital letters? (Note that timesing didn't work)
+    proper_noun_adder: Optional[float] = None # Do we want to add attention scores on proper nouns? (Note that timesing didn't work)
+    proper_nouns: Optional[Float[torch.Tensor, "n_vocab"]] = None # Stores the token IDs of proper nouns
 
     save_q_remove_unembed: bool = False # Save what gets left over after doing
     q_remove_unembed: Optional[Float[torch.Tensor, "batch seq d_model"]] = None
@@ -412,6 +418,20 @@ class QKProjectionConfig:
         if self.k_direction == "effective_embedding":
             W_EE = get_effective_embedding(self.model, use_codys_without_attention_changes=True)["W_E (including MLPs)"]
             self.W_EE = W_EE
+
+        if self.proper_noun_adder is not None:
+            print("Downloading NLTK...")
+            nltk.download('punkt')
+            nltk.download('averaged_perceptron_tagger')
+            self.proper_nouns = torch.zeros(self.model.cfg.d_vocab).bool()
+            print("Computing proper nouns...")
+            for i in tqdm(range(self.model.cfg.d_vocab)):
+                s = self.model.to_single_str_token(i)
+                tokens = nltk.word_tokenize(s)
+                tagged = nltk.pos_tag(tokens)
+                proper_nouns = [word for word, pos in tagged if pos == 'NNP']
+                if len(proper_nouns)>0: 
+                    self.proper_nouns[i] = True
 
     def compute_copying_as_query_directions(self, cache: "ActivationCache", negative_head):
         """This was another idea that didn't really work, recovering pretty bad KL"""
@@ -611,6 +631,10 @@ def run_qk_projections(
         adder = capital_start_tens.to(toks.device)[toks].float() * config.capital_adder
         att_scores += adder.unsqueeze(1) # Unsqueeze into the Q dimension, as this is a fact about K
 
+    if config.proper_noun_adder is not None:
+        adder = config.proper_nouns[toks].float() * config.proper_noun_adder
+        att_scores += adder.unsqueeze(1) # Unsqueeze into the Q dimension, as this is a fact about K
+
     att_scores_causal = att_scores.masked_fill_(t.triu(t.ones_like(att_scores), diagonal=1).bool(), -float("inf"))
 
     if config.swap_model_and_our_max_scores:
@@ -634,8 +658,8 @@ def run_qk_projections(
         our_max_probs_indices = att_probs[:, 2:, 1:].topk(k=1, dim=-1).indices
         models_attention_on_ours = pattern[torch.arange(pattern.shape[0]).unsqueeze(1), torch.arange(2, pattern.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1]
 
-        # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), models_max_probs.indices.squeeze(-1) + 1] = models_max_probs.values.squeeze(-1)
-        att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1] = models_attention_on_ours
+        att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), models_max_probs.indices.squeeze(-1) + 1] = models_max_probs.values.squeeze(-1)
+        # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1] = models_attention_on_ours
         
 
         # NOTE: we'll redo this later...
@@ -647,16 +671,16 @@ def run_qk_projections(
         if config.swap_model_and_our_max_attention:
             # We've already rewritten models_max_probs to on the relevant positions.
             rest_of_attention_probs = att_probs[:, 2:, 1:].sum(dim=-1)
-            # rest_of_attention_probs -= models_max_probs.values.squeeze(-1)
-            rest_of_attention_probs -= models_attention_on_ours
+            rest_of_attention_probs -= models_max_probs.values.squeeze(-1)
+            # rest_of_attention_probs -= models_attention_on_ours
 
             # scale_factor * (sum of non other probs) + new BOS probs + new_probs = 1.0
-            scale_factor = (-models_attention_on_ours-pattern[:, 2:, 0]+1.0) / (rest_of_attention_probs) 
+            scale_factor = (-models_max_probs.values.squeeze(-1)-pattern[:, 2:, 0]+1.0) / (rest_of_attention_probs) 
             att_probs[:, 2:, 1:] *= scale_factor.unsqueeze(-1)
 
             # Redone
-            # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), models_max_probs.indices.squeeze(-1) + 1] = models_max_probs.values.squeeze(-1)
-            att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1] = models_attention_on_ours
+            att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), models_max_probs.indices.squeeze(-1) + 1] = models_max_probs.values.squeeze(-1)
+            # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1] = models_attention_on_ours
             
             att_probs[:, 2:, 0] = pattern[:, 2:, 0]
 
