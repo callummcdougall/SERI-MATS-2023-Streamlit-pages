@@ -15,6 +15,7 @@ from transformer_lens.rs.callum2.generate_st_html.generate_html_funcs import (
     generate_4_html_plots,
     CSS,
 )
+from transformer_lens.rs.callum2.cspa.cspa_functions import get_proper_nouns
 from transformer_lens.rs.callum2.cspa.cspa_semantic_similarity import (
     get_equivalency_toks,
     get_related_words,
@@ -395,40 +396,28 @@ top_probs = list(
 
 # %%
 
-STEP_CUTOFFS = {1: 10, 2: 2, 3: 10}
-# See paper for Section 2.1 definitions
+confusion_matrix = torch.zeros(2,2).long()
+misses=0
 
-intersecc = 0
-
-for batch_idx in range(BATCH_SIZE):  # range(len(top_unembeds_per_position)):
+for batch_idx in range(BATCH_SIZE):
     assert top5p_seq_indices[batch_idx] + 2 <= top_unembeds_per_position.shape[1], (
         top5p_seq_indices[batch_idx],
         top_unembeds_per_position.shape[1],
     )
-    the_logits = -top_unembeds_per_position[batch_idx][
-        1 : top5p_seq_indices[batch_idx] + 2
-    ]
-    if ABS_MODE:  # WAT
-        the_logits = torch.abs(the_logits)
-    max_logits = the_logits[:, 1:-1].max().item()
-    my_obj = cv.logits.token_log_probs(  # I am using this in a very cursed way:
-        top5p_tokens[batch_idx][: top5p_seq_indices[batch_idx] + 1],
-        the_logits - max_logits,
-        to_string=to_string,
-    )
 
+    # 0. Setup
     cur_tokens = top5p_tokens[batch_idx][1 : top5p_seq_indices[batch_idx] + 1].tolist()
     list_set_of_tokens = list(set(cur_tokens))
-
     print(
         f"True completion for {SEED=} {top5p_batch_indices[batch_idx]=} {top5p_seq_indices[batch_idx]=}:"
         + model.to_string(top5p_tokens[batch_idx][top5p_seq_indices[batch_idx] + 1])
     )
 
+    # 1. Look into L10H7's attention in context
     print(
         "\n10.7 Attentions for in context\n",
     )
-    # head_pattern stores the attention pattern of 10.7
+    # `head_pattern` stores the attention pattern of 10.7
     cur_head_pattern = head_pattern[
         top5p_batch_indices[batch_idx],
         top5p_seq_indices[batch_idx],
@@ -447,6 +436,7 @@ for batch_idx in range(BATCH_SIZE):  # range(len(top_unembeds_per_position)):
         ))
     )
 
+    # 2. Look into blocks.10.hook_resid_pre predictions
     print("\nTop model predictions before 10.7 of words in context:")
     cur_ten_probs = logit_lens_top_pre_ten_probs[top5p_batch_indices[batch_idx]]
     in_context_words = model.to_str_tokens(cur_ten_probs[1][top5p_seq_indices[batch_idx]])
@@ -462,5 +452,7 @@ for batch_idx in range(BATCH_SIZE):  # range(len(top_unembeds_per_position)):
     )
 
     # TODO analyze proper noun stuff
+
+
 
 # %%
