@@ -140,7 +140,19 @@ if USE_SEMANTICITY:
 # In[ ]:
 
 # Finally, let's save a mean for later use...
-result_mean = get_result_mean([(10, 7), (11, 10)], DATA_TOKS[-100:, :], model, verbose=True)
+
+if os.path.exists(os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/ten_seven_mean.pt")):
+    print("Loading from file")
+    result_mean = {
+        (10, 7): torch.load(os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/ten_seven_mean.pt")),
+        (11, 10): torch.load(os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/eleven_ten_mean.pt")),
+    }
+
+    # torch.save(result_mean[(10, 7)], os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/ten_seven_mean.pt")) 
+    # torch.save(result_mean[(11,10)], os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/eleven_ten_mean.pt"))
+
+else:
+    result_mean = get_result_mean([(10, 7), (11, 10)], DATA_TOKS[-100:, :], model, verbose=True)
 
 #%%
 
@@ -168,15 +180,15 @@ if RECALC_CSPA_RESULTS:
         q_input_multiplier = 2.0,
         query_bias_multiplier = 1.0,
         use_same_scaling = False,
-        mantain_bos_attention = True,
+        mantain_bos_attention = False,
         model = model,
-        save_scores = True,
+        save_scores = False,
         swap_model_and_our_max_attention = False,
         swap_model_and_our_max_scores = False,
-        capital_adder = 1.375, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
+        capital_adder = 1.25, # 1.25, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
         save_scaled_resid_pre = True,    
-        save_q_remove_unembed = True,
-        save_query_input_dotter = True,
+        # save_q_remove_unembed = True,
+        # save_query_input_dotter = True,
         # another_direction = extra_direction,
     )
 
@@ -220,7 +232,7 @@ print(
     get_performance_recovered(cspa_results_q_projection), # ~64
 )
 
-#%%
+#%%``
 
 # All of this is seed=6
 
@@ -683,3 +695,48 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
 # %%
 
 # Okay we got 90% cosine similarity on this direction. Does it help
+# (A: No, seemed basically irrelevant)
+#
+#
+# %%
+
+# Let's train the biases for all the attention scores
+
+torch.set_grad_enabled(True)
+attention_score_bias = torch.nn.Parameter(torch.zeros(model.cfg.d_vocab), requires_grad=True)
+opt = torch.optim.AdamW([attention_score_bias], lr=0.01)
+NUM_EPOCHS = 1000
+all_biases = [attention_score_bias.data.detach().clone()]
+
+for epoch_idx in tqdm(range(NUM_EPOCHS)):
+
+    opt.zero_grad() 
+
+    # Forward pass
+    new_attention_score = cspa_results_q_projection["scores"][:Q_PROJECTION_BATCH_SIZE//2] + attention_score_bias[einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE//2, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)]
+    new_attention_pattern = new_attention_score.softmax(dim=-1)
+    loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][:Q_PROJECTION_BATCH_SIZE//2]) ** 2).mean()
+
+    # Backpropagate
+    loss.backward()
+
+    # Update parameters
+    opt.step()
+
+    all_biases.append(attention_score_bias.data.detach().clone())
+
+    # Evaluate on test set
+    with torch.no_grad():
+        new_attention_score = cspa_results_q_projection["scores"][Q_PROJECTION_BATCH_SIZE//2:] + attention_score_bias[einops.repeat(DATA_TOKS[Q_PROJECTION_BATCH_SIZE//2:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)]
+        new_attention_pattern = new_attention_score.softmax(dim=-1)
+        test_loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][Q_PROJECTION_BATCH_SIZE//2:, :Q_PROJECTION_SEQ_LEN]) ** 2).mean()
+
+    # Print metrics
+    print(
+        f"Epoch {epoch_idx+1}/{NUM_EPOCHS}",
+        f"Train Loss: {loss.item():.7f}",
+        f"Test Loss: {test_loss.item():.7f}",
+    )
+# %%
+
+# Then actually evaluate this attention pattern on the original task! 

@@ -209,7 +209,7 @@ def get_performance_recovered(cspa_results: Dict[str, t.Tensor], metric: str = "
     if "loss" in metric:
         numerator -= cspa_results["loss"]
 
-    assert numerator.shape==denominator.shape
+    assert numerator.shape==denominator.shape, f"numerator.shape: {numerator.shape}, denominator.shape: {denominator.shape}"
     return 1 - numerator.mean().item() / denominator.mean().item()
 
 
@@ -734,6 +734,7 @@ def get_cspa_results(
     ov_projection_config: Optional[OVProjectionConfig] = None,
     K_unembeddings: Optional[Union[int, float]] = None,
     K_semantic: int = 10,
+    global_range: Optional[Tuple[int,int]] = None,
     only_keep_negative_components: bool = False,
     semantic_dict: dict = {},
     result_mean: Optional[Dict[Tuple[int, int], Float[Tensor, "seq_plus d_model"]]] = None,
@@ -904,19 +905,25 @@ def get_cspa_results(
 
     if qk_projection_config is not None: # Overwrite the attention pattern with something that we've recomputed
         normal_pattern = pattern.detach().cpu().clone() # Save the old pattern...
-        pattern = run_qk_projections(
-            model=model,
-            LAYER=LAYER,
-            HEAD=HEAD,
-            toks=toks,
-            config=qk_projection_config,
-            semantically_similar_toks=semantically_similar_toks,
-            pattern=pattern,
-            scores=scores,
-            scaled_resid_pre=scaled_resid_pre,
-            pre_head_result_orig=pre_head_result_orig,
-            computation_device=computation_device,
-        )
+        
+        warnings.warn("Synthetic load in of pattern!")
+        pattern = torch.load(os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/my_attention_pattern.pt")).to(pattern.device)[global_range[0]:global_range[1]]
+        gc.collect()
+        t.cuda.empty_cache()
+
+        # run_qk_projections(
+        #     model=model,
+        #     LAYER=LAYER,
+        #     HEAD=HEAD,
+        #     toks=toks,
+        #     config=qk_projection_config,
+        #     semantically_similar_toks=semantically_similar_toks,
+        #     pattern=pattern,
+        #     scores=scores,
+        #     scaled_resid_pre=scaled_resid_pre,
+        #     pre_head_result_orig=pre_head_result_orig,
+        #     computation_device=computation_device,
+        # )
 
     # ====================================================================
     # ! STEP 4: Get CSPA results (this is the hard part!)
@@ -1003,16 +1010,19 @@ def get_cspa_results(
     logits_cspa = (resid_post_final_cspa / final_scale) @ model.W_U + model.b_U
     loss_cspa = model.loss_fn(logits_cspa, toks, per_token=True)
 
+    gc.collect()
+    t.cuda.empty_cache()
+
     cspa_results = {
-        "loss": loss,
-        "loss_cspa": loss_cspa,
-        "loss_ablated": loss_mean_ablated,
+        "loss": loss.cpu(),
+        "loss_cspa": loss_cspa.cpu(),
+        "loss_ablated": loss_mean_ablated.cpu(),
         # "dla": dla_cspa,
         # "logits": logits_cspa,
         # "logits_orig": logits,
         # "logits_ablated": logits_mean_ablated,
-        "kl_div_ablated_to_orig": kl_div(logits, logits_mean_ablated),
-        "kl_div_cspa_to_orig": kl_div(logits, logits_cspa),
+        "kl_div_ablated_to_orig": kl_div(logits.cpu(), logits_mean_ablated.cpu()),
+        "kl_div_cspa_to_orig": kl_div(logits.cpu(), logits_cspa.cpu()),
         "pattern": pattern.detach().cpu(),
         "normal_scores": scores.detach().cpu(),
     }
@@ -1030,6 +1040,10 @@ def get_cspa_results(
         cspa_results["logits_cspa"] = logits_cspa
         cspa_results["logits_orig"] = logits
         cspa_results["logits_ablated"] = logits_mean_ablated
+
+    # print(
+        
+    # )
 
     return cspa_results, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, semantically_similar_toks, time_for_sstar
 
@@ -1098,9 +1112,14 @@ def get_cspa_results_batched(
         
         # Get new results
         t_get = time.time()
+
+        current_indices_lower = max_batch_size * i
+        current_indices_upper = current_indices_lower + _toks.shape[0]
+
         cspa_results, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, semantically_similar_toks, t_sstar = get_cspa_results(
             model = model,
             toks = _toks,
+            global_range = (current_indices_lower, current_indices_upper),
             negative_head = negative_head,
             interventions = interventions,
             qk_projection_config=qk_projection_config,
