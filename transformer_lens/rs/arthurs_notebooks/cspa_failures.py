@@ -162,18 +162,19 @@ if RECALC_CSPA_RESULTS:
     Q_PROJECTION_SEQ_LEN = 300
 
     qk_projection_config = QKProjectionConfig(
-        q_direction = "layer9_heads",
-        actually_project=False,
+        q_direction = "unembedding",
+        actually_project=True,
         k_direction = None,
-        q_input_multiplier = 1.0,
+        q_input_multiplier = 2.0,
         query_bias_multiplier = 1.0,
         use_same_scaling = False,
         mantain_bos_attention = True,
         model = model,
         save_scores = True,
-        swap_model_and_our_max_attention = False,
+        swap_model_and_our_max_attention = True,
+        swap_model_and_our_max_scores = False,
         save_scaled_resid_pre = True,    
-        capital_adder = 1.0, # 0.75, # 0.25, # 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
+        capital_adder = 0.0, # 0.75, # 0.25, # 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
         save_q_remove_unembed = True,
         save_query_input_dotter = True,
         # another_direction = extra_direction,

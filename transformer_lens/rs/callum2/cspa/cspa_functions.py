@@ -371,6 +371,7 @@ class QKProjectionConfig:
     save_scaled_resid_pre: bool = False
     scaled_resid_pre: Optional[Float[torch.Tensor, "batch seq d_model"]] = None
     swap_model_and_our_max_attention: bool = False # Testing whether we are wrong because we just get our top attention wrong. Let's hope so!
+    swap_model_and_our_max_scores: bool = False # Same for scores
     query_bias_multiplier: float = 1.0 # Do we want to multiply query bias up???
     capital_adder: Optional[float] = None # Do we want to add attention scores on capital letters? (Note that timesing didn't work)
 
@@ -612,6 +613,15 @@ def run_qk_projections(
 
     att_scores_causal = att_scores.masked_fill_(t.triu(t.ones_like(att_scores), diagonal=1).bool(), -float("inf"))
 
+    if config.swap_model_and_our_max_scores:
+        # Basically copying the max attention stuff, but for scores...
+
+        models_max_scores = scores[:, 2:, 1:].topk(k=1, dim=-1) # We skip out the sequence positions 0 and 1!
+        our_max_scores_indices = att_scores_causal[:, 2:, 1:].topk(k=1, dim=-1).indices
+        models_scores_on_ours = scores[torch.arange(pattern.shape[0]).unsqueeze(1), torch.arange(2, pattern.shape[1]).unsqueeze(0), our_max_scores_indices.squeeze(-1) + 1]
+
+        att_scores_causal[torch.arange(att_scores_causal.shape[0]).unsqueeze(1), torch.arange(2, att_scores_causal.shape[1]).unsqueeze(0), models_max_scores.indices.squeeze(-1) + 1] = models_max_scores.values.squeeze(-1)
+
     if config.use_same_scaling:
         # Use the same scaling factors as the normal forward pass
         att_probs = att_scores_causal.exp() / (scores).exp().sum(dim=-1, keepdim=True)
@@ -625,6 +635,7 @@ def run_qk_projections(
         models_attention_on_ours = pattern[torch.arange(pattern.shape[0]).unsqueeze(1), torch.arange(2, pattern.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1]
 
         att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), models_max_probs.indices.squeeze(-1) + 1] = models_max_probs.values.squeeze(-1)
+
         # NOTE: we'll redo this later...
         # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(1, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices + 1] = models_attention_on_ours
 
@@ -632,6 +643,7 @@ def run_qk_projections(
     if config.mantain_bos_attention and not config.use_same_scaling: # and config.q_direction != "layer9_heads": # Did we ever get layer9_heads to work without BOS control?
 
         if config.swap_model_and_our_max_attention:
+            # We've already rewritten models_max_probs to on the relevant positions.
             rest_of_attention_probs = att_probs[:, 2:, 1:].sum(dim=-1)
             rest_of_attention_probs -= models_max_probs.values.squeeze(-1)
 
@@ -640,7 +652,11 @@ def run_qk_projections(
             att_probs[:, 2:, 1:] *= scale_factor.unsqueeze(-1)
 
             # Redone
-            att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1] = models_attention_on_ours
+            att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), models_max_probs.indices.squeeze(-1) + 1] = models_max_probs.values.squeeze(-1)
+
+            # This part seems wrong? Only replacing the model's stuff...
+            # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1] = models_attention_on_ours
+            
             att_probs[:, 2:, 0] = pattern[:, 2:, 0]
 
         else:
@@ -657,8 +673,7 @@ def run_qk_projections(
     if config.mantain_bos_attention:
         assert t.allclose(pattern[:, 2:, 0], att_probs[:, 2:, 0], atol=1e-3, rtol=1e-3), (pattern[:,:,0], "\n\n\n\n", att_probs[:,:,0], "Projections don't match attention scores with BOS hack")
     if not config.use_same_scaling:
-        assert (att_probs.sum(dim=-1) - 1.0).max().item() < 5e-1, (att_probs.sum(dim=-1) - 1.0, "Attention probs don't sum to 1.0")
-        # TODO why do we need 1e-1 here?!
+        assert (att_probs.sum(dim=-1) - 1.0).abs().max().item() < 1e-1, (att_probs.sum(dim=-1), "Attention probs don't sum to 1.0")
 
     # Testing, probably remove this...
     if config.q_direction is None and config.k_direction is None:
