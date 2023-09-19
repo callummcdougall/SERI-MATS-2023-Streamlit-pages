@@ -173,7 +173,7 @@ if RECALC_CSPA_RESULTS:
         save_scores = True,
         swap_model_and_our_max_attention = False,
         swap_model_and_our_max_scores = False,
-        capital_adder = 1.25, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
+        capital_adder = 1.375, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
         save_scaled_resid_pre = True,    
         save_q_remove_unembed = True,
         save_query_input_dotter = True,
@@ -446,6 +446,7 @@ show_model_cspa_attentions(success_indices)
 # Now let's look at me failures...
 
 fail_index_relevant = (cspa_results_q_projection["kl_div_cspa_to_orig"] > 0.1)
+
 fail_indices_raw = np.nonzero(to_numpy(fail_index_relevant.flatten()))[0]
 
 fail_indices = list(zip(
@@ -454,13 +455,15 @@ fail_indices = list(zip(
     strict=True,
 ))
 
+sorted_fail_indices = sorted(fail_indices, key=lambda x: cspa_results_q_projection["kl_div_cspa_to_orig"][x[0], x[1]].item(), reverse=True)
+
 print(
-    "We're studying", len(fail_indices_raw), "of", fail_index_relevant.shape[0]*fail_index_relevant.shape[1], "cases",
+    "We're studying", len(sorted_fail_indices), "of", fail_index_relevant.shape[0]*fail_index_relevant.shape[1], "cases",
 )
 
 # %%
 
-show_model_cspa_attentions(fail_indices, show_both_maxes=True, verbose=True, do_counting=True, attention_key="pattern")
+show_model_cspa_attentions(sorted_fail_indices, show_both_maxes=True, verbose=True, do_counting=True, attention_key="pattern")
 
 # %%
 
@@ -527,7 +530,7 @@ for multiple in [2.5, 2.75, 2.9, 0.0]:
 
     total_diff = 0
 
-    for batch_idx, seq_idx in fail_indices:
+    for batch_idx, seq_idx in sorted_fail_indices:
         old_seq = old_pattern[batch_idx, seq_idx]
         old_max_idx = torch.argmax(old_seq).item()
         total_diff += (old_seq[old_max_idx] - new_pattern[batch_idx, seq_idx, old_max_idx]).abs().item()

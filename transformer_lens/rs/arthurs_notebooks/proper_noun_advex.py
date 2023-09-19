@@ -43,6 +43,7 @@ model = HookedTransformer.from_pretrained(
     refactor_factored_attn_matrices=False,
 )
 model.set_use_attn_result(True)
+proper_nouns = get_proper_nouns(model)
 
 # %%
 
@@ -437,25 +438,38 @@ for batch_idx in range(BATCH_SIZE):
     )
 
     # 2. Look into blocks.10.hook_resid_pre predictions
-    print("\nTop model predictions before 10.7 of words in context:")
-    cur_ten_probs = logit_lens_top_pre_ten_probs[top5p_batch_indices[batch_idx]]
-    in_context_words = model.to_str_tokens(cur_ten_probs[1][top5p_seq_indices[batch_idx]]) # ?! These are not in context words though Arthur?!
-    print(
-        list(
-            zip(
-                in_context_words,
-                cur_ten_probs[0][top5p_seq_indices[batch_idx]].tolist(),
-                cur_ten_probs[1][top5p_seq_indices[batch_idx]].tolist(),
-                strict=True,
-            )
-        )
-    )
+    print("\nTop model predictions before 10.7 of words")
+    resid_pre_preds = logit_lens_pre_ten_probs_cpu[
+        top5p_batch_indices[batch_idx],
+        top5p_seq_indices[batch_idx],
+    ]
+    assert resid_pre_preds.shape == (model.cfg.d_vocab,), resid_pre_preds.shape
 
     # TODO analyze proper noun stuff
     if not (
-        []
+        proper_nouns[top_toks[:2]].tolist() in [[True, False], [False, True]]
     ):
         misses += 1
         continue
+
+    proper_noun_att_bigger = proper_nouns[top_toks[0]].item()
+    if proper_noun_att_bigger:
+        proper_noun_token_idx = top_toks[0]
+        other_token_idx = top_toks[1]
+    else:
+        proper_noun_token_idx = top_toks[1]
+        other_token_idx = top_toks[0]
+
+    confusion_matrix[
+        resid_pre_preds[proper_noun_token_idx].item() > resid_pre_preds[other_token_idx].item(),
+        int(proper_noun_att_bigger),
+    ] += 1
+
+px.imshow(
+    confusion_matrix,
+    # labels=["Resid Pre Preds", "Proper Noun Att"],
+    xlabels=["Proper Noun Att Bigger", "Proper Noun Att Smaller"],
+    ylabels=["Resid Pre Preds Bigger", "Resid Pre Preds Smaller"],
+)
 
 # %%

@@ -450,9 +450,9 @@ for batch_idx in range(BATCH_SIZE):  # range(len(top_unembeds_per_position)):
         ))
     )
 
-    print("\nTop model predictions before 10.7 of words in context:")
+    print("\nTop model predictions before 10.7")
     cur_ten_probs = logit_lens_top_pre_ten_probs[top5p_batch_indices[batch_idx]]
-    in_context_words = model.to_str_tokens(cur_ten_probs[1][top5p_seq_indices[batch_idx]]) # I don't even think these are always in context words?!
+    in_context_words = model.to_str_tokens(cur_ten_probs[1][top5p_seq_indices[batch_idx]])
     print(
         list(
             zip(
