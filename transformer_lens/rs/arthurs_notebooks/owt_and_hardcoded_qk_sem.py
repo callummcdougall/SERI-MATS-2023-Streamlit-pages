@@ -381,6 +381,7 @@ def to_string(toks):
 
 # %%
 
+
 cpu_probs = logits.softmax(dim=-1).cpu()
 top_probs = list(
     zip(

@@ -163,11 +163,12 @@ if RECALC_CSPA_RESULTS:
 
     qk_projection_config = QKProjectionConfig(
         q_direction = "layer9_heads",
+        actually_project=False,
         k_direction = None,
         q_input_multiplier = 1.0,
         query_bias_multiplier = 1.0,
         use_same_scaling = False,
-        mantain_bos_attention = False,
+        mantain_bos_attention = True,
         model = model,
         save_scores = True,
         swap_model_and_our_max_attention = False,

@@ -346,6 +346,7 @@ def model_fwd_pass_from_resid_pre(
 @dataclass
 class QKProjectionConfig:
     q_direction: Optional[str] = None
+    actually_project: bool = True # Very rarely, we may want to just set the Q input to the q_direction, not project onto it
     k_direction: Optional[str] = None
     q_input_multiplier: float = 1.0 # Make this >1.0 as a hack --- the unembedding is ~1/3 of total attention score so this can be pretty helpful
     # When calculating softmax over attention scores, should we use the denominator from the original forward pass? Note this means attention no longer sums to 1.0!
@@ -380,6 +381,9 @@ class QKProjectionConfig:
     query_input_dotter: Optional[Float[torch.Tensor, "batch seqK d_model"]] = None
 
     def __post_init__(self):
+        
+        assert self.q_direction == "layer9_heads" or self.actually_project, "If we're not projecting, we need to be using layer9_heads"
+
         if self.q_direction == "earlier_heads":
             """Precompute some OV circuit for earlier heads... this apprach didn't work well I think <60% KL and other heads in the model outcompeted the L10H7"""
 
@@ -532,7 +536,6 @@ def run_qk_projections(
             q_input = q_input.to(base_q_input.device)
 
         else:
-            warnings.warn("I think this projection is pretty sketchy: it does give ~70% KL recovered but the baselines look about as good, and it's fairly unprincipled")
             assert config.q_direction == "layer9_heads", "Only implemented these two projections so far"
 
             projection_directions = list(einops.rearrange(
@@ -540,14 +543,21 @@ def run_qk_projections(
                 "batch seqQ n_heads d_model -> n_heads batch seqQ d_model",
             ))
 
-            if config.another_direction is not None:
-                projection_directions.append(einops.repeat(config.another_direction, "d_model -> batch seqQ d_model", batch=projection_directions[0].shape[0], seqQ=projection_directions[0].shape[1]))
+            if config.actually_project:
+                warnings.warn("I think this projection is pretty sketchy: it does give ~70% KL recovered but the baselines look about as good, and it's fairly unprincipled")
 
-            q_input, _ = multi_project(
-                config.q_input_multiplier * base_q_input,
-                projection_directions,
-                device=computation_device,
-            )
+                if config.another_direction is not None:
+                    projection_directions.append(einops.repeat(config.another_direction, "d_model -> batch seqQ d_model", batch=projection_directions[0].shape[0], seqQ=projection_directions[0].shape[1]))
+
+                q_input, _ = multi_project(
+                    config.q_input_multiplier * base_q_input,
+                    projection_directions,
+                    device=computation_device,
+                )
+
+            else:
+                # Just set the Q input to the projection direction!
+                q_input = config.q_input_multiplier * sum(projection_directions)
 
             if config.save_q_remove_unembed:
                 config.q_remove_unembed = (base_q_input.cpu() - q_input.cpu())
@@ -649,7 +659,6 @@ def run_qk_projections(
     if not config.use_same_scaling:
         assert (att_probs.sum(dim=-1) - 1.0).max().item() < 5e-1, (att_probs.sum(dim=-1) - 1.0, "Attention probs don't sum to 1.0")
         # TODO why do we need 1e-1 here?!
-        print("Passed")
 
     # Testing, probably remove this...
     if config.q_direction is None and config.k_direction is None:
