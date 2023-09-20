@@ -60,6 +60,7 @@ from transformer_lens.rs.callum2.cspa.cspa_semantic_similarity import (
     make_list_correct_length,
     create_full_semantic_similarity_dict,
 )
+from transformer_lens.rs.callum2.utils import get_effective_embedding
 
 clear_output()
 # In[2]:
@@ -69,7 +70,7 @@ model = HookedTransformer.from_pretrained(
     center_unembed=True,
     center_writing_weights=True,
     fold_ln=True,
-    device="cuda:0",
+    # device="cuda:0",
 )
 # warnings.warn("Using CPU for CSPA, so it's slow!")
 model.set_use_split_qkv_input(False)
@@ -182,7 +183,8 @@ if RECALC_CSPA_RESULTS:
 
     # Empirically, as long as SEQ_LEN large, small BATCH_SIZE gives quite good estimates (experiments about this deleted, too in the weeds)
     if ipython is not None:
-        Q_PROJECTION_BATCH_SIZE = 20
+        Q_PROJECTION_BATCH_START = 0
+        Q_PROJECTION_BATCH_END = 20
     Q_PROJECTION_SEQ_LEN = 300
 
     qk_projection_config = QKProjectionConfig(
@@ -195,11 +197,11 @@ if RECALC_CSPA_RESULTS:
         use_same_scaling = False,
         mantain_bos_attention = False,
         model = model,
-        save_scores = True,
+        save_scores = False,
         swap_model_and_our_max_attention = False,
         swap_model_and_our_max_scores = False,
-        capital_adder = 0.0, # 1.25, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
-        save_scaled_resid_pre = True,  
+        capital_adder = 1.25, # 1.25, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
+        save_scaled_resid_pre = False,  
         # save_q_remove_unembed = True,
         # save_query_input_dotter = True,
         # another_direction = extra_direction,
@@ -211,7 +213,7 @@ if RECALC_CSPA_RESULTS:
     gc.collect()
     t.cuda.empty_cache()
     print("Starting...")
-    current_data_toks = DATA_TOKS[Q_PROJECTION_BATCH_SIZE:Q_PROJECTION_BATCH_SIZE*2, :Q_PROJECTION_SEQ_LEN] if ipython is not None else DATA_TOKS[start_index:start_index+length, :Q_PROJECTION_SEQ_LEN]
+    current_data_toks = DATA_TOKS[Q_PROJECTION_BATCH_START:Q_PROJECTION_BATCH_END, :Q_PROJECTION_SEQ_LEN] if ipython is not None else DATA_TOKS[start_index:start_index+length, :Q_PROJECTION_SEQ_LEN]
     cspa_results_q_projection = get_cspa_results_batched(
         model = model,
         toks = current_data_toks,
@@ -227,7 +229,7 @@ if RECALC_CSPA_RESULTS:
         use_cuda = True,
         verbose = True,
         compute_s_sstar_dict = False,
-        computation_device = "cuda:0",
+        computation_device = "cuda",
         do_running_updates = True,
     )
     gc.collect()
@@ -397,7 +399,7 @@ class HiAttentionCounter:
 def show_model_cspa_attentions(
     indices,
     cspa_results = cspa_results_q_projection,
-    attention_key = "scores",
+    attention_key = "pattern",
     show_both_maxes = False,
     verbose=False,
     do_counting=False,
@@ -499,9 +501,9 @@ def show_model_cspa_attentions(
                 "with probability",
                 str(round(xs[i], 2)),                
             ]
-            next_things = next_things[4:] + ["and the model's probability was", str(round(ys[i], 2))] + next_things[:4]+ ["and our probability was", str(round(xs[i], 2))]
+            true_next_things = next_things[4:] + ["and the model's probability was", str(round(ys[i], 2))] + next_things[:4]+ ["and our probability was", str(round(xs[i+1], 2))]
 
-            print("; ".join(next_things))
+            print("; ".join(true_next_things))
 
     px.scatter(
         x = xs,
@@ -616,73 +618,31 @@ torch.testing.assert_allclose(
 #%%
 
 test_data_fnames = {
-    start_idx: os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_q_projection_seed_6_{start_idx}_20.pt") for start_idx in [240, 260, 280, 320]
+    start_idx: os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_q_projection_seed_6_{start_idx}_20.pt") for start_idx in [0]
 }
+
+#%%
+
+W_EE = get_effective_embedding(model)["W_E (only MLPs)"].double()
 
 #%%
 
 # Let's train the gains and biases for all the attention scores!
 
 torch.set_grad_enabled(True)
-attention_score_bias = torch.nn.Parameter(torch.zeros(model.cfg.d_vocab).double().cuda(), requires_grad=True)
-attention_score_scale = torch.nn.Parameter(torch.zeros(model.cfg.d_vocab).double().cuda(), requires_grad=True) # We will add 1 to this. We do this so we can use AdamW if it seems relevant.
-opt = torch.optim.Adam([attention_score_bias, attention_score_scale], lr=0.01)
+DIV = 1000
+attention_score_bias = torch.nn.Parameter((torch.randn(model.cfg.d_model).double().cuda())/DIV, requires_grad=True)
+attention_score_scale = torch.nn.Parameter((torch.randn(model.cfg.d_model).double().cuda())/DIV, requires_grad=True)
+opt = torch.optim.AdamW([attention_score_bias, attention_score_scale], lr=1e-4)
 NUM_EPOCHS = 1000
 all_biases = [attention_score_bias.data.detach().clone()]
 all_scales = [attention_score_scale.data.detach().clone()]
 LENGTH = 20
 TESTING = True
 
-for epoch_idx in tqdm(range(NUM_EPOCHS)):
+for epoch_idx in range(NUM_EPOCHS):
 
-    loss = torch.tensor(0.0).cuda()
-    loss_adds = 0
-
-    for start_idx in tqdm(range(0, 220 if TESTING else DATA_TOKS.shape[0], LENGTH)):
-        artifact_fname = f"cspa_results_q_projection_seed_{SEED}_{start_idx}_{LENGTH}"
-        loading_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
-        current_data = torch.load(str(loading_path))
-        current_cuda_data = {k:v.cuda() for k,v in current_data.items()}
-        current_seq_len = current_data["scores"].shape[1]
-
-        opt.zero_grad()
-
-        # Forward pass
-        tok_indices = einops.repeat(DATA_TOKS[start_idx:start_idx+LENGTH, :current_seq_len], "batch seqK -> batch seqQ seqK", seqQ = current_seq_len).cuda()
-        
-        initial_attention_score = current_cuda_data["scores"][:, :current_seq_len].clone().double()
-        trained_attention_score = (torch.maximum(initial_attention_score, torch.tensor(-30.0, dtype=torch.double).cuda()) * (attention_score_scale[tok_indices][:, :current_seq_len])+1.0) + attention_score_bias[tok_indices][:, :current_seq_len]
-
-        key_term = einops.einsum(
-            current_cuda_data["scaled_resid_pre"],
-            model.W_K[10, 7],
-            "batch seqK d_model, d_model d_head -> batch seqK d_head",
-        ) + model.b_K[10, 7]
-        
-        query_bias_term = einops.einsum(
-            key_term,
-            model.b_Q[10, 7],
-            "batch seqK d_head, d_head -> batch seqK",
-        ) / np.sqrt(model.cfg.d_head)        
-
-        final_attention_score = trained_attention_score + query_bias_term.unsqueeze(1) # Unsqueeze for seqQ
-
-        new_attention_pattern = final_attention_score.softmax(dim=-1)
-
-        loss_adds += 1
-        loss += ((new_attention_pattern - current_cuda_data["normal_pattern"][:, :current_seq_len, :current_seq_len]) ** 2).mean()
-
-    loss /= loss_adds
-    # Backpropagate
-    loss.backward(retain_graph=True)
-
-    # Update parameters
-    opt.step()
-
-    all_biases.append(attention_score_bias.data.detach().clone())
-    all_scales.append(attention_score_scale.data.detach().clone())
-
-    with torch.no_grad(): # TODO: we must factor this evaluate out... please!
+    with torch.no_grad(): # TODO: we really should factor this out as an `evaluate` function ... please!
         test_loss = torch.tensor(0.0).cuda()
         test_loss_adds = 0
         
@@ -692,10 +652,21 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
             current_test_seq_len = current_test_data["scores"].shape[1]
 
             # Forward pass for test set
-            tok_indices_test = einops.repeat(DATA_TOKS[start_idx:start_idx+LENGTH, :current_test_seq_len], "batch seqK -> batch seqQ seqK", seqQ=current_test_seq_len).cuda()
+            tok_indices_test = DATA_TOKS[start_idx:start_idx+LENGTH, :current_test_seq_len].cuda()
             
+            cur_attention_score_scale_test = torch.nn.functional.relu(einops.einsum(
+                W_EE[tok_indices_test].detach().clone(),
+                attention_score_scale,
+                "batch seqK d_model, d_model -> batch seqK",
+            ) + 1.0) + 1e-4
+            cur_attention_score_bias_test = torch.maximum(einops.einsum(
+                W_EE[tok_indices_test].detach().clone(),
+                attention_score_bias,
+                "batch seqK d_model, d_model -> batch seqK",
+            ), torch.tensor(-5.0, dtype=torch.double).cuda())
+
             initial_attention_score_test = current_test_cuda_data["scores"][:, :current_test_seq_len].clone().double()
-            trained_attention_score_test = (torch.maximum(initial_attention_score_test, torch.tensor(-30.0, dtype=torch.double).cuda()) * (attention_score_scale[tok_indices_test][:, :current_test_seq_len]) + 1.0) + attention_score_bias[tok_indices_test][:, :current_test_seq_len]
+            trained_attention_score_test = (torch.maximum(initial_attention_score_test, torch.tensor(1e-5, dtype=torch.double).cuda()) * (cur_attention_score_scale_test.unsqueeze(1))) + cur_attention_score_bias_test.unsqueeze(1)
 
             key_term_test = einops.einsum(
                 current_test_cuda_data["scaled_resid_pre"],
@@ -715,8 +686,66 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
             test_loss_adds += 1
             test_loss += ((new_attention_pattern_test - current_test_cuda_data["normal_pattern"][:, :current_test_seq_len, :current_test_seq_len]) ** 2).mean()
 
-        test_loss /= test_loss_adds 
+        test_loss /= test_loss_adds
+    
+    if epoch_idx == 0:
+        print("Test loss is initially", test_loss.item())
+
+    for start_idx in (range(20, 280 if TESTING else DATA_TOKS.shape[0], LENGTH)):
+        opt.zero_grad()
+        loss = torch.tensor(0.0).cuda()
+        loss_adds = 0
+        artifact_fname = f"cspa_results_q_projection_seed_{SEED}_{start_idx}_{LENGTH}"
+        loading_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
+        current_data = torch.load(str(loading_path))
+        current_cuda_data = {k:v.cuda() for k,v in current_data.items()}
+        current_seq_len = current_data["scores"].shape[1]
+
+        # Forward pass
+        tok_indices = DATA_TOKS[start_idx:start_idx+LENGTH, :current_seq_len].cuda()
         
+        cur_attention_score_scale = torch.nn.functional.relu(einops.einsum(
+            W_EE[tok_indices].detach().clone(), # ... d_model
+            attention_score_scale, # d_model
+            "batch seqK d_model, d_model -> batch seqK",
+        ) + 1.0) + 1e-4
+        cur_attention_score_bias = torch.maximum(einops.einsum(
+            W_EE[tok_indices].detach().clone(), # ... d_model
+            attention_score_bias, # d_model
+            "batch seqK d_model, d_model -> batch seqK",
+        ), torch.tensor(-5.0, dtype=torch.double).cuda())
+
+        initial_attention_score = current_cuda_data["scores"][:, :current_seq_len].clone().double()
+        trained_attention_score = (torch.maximum(initial_attention_score, torch.tensor(-30.0, dtype=torch.double).cuda()) * (cur_attention_score_scale.unsqueeze(1))) + cur_attention_score_bias.unsqueeze(1)
+
+        key_term = einops.einsum(
+            current_cuda_data["scaled_resid_pre"],
+            model.W_K[10, 7],
+            "batch seqK d_model, d_model d_head -> batch seqK d_head",
+        ) + model.b_K[10, 7]
+        
+        query_bias_term = einops.einsum(
+            key_term,
+            model.b_Q[10, 7],
+            "batch seqK d_head, d_head -> batch seqK",
+        ) / np.sqrt(model.cfg.d_head)        
+
+        final_attention_score = trained_attention_score + query_bias_term.unsqueeze(1) # Unsqueeze for seqQ
+        new_attention_pattern = final_attention_score.softmax(dim=-1)
+
+        loss_adds += 1
+        loss += ((new_attention_pattern - current_cuda_data["normal_pattern"][:, :current_seq_len, :current_seq_len]) ** 2).mean()
+
+        loss /= loss_adds
+        # Backpropagate
+        loss.backward()
+
+        # Update parameters
+        opt.step()
+
+    all_biases.append(attention_score_bias.data.detach().clone())
+    all_scales.append(attention_score_scale.data.detach().clone())
+
     # Print metrics
     print(
         f"Epoch {epoch_idx+1}/{NUM_EPOCHS}",
@@ -730,9 +759,24 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
 
 #%%
 
+# See what's up
+
+upwriting = einops.einsum(
+    W_EE.cpu(),
+    attention_score_bias.cpu(),
+    "n_vocab d_model, d_model -> n_vocab",
+)
+from pprint import pprint
+pprint(
+    model.to_str_tokens(
+        (-upwriting).topk(k=100).indices
+    )
+)
+
+#%%
+
 # Side project on query bias
 
-from transformer_lens.rs.callum2.utils import get_effective_embedding
 W_EE = get_effective_embedding(model)["W_E (only MLPs)"]
 b_Q = model.b_Q[10, 7]
 W_K = model.W_K[10, 7]

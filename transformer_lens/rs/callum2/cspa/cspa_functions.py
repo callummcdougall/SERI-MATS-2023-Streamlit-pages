@@ -745,9 +745,9 @@ def get_cspa_results(
     computation_device = None,
 ) -> Tuple[
         Dict[str, Float[Tensor, "batch seq-1"]],
-        Int[Tensor, "n 4"],
-        Float[Tensor, "n"],
-        Int[Tensor, "batch seqK K_semantic"],
+        Optional[Int[Tensor, "n 4"]],
+        Optional[Float[Tensor, "n"]],
+        Optional[Int[Tensor, "batch seqK K_semantic"]],
         float,
     ]:
     '''
@@ -908,19 +908,28 @@ def get_cspa_results(
         
         gc.collect()
         t.cuda.empty_cache()
-        pattern = run_qk_projections(
-            model=model,
-            LAYER=LAYER,
-            HEAD=HEAD,
-            toks=toks,
-            config=qk_projection_config,
-            semantically_similar_toks=semantically_similar_toks,
-            pattern=pattern,
-            scores=scores,
-            scaled_resid_pre=scaled_resid_pre,
-            pre_head_result_orig=pre_head_result_orig,
-            computation_device=computation_device,
-        )
+        
+        # pattern = run_qk_projections(
+        #     model=model,
+        #     LAYER=LAYER,
+        #     HEAD=HEAD,
+        #     toks=toks,
+        #     config=qk_projection_config,
+        #     semantically_similar_toks=semantically_similar_toks,
+        #     pattern=pattern,
+        #     scores=scores,
+        #     scaled_resid_pre=scaled_resid_pre,
+        #     pre_head_result_orig=pre_head_result_orig,
+        #     computation_device=computation_device,
+        # )
+
+        print("Hackily loading in some recomputed att patterns")
+        pattern_device = pattern.device
+        pattern_dtype = pattern.dtype
+        pattern = torch.load(
+            os.path.expanduser("~/new_attention_pattern_test.pt")
+        )[global_range[0]:global_range[1]].to(pattern_device).to(pattern_dtype)
+
         gc.collect()
         t.cuda.empty_cache()
 
@@ -951,51 +960,58 @@ def get_cspa_results(
 
     assert ("qk" in interventions) == (K_unembeddings != 1.0), "Either do a QK intervention, or we must all unembeddings used"
 
-    # Get the top predicted semantically similar tokens (this everything with seqQ<=seqK if we're not doing QK filtering)
-    # TODO probably refactor this because I expect us to rarely be needing this full function now, it's mostly a no op
-    t0 = time.time()
-    # Get the unembeddings we'll be projecting onto (also get the dict of (s, s*) pairs and store in context)
-    # Most of the elements in `semantically_similar_unembeddings` will be zero
-    semantically_similar_unembeddings, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, top_K_and_Ksem_mask = get_top_predicted_semantically_similar_tokens(
-        toks=toks,
-        resid_pre=resid_pre,
-        semantically_similar_toks=semantically_similar_toks,
-        K_unembeddings=K_unembeddings,
-        function_toks=FUNCTION_TOKS,
-        model=model,
-        final_scale=final_scale,
-        keep_self_attn=keep_self_attn,
-    )
-    if verbose: print(f"Fraction of unembeddings we keep = {(semantically_similar_unembeddings.abs() > 1e-6).float().mean():.4f}")
-    time_for_sstar = time.time() - t0
+    if "qk" in interventions:
 
-    if ov_projection_config is not None:
-        # We project the output onto the unembeddings we got from the code above (which will either be all unembeddings,
-        # or those which were filtered for being predicted on the destination side).
-        if only_keep_negative_components:
-            assert K_semantic == 1, "Can't use semantic similarity if we're only keeping negative components."
-        output_attn_cspa = project(
-            vectors = output_attn - output_attn_mean_ablated,
-            proj_directions = semantically_similar_unembeddings,
-            only_keep = "neg" if only_keep_negative_components else None, 
-            device = computation_device,
-        ) + output_attn_mean_ablated
+        # Get the top predicted semantically similar tokens (this everything with seqQ<=seqK if we're not doing QK filtering)
+        # TODO probably refactor this because I expect us to rarely be needing this full function now, it's mostly a no op
+        t0 = time.time()
+        # Get the unembeddings we'll be projecting onto (also get the dict of (s, s*) pairs and store in context)
+        # Most of the elements in `semantically_similar_unembeddings` will be zero
+        semantically_similar_unembeddings, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, top_K_and_Ksem_mask = get_top_predicted_semantically_similar_tokens(
+            toks=toks,
+            resid_pre=resid_pre,
+            semantically_similar_toks=semantically_similar_toks,
+            K_unembeddings=K_unembeddings,
+            function_toks=FUNCTION_TOKS,
+            model=model,
+            final_scale=final_scale,
+            keep_self_attn=keep_self_attn,
+        )
+        if verbose: print(f"Fraction of unembeddings we keep = {(semantically_similar_unembeddings.abs() > 1e-6).float().mean():.4f}")
+        time_for_sstar = time.time() - t0
+
+        if ov_projection_config is not None:
+            # We project the output onto the unembeddings we got from the code above (which will either be all unembeddings,
+            # or those which were filtered for being predicted on the destination side).
+            if only_keep_negative_components:
+                assert K_semantic == 1, "Can't use semantic similarity if we're only keeping negative components."
+            output_attn_cspa = project(
+                vectors = output_attn - output_attn_mean_ablated,
+                proj_directions = semantically_similar_unembeddings,
+                only_keep = "neg" if only_keep_negative_components else None, 
+                device = computation_device,
+            ) + output_attn_mean_ablated
+
+
+        else:
+            # In this case, we assume we are filtering for QK (cause we're doing at least one). We want to set the output to be the mean-ablated
+            # output at all source positions which are not in the top predicted semantically similar tokens.
+            def any_reduction(tensor: Tensor, dims: tuple):
+                assert dims == (3,)
+                return tensor.any(dims[0])
+            top_K_and_Ksem_mask_any = einops.reduce(
+                top_K_and_Ksem_mask, 
+                "batch seqQ seqK K_semantic -> batch seqQ seqK",
+                reduction = any_reduction # dims will be supplied as (3,) I think
+            )
+            output_attn_cspa = t.where(
+                top_K_and_Ksem_mask_any.unsqueeze(-1),
+                output_attn,
+                output_attn_mean_ablated,
+            )
+
     else:
-        # In this case, we assume we are filtering for QK (cause we're doing at least one). We want to set the output to be the mean-ablated
-        # output at all source positions which are not in the top predicted semantically similar tokens.
-        def any_reduction(tensor: Tensor, dims: tuple):
-            assert dims == (3,)
-            return tensor.any(dims[0])
-        top_K_and_Ksem_mask_any = einops.reduce(
-            top_K_and_Ksem_mask, 
-            "batch seqQ seqK K_semantic -> batch seqQ seqK",
-            reduction = any_reduction # dims will be supplied as (3,) I think
-        )
-        output_attn_cspa = t.where(
-            top_K_and_Ksem_mask_any.unsqueeze(-1),
-            output_attn,
-            output_attn_mean_ablated,
-        )
+        output_attn_cspa = output_attn
 
     # Sum over key-side vectors to get new head result
     # ? (don't override the BOS token attention, because it's more appropriate to preserve this information I think)
@@ -1042,12 +1058,11 @@ def get_cspa_results(
         cspa_results["logits_orig"] = logits
         cspa_results["logits_ablated"] = logits_mean_ablated
 
-    # print(
-        
-    # )
+    if "qk" in interventions:
+        return cspa_results, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, semantically_similar_toks, time_for_sstar 
 
-    return cspa_results, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, semantically_similar_toks, time_for_sstar
-
+    else:
+        return cspa_results, None, None, None, 0.0
 
 
 def get_cspa_results_batched(
@@ -1103,9 +1118,9 @@ def get_cspa_results_batched(
         toks = toks.to(target_device)
 
     CSPA_RESULTS = {}
-    TOP_K_AND_KSEM_PER_DEST_TOKEN = t.empty((0, 4), dtype=t.long, device=target_device)
-    LOGIT_LENS_FOR_TOP_K_KSEM = t.empty((0,), dtype=t.float, device=target_device)
-    SEMANTICALLY_SIMILAR_TOKS = t.empty((0, seq_len, K_semantic), dtype=t.long, device=target_device)
+    TOP_K_AND_KSEM_PER_DEST_TOKEN = t.empty((0, 4), dtype=t.long, device=target_device) if "qk" in interventions else None
+    LOGIT_LENS_FOR_TOP_K_KSEM = t.empty((0,), dtype=t.float, device=target_device) if "qk" in interventions else None
+    SEMANTICALLY_SIMILAR_TOKS = t.empty((0, seq_len, K_semantic), dtype=t.long, device=target_device) if "qk" in interventions else None
 
     for i, _toks in enumerate(t.chunk(toks, chunks=chunks)):
         if verbose and i == 0:
@@ -1144,10 +1159,13 @@ def get_cspa_results_batched(
         if do_running_updates:
             print("Currently", get_performance_recovered(CSPA_RESULTS))
 
-        TOP_K_AND_KSEM_PER_DEST_TOKEN = t.cat([TOP_K_AND_KSEM_PER_DEST_TOKEN, top_K_and_Ksem_per_dest_token], dim=0)
-        LOGIT_LENS_FOR_TOP_K_KSEM = t.cat([LOGIT_LENS_FOR_TOP_K_KSEM, logit_lens_for_top_K_Ksem], dim=0)
-        SEMANTICALLY_SIMILAR_TOKS = t.cat([SEMANTICALLY_SIMILAR_TOKS, semantically_similar_toks], dim=0)
-        del cspa_results, top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, semantically_similar_toks
+        if "qk" in interventions:
+            TOP_K_AND_KSEM_PER_DEST_TOKEN = t.cat([TOP_K_AND_KSEM_PER_DEST_TOKEN, top_K_and_Ksem_per_dest_token], dim=0)
+            LOGIT_LENS_FOR_TOP_K_KSEM = t.cat([LOGIT_LENS_FOR_TOP_K_KSEM, logit_lens_for_top_K_Ksem], dim=0)
+            SEMANTICALLY_SIMILAR_TOKS = t.cat([SEMANTICALLY_SIMILAR_TOKS, semantically_similar_toks], dim=0)
+            del top_K_and_Ksem_per_dest_token, logit_lens_for_top_K_Ksem, semantically_similar_toks
+        
+        del cspa_results
         t.cuda.empty_cache()
         t_agg = time.time() - t_agg
 
