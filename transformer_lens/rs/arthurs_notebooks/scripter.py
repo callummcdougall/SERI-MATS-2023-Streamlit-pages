@@ -2,13 +2,13 @@ import os
 import subprocess
 import multiprocessing
 
-fpath = "/root/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/arthurs_notebooks/cspa_failures.py"
+script_path = "/root/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/arthurs_notebooks/cspa_failures.py"
 used = set()
 
-def run_script(threshold, gpu_id):
+def run_script(threshold, gpu_id, fpath):
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    subprocess.run(["python", fpath, "--start-index", str(threshold), "--length", "20"], env=env)
+    subprocess.run(["python", script_path, "--start-index", str(threshold), "--length", "20", "--fpath", fpath], env=env)
 
 if __name__ == '__main__':
 
