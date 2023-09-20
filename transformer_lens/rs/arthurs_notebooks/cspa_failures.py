@@ -8,7 +8,6 @@
 
 from transformer_lens.cautils.notebook import *
 SEED = 6
-ARTIFACT_BASE = "cspa_results_q_projection_seed_{SEED}_{start_idx}_{LENGTH}"
 
 if ipython is None:
     import argparse
@@ -16,11 +15,17 @@ if ipython is None:
 
     parser.add_argument("--start-index", type=int)
     parser.add_argument("--length", type=int)
+    parser.add_argument("--artifact-base", type=str)
 
     args = parser.parse_args()
     start_index = args.start_index
     length = args.length
-    artifact_name = ARTIFACT_BASE.format(SEED=SEED, start_idx=start_index, LENGTH=length)
+    ARTIFACT_BASE = args.artifact_base
+
+else:
+    ARTIFACT_BASE = "cspa_results_q_projection_seed"
+
+ARTIFACT_TO_FORMAT = ARTIFACT_BASE +  "_{SEED}_{start_idx}_{LENGTH}"
 
 t.set_grad_enabled(False)
 
@@ -203,7 +208,7 @@ if RECALC_CSPA_RESULTS:
         save_scores = False,
         swap_model_and_our_max_attention = False,
         swap_model_and_our_max_scores = False,
-        capital_adder = 1.25, # 1.25, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
+        capital_adder = 0.0, # 1.25, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
         save_scaled_resid_pre = False,  
         # save_q_remove_unembed = True,
         # save_query_input_dotter = True,
@@ -239,7 +244,7 @@ if RECALC_CSPA_RESULTS:
     gc.collect()
     t.cuda.empty_cache()
     cached_cspa = {k:v.detach().cpu() for k,v in cspa_results_q_projection.items()}
-    saver_fpath = os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/{ARTIFACT_BASE.format(seed=SEED, length=Q_PROJECTION_BATCH_END-Q_PROJECTION_BATCH_START, start_index=Q_PROJECTION_BATCH_START)}.pt")
+    saver_fpath = os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/{ARTIFACT_TO_FORMAT.format(seed=SEED, length=Q_PROJECTION_BATCH_END-Q_PROJECTION_BATCH_START, start_index=Q_PROJECTION_BATCH_START)}.pt")
     torch.save(cached_cspa, saver_fpath)
 
 else:
@@ -279,7 +284,7 @@ else:
     tensor_datas = []
 
     for start_index in range(0, 2020, 20):
-        artifact_fname = f"cspa_results_q_projection_seed_{SEED}_{start_index}_20"
+        artifact_fname = ARTIFACT_TO_FORMAT.format(seed=SEED, length=20, start_index=start_index)
         try:
             saving_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
 
@@ -297,14 +302,6 @@ else:
 
         except Exception as e:
             print("Failed to load", artifact_fname, "because", e)
-#%%
-
-all_dicts = {}
-for tensor_data in tensor_datas:
-    all_dicts = concat_dicts(all_dicts, tensor_data)
-torch.save(all_dicts, os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_seed_{SEED}_num_batches_{list(all_dicts.values())[0].shape[0]}_try_two.pt")) # Should be around 4GB I think
-
-# Now we need to train!!
 
 #%%
 
@@ -710,7 +707,7 @@ for epoch_idx in range(NUM_EPOCHS):
     for start_idx in (range(80, 700 if TESTING else DATA_TOKS.shape[0], LENGTH)):
         opt.zero_grad()
         loss = torch.tensor(0.0).cuda()
-        artifact_fname = ARTIFACT_NAME.format(seed=SEED, start_idx=start_idx, length=LENGTH)
+        artifact_fname = ARTIFACT_TO_FORMAT.format(seed=SEED, start_idx=start_idx, length=LENGTH)
         loading_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
         current_data = torch.load(str(loading_path))
         current_cuda_data = {k:v.cuda() for k,v in current_data.items()}

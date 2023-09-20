@@ -5,10 +5,10 @@ import multiprocessing
 script_path = "/root/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/arthurs_notebooks/cspa_failures.py"
 used = set()
 
-def run_script(threshold, gpu_id, fpath):
+def run_script(threshold, gpu_id, artifact_base):
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    subprocess.run(["python", script_path, "--start-index", str(threshold), "--length", "20", "--fpath", fpath], env=env)
+    subprocess.run(["python", script_path, "--start-index", str(threshold), "--length", "20", "--artifact-base", artifact_base], env=env)
 
 if __name__ == '__main__':
 
@@ -30,7 +30,7 @@ if __name__ == '__main__':
             used.add(threshold)
 
             gpu_id = (threshold_idx // num_jobs_per_gpu) % num_gpus
-            jobs.append(pool.apply_async(run_script, (threshold, gpu_id)))
+            jobs.append(pool.apply_async(run_script, (threshold, gpu_id, "cspa_no_bosses")))
 
         if isinstance(curspace, list):
             break
