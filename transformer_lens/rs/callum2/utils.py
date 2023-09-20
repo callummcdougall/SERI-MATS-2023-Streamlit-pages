@@ -9,6 +9,7 @@
 
 import sys, os
 from pathlib import Path
+from tqdm import tqdm
 
 for st_page_dir in [
     os.getcwd().split("SERI-MATS-2023-Streamlit-pages")[0] + "SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/st_page",
@@ -69,6 +70,7 @@ def process_webtext(
     model: HookedTransformer,
     verbose: bool = False,
     return_indices: bool = False,
+    use_tqdm: bool = False,
 ) -> Tuple[Int[Tensor, "batch seq"], List[List[str]]]:
     
     DATA_STR_ALL = get_webtext(seed=seed)
@@ -77,7 +79,8 @@ def process_webtext(
 
     count = 0
     indices = []
-    for i in range(len(DATA_STR_ALL)):
+    iter = tqdm(range(len(DATA_STR_ALL))) if use_tqdm else range(len(DATA_STR_ALL))
+    for i in iter:
         num_toks = len(model.to_tokens(DATA_STR_ALL[i]).squeeze())
         if num_toks > seq_len:
             DATA_STR.append(DATA_STR_ALL[i])
@@ -86,7 +89,7 @@ def process_webtext(
         if count == batch_size:
             break
     else:
-        raise Exception("Couldn't find enough sequences of sufficient length.")
+        raise Exception("Couldn't find enough sequences of sufficient length. Inly" + str(count) + "found.")
 
     DATA_TOKS = model.to_tokens(DATA_STR)
     DATA_STR_TOKS = model.to_str_tokens(DATA_STR)

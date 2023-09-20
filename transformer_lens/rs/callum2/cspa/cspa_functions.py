@@ -668,7 +668,6 @@ def run_qk_projections(
         att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), models_max_probs.indices.squeeze(-1) + 1] = models_max_probs.values.squeeze(-1)
         # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(2, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices.squeeze(-1) + 1] = models_attention_on_ours
         
-
         # NOTE: we'll redo this later...
         # att_probs[torch.arange(att_probs.shape[0]).unsqueeze(1), torch.arange(1, att_probs.shape[1]).unsqueeze(0), our_max_probs_indices + 1] = models_attention_on_ours
 
@@ -1033,6 +1032,8 @@ def get_cspa_results(
             cspa_results["q_remove_unembed"] = qk_projection_config.q_remove_unembed
         if qk_projection_config.save_query_input_dotter:
             cspa_results["query_input_dotter"] = qk_projection_config.query_input_dotter.cpu()
+        if qk_projection_config.save_scaled_resid_pre:
+            cspa_results["scaled_resid_pre"] = qk_projection_config.scaled_resid_pre.cpu()
     if return_dla: 
         cspa_results["dla"] = dla_cspa
     if return_logits:

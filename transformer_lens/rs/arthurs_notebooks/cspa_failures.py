@@ -7,6 +7,17 @@
 # In[1]:
 
 from transformer_lens.cautils.notebook import *
+
+if ipython is None:
+    import argparse
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--start-index", type=int)
+    parser.add_argument("--length", type=int)
+    args = parser.parse_args()
+    start_index = args.start_index
+    length = args.length
+
 t.set_grad_enabled(False)
 
 from transformer_lens.rs.callum2.cspa.cspa_functions import (
@@ -50,7 +61,6 @@ from transformer_lens.rs.callum2.cspa.cspa_semantic_similarity import (
 )
 
 clear_output()
-
 # In[2]:
 
 model = HookedTransformer.from_pretrained(
@@ -75,7 +85,7 @@ current_seq_len = 61
 SEED=6
 
 NEGATIVE_HEADS = [(10, 7), (11, 10)]
-DATA_TOKS, DATA_STR_TOKS_PARSED, indices = process_webtext(seed=SEED, batch_size=BATCH_SIZE, seq_len=SEQ_LEN, model=model, verbose=True, return_indices=True)
+DATA_TOKS, DATA_STR_TOKS_PARSED, indices = process_webtext(seed=SEED, batch_size=(1000 if ipython else start_index+length), seq_len=SEQ_LEN, model=model, verbose=True, return_indices=True, use_tqdm=True)
 
 #%%
 
@@ -170,7 +180,8 @@ RECALC_CSPA_RESULTS = True
 if RECALC_CSPA_RESULTS:
 
     # Empirically, as long as SEQ_LEN large, small BATCH_SIZE gives quite good estimates (experiments about this deleted, too in the weeds)
-    Q_PROJECTION_BATCH_SIZE = 20
+    if ipython is not None:
+        Q_PROJECTION_BATCH_SIZE = 20
     Q_PROJECTION_SEQ_LEN = 300
 
     qk_projection_config = QKProjectionConfig(
@@ -178,7 +189,7 @@ if RECALC_CSPA_RESULTS:
         actually_project=True,
         k_direction = None,
         q_input_multiplier = 2.0,
-        query_bias_multiplier = 1.0,
+        query_bias_multiplier = 0.0, # WARNING - so we can collect data good...
         use_same_scaling = False,
         mantain_bos_attention = False,
         model = model,
@@ -198,9 +209,10 @@ if RECALC_CSPA_RESULTS:
     gc.collect()
     t.cuda.empty_cache()
     print("Starting...")
+    current_data_toks = DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN] if ipython is not None else DATA_TOKS[start_index:start_index+length, :Q_PROJECTION_SEQ_LEN]
     cspa_results_q_projection = get_cspa_results_batched(
         model = model,
-        toks = DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN],
+        toks = current_data_toks,
         max_batch_size = 1,
         negative_head = (10, 7),
         interventions = [],
@@ -219,13 +231,32 @@ if RECALC_CSPA_RESULTS:
     gc.collect()
     t.cuda.empty_cache()
     cached_cspa = {k:v.detach().cpu() for k,v in cspa_results_q_projection.items()}
-    torch.save(cached_cspa, os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu_again_seed_{SEED}.pt"))
+    saver_fpath = os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu_again_seed_{SEED}_{'null' if ipython is not None else start_index}_{'null' if ipython is not None else length}.pt")
+    torch.save(cached_cspa, saver_fpath)
 
 else:
     # This is just a presaved one of mine...
     cspa_results_q_projection = torch.load(os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu_again_seed_{SEED}.pt"))
 
 # In[31]:
+
+if ipython is None:
+
+    # Initialize wandb
+    wandb.init(project="copy-suppression")
+
+    # Log as artifact
+    artifact = wandb.Artifact(
+        name=saver_fpath.split(".")[-2].split("/")[-1],
+        type="dataset",
+        description="An example tensor"
+    )
+    artifact.add_file(saver_fpath)
+    wandb.log_artifact(artifact)
+    wandb.finish()
+    time.sleep(10)
+    # Delete that file path?
+    sys.exit(0)
 
 print(  
     "The performance recovered is...",
