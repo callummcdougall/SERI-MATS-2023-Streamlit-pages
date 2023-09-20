@@ -481,7 +481,10 @@ def show_model_cspa_attentions(
         our_words = interweave(our_words)
         models_words = interweave(models_words)
         contexts = interweave(contexts)
-    
+
+    cnter = 0
+    nocnter = 0
+
     if verbose:
         for i in range(0, len(indices), 2):
             print(
@@ -489,6 +492,12 @@ def show_model_cspa_attentions(
                 contexts[i],
                 end=" ",
             )
+
+            if "all_toks" in locals() or "all_toks" in globals():
+                if model.to_single_token(models_words[i+1]) not in all_toks:
+                    cnter+=1
+                else: 
+                    nocnter+=1
 
             next_things = [
                 f"and the model's{' top'} word was",
@@ -519,6 +528,9 @@ def show_model_cspa_attentions(
 
     if do_counting:
         print("Model's hi attention summary:", model_hi_counter, "(and less importantly, our hi attention counter)", our_hi_counter, " and there were a total", len(indices) // (2 if show_both_maxes else 1), "cases")
+
+    if "all_toks" in locals() or "all_toks" in globals():
+        print("We got", cnter, "cases where the model's word was not in the vocabulary, and", nocnter, "cases where it was")
 
 show_model_cspa_attentions(success_indices)
 
@@ -617,7 +629,7 @@ torch.testing.assert_allclose(
 #%%
 
 test_data_fnames = {
-    start_idx: os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_q_projection_seed_6_{start_idx}_20.pt") for start_idx in list(range(0, 60, 20))
+    start_idx: os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_q_projection_seed_6_{start_idx}_20.pt") for start_idx in list(range(60, -20, -20))
 }
 
 #%%
@@ -683,7 +695,7 @@ for epoch_idx in range(NUM_EPOCHS):
             new_attention_pattern_test = final_attention_score_test.softmax(dim=-1)
 
             test_loss_adds += 1
-            test_loss += ((new_attention_pattern_test - current_test_cuda_data["normal_pattern"][:, :current_test_seq_len, :current_test_seq_len]) ** 2).mean()
+            test_loss += ((new_attention_pattern_test[:,:,1:] - current_test_cuda_data["normal_pattern"][:, :current_test_seq_len, 1:current_test_seq_len]) ** 2).mean()
 
         test_loss /= test_loss_adds
     
@@ -692,7 +704,7 @@ for epoch_idx in range(NUM_EPOCHS):
 
     tot_loss = 0.0
     tot_loss_adds = 0
-    for start_idx in (range(0, 620 if TESTING else DATA_TOKS.shape[0], LENGTH)):
+    for start_idx in (range(80, 700 if TESTING else DATA_TOKS.shape[0], LENGTH)):
         opt.zero_grad()
         loss = torch.tensor(0.0).cuda()
         artifact_fname = f"cspa_results_q_projection_seed_{SEED}_{start_idx}_{LENGTH}"
@@ -733,7 +745,7 @@ for epoch_idx in range(NUM_EPOCHS):
         final_attention_score = trained_attention_score + query_bias_term.unsqueeze(1) # Unsqueeze for seqQ
         new_attention_pattern = final_attention_score.softmax(dim=-1)
 
-        loss = ((new_attention_pattern - current_cuda_data["normal_pattern"][:, :current_seq_len, :current_seq_len]) ** 2).mean()
+        loss = ((new_attention_pattern[:,:,1:] - current_cuda_data["normal_pattern"][:, :current_seq_len, 1:current_seq_len]) ** 2).mean()
         # Backpropagate
         loss.backward()
 
@@ -777,7 +789,7 @@ pprint(
 
 # Side project on query bias
 
-W_EE = get_effective_embedding(model)["W_E (only MLPs)"]
+W_EE =  model.W_U.clone().T # get_effective_embedding(model)["W_E (only MLPs)"]
 b_Q = model.b_Q[10, 7]
 W_K = model.W_K[10, 7]
 query_bias_words = (+einops.einsum(
