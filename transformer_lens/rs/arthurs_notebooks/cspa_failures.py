@@ -96,7 +96,7 @@ current_batch_size = 17 # These are smaller values we use for vizualization sinc
 current_seq_len = 61
 
 NEGATIVE_HEADS = [(10, 7), (11, 10)]
-DATA_TOKS, DATA_STR_TOKS_PARSED, indices = process_webtext(seed=SEED, batch_size=(2020 if ipython else START_INDEX+LENGTH), seq_len=SEQ_LEN, model=model, verbose=True, return_indices=True, use_tqdm=True, prepend_bos=False)
+DATA_TOKS, DATA_STR_TOKS_PARSED, indices = process_webtext(seed=SEED, batch_size=(2020 if ipython else START_INDEX+LENGTH), seq_len=SEQ_LEN, model=model, verbose=True, return_indices=True, use_tqdm=True, prepend_bos=True)
 
 #%%
 
@@ -206,11 +206,11 @@ if RECALC_CSPA_RESULTS:
         use_same_scaling = False,
         mantain_bos_attention = False,
         model = model,
-        save_scores = False,
+        save_scores = True,
         swap_model_and_our_max_attention = False,
         swap_model_and_our_max_scores = False,
         capital_adder = 0.0, # 1.25, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
-        save_scaled_resid_pre = False,  
+        save_scaled_resid_pre = True,  
         # save_q_remove_unembed = True,
         # save_query_input_dotter = True,
         # another_direction = extra_direction,
