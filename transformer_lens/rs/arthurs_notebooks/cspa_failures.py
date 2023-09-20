@@ -190,7 +190,8 @@ if RECALC_CSPA_RESULTS:
         actually_project=True,
         k_direction = None,
         q_input_multiplier = 2.0,
-        query_bias_multiplier = 1.0, # WARNING - so we can collect data good...
+        query_bias_multiplier = 1.0 if ipython is not None else 0.0, # WARNING - so we can collect data good...
+        key_bias_multiplier = 1.0,
         use_same_scaling = False,
         mantain_bos_attention = False,
         model = model,
@@ -198,7 +199,7 @@ if RECALC_CSPA_RESULTS:
         swap_model_and_our_max_attention = False,
         swap_model_and_our_max_scores = False,
         capital_adder = 0.0, # 1.25, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
-        save_scaled_resid_pre = True,    
+        save_scaled_resid_pre = True,  
         # save_q_remove_unembed = True,
         # save_query_input_dotter = True,
         # another_direction = extra_direction,
@@ -232,7 +233,7 @@ if RECALC_CSPA_RESULTS:
     gc.collect()
     t.cuda.empty_cache()
     cached_cspa = {k:v.detach().cpu() for k,v in cspa_results_q_projection.items()}
-    saver_fpath = os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu_again_seed_{SEED}_{'null' if ipython is not None else start_index}_{'null' if ipython is not None else length}.pt")
+    saver_fpath = os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_seed_{SEED}_{'null' if ipython is not None else start_index}_{'null' if ipython is not None else length}.pt")
     torch.save(cached_cspa, saver_fpath)
 
 else:
