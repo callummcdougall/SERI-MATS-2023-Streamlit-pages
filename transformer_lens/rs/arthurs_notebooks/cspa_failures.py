@@ -630,7 +630,7 @@ torch.testing.assert_allclose(
 #%%
 
 test_data_fnames = {
-    # start_idx: os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{ARTIFACT_TO_FORMAT.format(seed=SEED, start_index=start_idx, length=20)}") for start_idx in list(range(60, -20, -20))
+    start_idx: os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{ARTIFACT_TO_FORMAT.format(seed=SEED, start_index=start_idx, length=20)}.pt") for start_idx in list(range(0, 20, 20))
 }
 
 #%%
@@ -705,13 +705,19 @@ for epoch_idx in range(NUM_EPOCHS):
 
     tot_loss = 0.0
     tot_loss_adds = 0
-    for start_idx in (range(0, 80 if TESTING else DATA_TOKS.shape[0], LENGTH)):
+    for start_idx in (range(20, 80 if TESTING else DATA_TOKS.shape[0], LENGTH)):
         opt.zero_grad()
         loss = torch.tensor(0.0).cuda()
         artifact_fname = ARTIFACT_TO_FORMAT.format(seed=SEED, start_index=start_idx, length=LENGTH)
         loading_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
         current_data = torch.load(str(loading_path))
         current_cuda_data = {k:v.cuda() for k,v in current_data.items()}
+        if "scaled_resid_pre" not in torch.load(str(loading_path)).keys():
+            warnings.warn("Had to get this from another pt...")
+            current_cuda_data["scaled_resid_pre"] = torch.load(
+                f"/root/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_q_projection_on_cpu_again_seed_6_{start_idx}_20.pt"
+            )["scaled_resid_pre"].cuda()
+
         current_seq_len = current_data["scores"].shape[1]
 
         # Forward pass
