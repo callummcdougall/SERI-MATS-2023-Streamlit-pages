@@ -400,6 +400,7 @@ class QKProjectionConfig:
     another_direction: Optional[Float[torch.Tensor, "d_model"]] = None # If we want to use an additional direction for the query
     save_query_input_dotter: bool = False
     query_input_dotter: Optional[Float[torch.Tensor, "batch seqK d_model"]] = None
+    fix_bos_input: bool = True # Keep BOS attention score the same
 
     def __post_init__(self):
         
@@ -537,8 +538,9 @@ def run_qk_projections(
             if config.save_q_remove_unembed:
                 config.q_remove_unembed = (q_input_per_position.cpu() - q_input.cpu()) / config.q_input_multiplier
 
-            # Keep BOS attention score the same
-            q_input[:, :, 0] = base_q_input
+            if config.fix_bos_input:
+                # Keep BOS attention score the same
+                q_input[:, :, 0] = base_q_input
 
         elif config.q_direction == "earlier_heads":
             q_input_per_position = config.q_input_multiplier * einops.repeat(base_q_input, "batch seqQ d_model -> batch seqQ seqK d_model", seqK=seq_len).clone()
@@ -909,26 +911,26 @@ def get_cspa_results(
         gc.collect()
         t.cuda.empty_cache()
         
-        # pattern = run_qk_projections(
-        #     model=model,
-        #     LAYER=LAYER,
-        #     HEAD=HEAD,
-        #     toks=toks,
-        #     config=qk_projection_config,
-        #     semantically_similar_toks=semantically_similar_toks,
-        #     pattern=pattern,
-        #     scores=scores,
-        #     scaled_resid_pre=scaled_resid_pre,
-        #     pre_head_result_orig=pre_head_result_orig,
-        #     computation_device=computation_device,
-        # )
+        pattern = run_qk_projections(
+            model=model,
+            LAYER=LAYER,
+            HEAD=HEAD,
+            toks=toks,
+            config=qk_projection_config,
+            semantically_similar_toks=semantically_similar_toks,
+            pattern=pattern,
+            scores=scores,
+            scaled_resid_pre=scaled_resid_pre,
+            pre_head_result_orig=pre_head_result_orig,
+            computation_device=computation_device,
+        )
 
-        print("Hackily loading in some recomputed att patterns")
-        pattern_device = pattern.device
-        pattern_dtype = pattern.dtype
-        pattern = torch.load(
-            os.path.expanduser("~/new_attention_pattern_test.pt")
-        )[global_range[0]:global_range[1]].to(pattern_device).to(pattern_dtype)
+        # print("Hackily loading in some recomputed att patterns")
+        # pattern_device = pattern.device
+        # pattern_dtype = pattern.dtype
+        # pattern = torch.load(
+        #     os.path.expanduser("~/new_attention_pattern_test.pt")
+        # )[global_range[0]:global_range[1]].to(pattern_device).to(pattern_dtype)
 
         gc.collect()
         t.cuda.empty_cache()

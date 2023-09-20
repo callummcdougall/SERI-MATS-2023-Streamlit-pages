@@ -87,7 +87,7 @@ current_seq_len = 61
 SEED=6
 
 NEGATIVE_HEADS = [(10, 7), (11, 10)]
-DATA_TOKS, DATA_STR_TOKS_PARSED, indices = process_webtext(seed=SEED, batch_size=(2020 if ipython else start_index+length), seq_len=SEQ_LEN, model=model, verbose=True, return_indices=True, use_tqdm=True)
+DATA_TOKS, DATA_STR_TOKS_PARSED, indices = process_webtext(seed=SEED, batch_size=(2020 if ipython else start_index+length), seq_len=SEQ_LEN, model=model, verbose=True, return_indices=True, use_tqdm=True, prepend_bos=False)
 
 #%%
 
@@ -205,6 +205,7 @@ if RECALC_CSPA_RESULTS:
         # save_q_remove_unembed = True,
         # save_query_input_dotter = True,
         # another_direction = extra_direction,
+        fix_bos_input=False,
     )
 
     # ov_projection_config = OVProjectionConfig()

@@ -71,6 +71,7 @@ def process_webtext(
     verbose: bool = False,
     return_indices: bool = False,
     use_tqdm: bool = False,
+    prepend_bos: bool = True,
 ) -> Tuple[Int[Tensor, "batch seq"], List[List[str]]]:
     
     DATA_STR_ALL = get_webtext(seed=seed)
@@ -81,7 +82,7 @@ def process_webtext(
     indices = []
     iter = tqdm(range(len(DATA_STR_ALL))) if use_tqdm else range(len(DATA_STR_ALL))
     for i in iter:
-        num_toks = len(model.to_tokens(DATA_STR_ALL[i]).squeeze())
+        num_toks = len(model.to_tokens(DATA_STR_ALL[i], prepend_bos=prepend_bos).squeeze())
         if num_toks > seq_len:
             DATA_STR.append(DATA_STR_ALL[i])
             indices.append(i)
