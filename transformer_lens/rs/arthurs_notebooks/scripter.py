@@ -1,16 +1,8 @@
-import subprocess
-fpath = "/root/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/arthurs_notebooks/cspa_failures.py"
-
-for start_index in range(20, 5000, 20):
-    subprocess.run(["python", fpath, "--start-index", str(start_index), "--length", "20"])
-    print("Done with", start_index)
-
 import os
 import subprocess
-import numpy as np 
 import multiprocessing
-from math import gcd
 
+fpath = "/root/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/arthurs_notebooks/cspa_failures.py"
 used = set()
 
 def run_script(threshold, gpu_id):
@@ -20,8 +12,8 @@ def run_script(threshold, gpu_id):
 
 if __name__ == '__main__':
 
-    num_gpus = 6 # specify the number of GPUs available
-    num_jobs_per_gpu = 1 # specify the number of jobs per GPU
+    num_gpus = 6  # specify the number of GPUs available
+    num_jobs_per_gpu = 1  # specify the number of jobs per GPU
 
     pool = multiprocessing.Pool(num_gpus * num_jobs_per_gpu)
     jobs = []

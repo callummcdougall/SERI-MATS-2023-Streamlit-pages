@@ -68,9 +68,9 @@ model = HookedTransformer.from_pretrained(
     center_unembed=True,
     center_writing_weights=True,
     fold_ln=True,
-    device="cpu",
+    device="cuda:0",
 )
-warnings.warn("Using CPU for CSPA, so it's slow!")
+# warnings.warn("Using CPU for CSPA, so it's slow!")
 model.set_use_split_qkv_input(False)
 model.set_use_attn_result(True)
 clear_output()
