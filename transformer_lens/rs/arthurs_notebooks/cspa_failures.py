@@ -86,7 +86,7 @@ current_seq_len = 61
 SEED=6
 
 NEGATIVE_HEADS = [(10, 7), (11, 10)]
-DATA_TOKS, DATA_STR_TOKS_PARSED, indices = process_webtext(seed=SEED, batch_size=(1000 if ipython else start_index+length), seq_len=SEQ_LEN, model=model, verbose=True, return_indices=True, use_tqdm=True)
+DATA_TOKS, DATA_STR_TOKS_PARSED, indices = process_webtext(seed=SEED, batch_size=(2020 if ipython else start_index+length), seq_len=SEQ_LEN, model=model, verbose=True, return_indices=True, use_tqdm=True)
 
 #%%
 
@@ -182,7 +182,7 @@ if RECALC_CSPA_RESULTS:
 
     # Empirically, as long as SEQ_LEN large, small BATCH_SIZE gives quite good estimates (experiments about this deleted, too in the weeds)
     if ipython is not None:
-        Q_PROJECTION_BATCH_SIZE = 1
+        Q_PROJECTION_BATCH_SIZE = 20
     Q_PROJECTION_SEQ_LEN = 300
 
     qk_projection_config = QKProjectionConfig(
@@ -211,7 +211,7 @@ if RECALC_CSPA_RESULTS:
     gc.collect()
     t.cuda.empty_cache()
     print("Starting...")
-    current_data_toks = DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN] if ipython is not None else DATA_TOKS[start_index:start_index+length, :Q_PROJECTION_SEQ_LEN]
+    current_data_toks = DATA_TOKS[Q_PROJECTION_BATCH_SIZE:Q_PROJECTION_BATCH_SIZE*2, :Q_PROJECTION_SEQ_LEN] if ipython is not None else DATA_TOKS[start_index:start_index+length, :Q_PROJECTION_SEQ_LEN]
     cspa_results_q_projection = get_cspa_results_batched(
         model = model,
         toks = current_data_toks,
@@ -238,7 +238,7 @@ if RECALC_CSPA_RESULTS:
 
 else:
     # This is just a presaved one of mine...
-    cspa_results_q_projection = torch.load(os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu_again_seed_{SEED}.pt"))
+    cspa_results_q_projection = torch.load(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu_again_seed_{SEED}.pt"))
 
 # In[31]:
 
@@ -268,8 +268,8 @@ else:
     wandb.init(project=WANDB_PROJECT_NAME)
     tensor_datas = []
 
-    for start_index in range(0, 5000, 20):
-        artifact_fname = f"cspa_results_q_projection_on_cpu_again_seed_{SEED}_{start_index}_20"
+    for start_index in range(0, 2020, 20):
+        artifact_fname = f"cspa_results_q_projection_seed_{SEED}_{start_index}_20"
         try:
             saving_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
 
@@ -298,7 +298,7 @@ print(
 all_dicts = {}
 for tensor_data in tensor_datas:
     all_dicts = concat_dicts(all_dicts, tensor_data)
-torch.save(all_dicts, os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_seed_{SEED}_num_batches_{list(all_dicts.values())[0].shape[0]}.pt")) # Should be around 4GB I think
+torch.save(all_dicts, os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_seed_{SEED}_num_batches_{list(all_dicts.values())[0].shape[0]}_try_two.pt")) # Should be around 4GB I think
 
 # Now we need to train!!
 
@@ -573,212 +573,25 @@ show_model_cspa_attentions(sorted_fail_indices, show_both_maxes=True, verbose=Tr
 # 
 # Wow, we're at >1/2 of the cases being captial cases! The function word does not reproduce, and the BOS thing isn't very siginifcant (~3x as freqent. Still a fiar big though)
 #
-# Freaking 5x as much, too!
-# %%
-#
-# OK, how do we locate the mystical ` is capital` (presumably!) part of the query resid stream?
-# 
-# Look at cosine similarities between these secret other directions???
-# # Hmm problematic because if it's low we need rethink...
-# Is there a "What is the best case scenario experiment to run???" 
-# Get all the pairs of (What else other than unembedding shit pointed in the score direction?, How much attention score did it add?s)
-#
-# Here's another approach: feed in our "failure" sentences into a forward pass, look at diff between capitalised version and not (on keyside?!
-# 
-# Lol let's find the optimal multiplier to times capital letter words by...
-#
-#%%
-
-for multiple in [2.5, 2.75, 2.9, 0.0]: 
-    batch_size, seq_len, _ = cspa_results_q_projection["scores"].shape
-    all_str_tokens = model.to_str_tokens(torch.arange(model.cfg.d_vocab))
-    capital_start_tens = torch.tensor(
-        [begins_with_capital_letter(x) for x in all_str_tokens]
-    )
-    toks_capital_letter_start = capital_start_tens[DATA_TOKS[:batch_size, :seq_len]]
-    multiplier = toks_capital_letter_start.float() * (multiple - 1.0)
-    multiplier += 1.0
-    new_scores = cspa_results_q_projection["scores"].clone()
-    new_scores *= multiplier.unsqueeze(1) # This should be a property of the key, so is the same across the query (middle) dimension 
-    new_bad_bos_pattern = new_scores.softmax(dim=-1)
-    new_pattern = rescale_to_retain_bos(
-        att_probs = new_bad_bos_pattern, 
-        old_bos_probs = cspa_results_q_projection["normal_pattern"][:, :, 0],
-    )
-
-    # Calculate distance to the model's probs...
-
-    old_pattern = cspa_results_q_projection["normal_pattern"].clone()
-
-    total_diff = 0
-
-    for batch_idx, seq_idx in sorted_fail_indices:
-        old_seq = old_pattern[batch_idx, seq_idx]
-        old_max_idx = torch.argmax(old_seq).item()
-        total_diff += (old_seq[old_max_idx] - new_pattern[batch_idx, seq_idx, old_max_idx]).abs().item()
-
-    print(multiple, total_diff) # break
-
-# 2.6 is best!
-
-# %%
-
-# Ah failure, performance looks much worse (<50% KL recovered) when we do 2.0 multiplier. Even 1.5x mutliplier seems to be slightly worse than normal (59% recovered [:-(] )
-
-#%%
-
-# New plan: can we learn the important directions (where maybe "capital-ness" is stored?)
-#
-# After having a think, linear and exact method seems variously flawed, let's train N directions (initially N=1) to minimize L2 of attention probs
-#
-#%%
-
-t.set_grad_enabled(True)
-
-#%%
-
-def evaluate_directions(
-    no_unembed_scaled_resid_pre: Float[torch.Tensor, "batch seqQ ... d_model"], # sometimes we have a K dimension too... also TODO rename from "no_unembed", this just means having removed a key dimension 
-    old_scores: Float[torch.Tensor, "batch seqQ seqK"],
-    true_pattern: Float[torch.Tensor, "batch seqQ seqK"],
-    query_input_dotter: Float[torch.Tensor, "batch seqK d_model"],
-    directions: List[Float[torch.Tensor, "d_model"]],    
-    do_rescale_to_retain_bos: bool = True,
-):
-    no_unembed_scaled_resid_pre_shape_prefix = f"batch seqQ{' seqK' if len(no_unembed_scaled_resid_pre.shape)==4 else ''}"
-
-    assert len(directions)==1, "Haven't implemented len(directions)>1 yet"
-    direction_projection = einops.einsum(
-        no_unembed_scaled_resid_pre,
-        directions[0] / directions[0].norm(),
-        f"{no_unembed_scaled_resid_pre_shape_prefix} d_model, d_model -> {no_unembed_scaled_resid_pre_shape_prefix}",
-    ).unsqueeze(-1) * directions[0]
-
-    extra_attention_score = einops.einsum(
-        direction_projection,
-        query_input_dotter,
-        f"{no_unembed_scaled_resid_pre_shape_prefix} d_model, batch seqK d_model -> batch seqQ seqK",
-    ) / np.sqrt(model.cfg.d_head)
-
-    new_attention_score = old_scores + extra_attention_score
-    new_attention_pattern = new_attention_score.softmax(dim=-1)
-
-    if do_rescale_to_retain_bos:
-        new_attention_pattern = rescale_to_retain_bos(
-            att_probs = new_attention_pattern, 
-            old_bos_probs = true_pattern[:, :, 0],
-        )
-
-    return (new_attention_pattern - true_pattern) ** 2
-
-#%%
-
-TRAIN_SIZE = 75 # because we messed up how we're saving things, TODO make this bigger
-
-assert TRAIN_SIZE <= Q_PROJECTION_BATCH_SIZE
-
-train_unembed_scores = cspa_results_q_projection["scores"][:TRAIN_SIZE]
-train_ground_truth = cspa_results_q_projection["normal_pattern"][:TRAIN_SIZE]
-train_no_unembed_scaled_resid_pre = cspa_results_q_projection["q_remove_unembed"][:TRAIN_SIZE]
-test_unembed_scores = cspa_results_q_projection["scores"][TRAIN_SIZE:]
-test_ground_truth = cspa_results_q_projection["normal_pattern"][TRAIN_SIZE:]
-test_no_unembed_scaled_resid_pre = cspa_results_q_projection["q_remove_unembed"][TRAIN_SIZE:]
-
-train_query_input_dotter = cspa_results_q_projection["query_input_dotter"][:TRAIN_SIZE]
-test_query_input_dotter = cspa_results_q_projection["query_input_dotter"][TRAIN_SIZE:]
-
-for split_name, unembed_scores, ground_truth in zip(
-    ["train", "test"], 
-    [train_unembed_scores, test_unembed_scores],
-    [train_ground_truth, test_ground_truth],
-    strict=True,
-):
-    new_attention = unembed_scores.softmax(dim=-1)
-    new_attention = rescale_to_retain_bos(
-        att_probs = new_attention, 
-        old_bos_probs = ground_truth[:, :, 0],
-    )
-
-    print(
-        f"The initial {split_name} L2 performance is", 
-        round(((new_attention - ground_truth)**2).mean().item(), 5)
-    )
-
-# Interesting, values are pretty small
-
-#%%
-
-# Set seed 
-torch.manual_seed(41)
-direction = torch.nn.Parameter(2.0 * torch.randn(model.cfg.d_model), requires_grad=True)
-opt = torch.optim.Adam([direction], lr=0.1)
-
-NUM_EPOCHS = 100
-
-all_directions = [direction.data.detach().clone()]
-
-for epoch_idx in tqdm(range(NUM_EPOCHS)):
-    opt.zero_grad() 
-
-    # Forward pass
-    all_losses = evaluate_directions(
-        no_unembed_scaled_resid_pre = train_no_unembed_scaled_resid_pre,
-        old_scores = train_unembed_scores,
-        true_pattern = train_ground_truth,
-        query_input_dotter = train_query_input_dotter,
-        directions = [direction],
-        do_rescale_to_retain_bos = False,
-    )
-
-    # Calculate loss
-    loss = all_losses.mean()
-    # loss = all_loss_mean_loss + direction.abs().sum() * 2e-8
-
-    # Backpropagate
-    loss.backward()
-
-    # Update parameters
-    opt.step()
-
-    all_directions.append(direction.data.detach().clone())
-
-    # Evaluate on test set
-    with torch.no_grad():
-        all_test_losses = evaluate_directions(
-            test_no_unembed_scaled_resid_pre,
-            test_unembed_scores,
-            test_ground_truth,
-            test_query_input_dotter,
-            [direction],
-            do_rescale_to_retain_bos=False,
-        )
-
-        test_loss = all_test_losses.mean()
-
-    # Print metrics
-    print(
-        f"Epoch {epoch_idx+1}/{NUM_EPOCHS}",
-        f"Train Loss: {all_loss_mean_loss.item():.7f}",
-        f"Test Loss: {test_loss.item():.7f}",
-    )
-
-# %%
-
-# Okay we got 90% cosine similarity on this direction. Does it help
-# (A: No, seemed basically irrelevant. Could be bugged, but I'm not very excited about this direction as it seems things kinda depend on what the key token is?)
+# Freaking 5x as much, too! (The capital_adder can improve stuff by a percentage point or two, but we need more powerful tools)
 
 #%%
 
 # Let's recompute the attention pattern from scores + query bias. And then check that that matches what happens by default
 # Then focus on training...
 
-big_fname = os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_q_projection_on_cpu_again_seed_{SEED}_{0}_20.pt")
+big_fname = os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_q_projection_seed_6_20_20.pt")
 big_tens = torch.load(big_fname)
 
 #%%
 
 INITIAL_BATCH_SIZE = 1 # So this is as quick as possible for recalculating
-initial_scores = big_tens["scores"][0]
+initial_scores = big_tens["scores"][0].clone()
+
+print(
+    initial_scores.cpu()[:3,:3]
+)
+
 key_term = einops.einsum(
     big_tens["scaled_resid_pre"][0],
     model.W_K[10, 7].cpu(),
@@ -790,9 +603,20 @@ query_bias_term = einops.einsum(
     "seqK d_head, d_head -> seqK",
 ) / np.sqrt(model.cfg.d_head)
 
-initial_scores[:, 1:] += query_bias_term.unsqueeze(0)[:, 1:] # unsqueeze not necessary strictly! 
+initial_scores[:, 0:] += query_bias_term.unsqueeze(0)[:, 0:] # unsqueeze not necessary strictly! 
 new_attention_pattern = initial_scores.softmax(dim=-1) # TODO sanity check that this is the same as what we get with the get_cspa_results function with bias term on!
-# Ugh this requires believing that the difference between recomputed and original is exactly the b_K we dropped?! :-(
+ 
+torch.testing.assert_allclose(
+    initial_scores.cpu(),
+    cspa_results_q_projection["scores"][0].cpu(),
+    # big_tens["scores"][0].cpu(),
+    # big_tens["normal_pattern"][0].cpu(),
+)
+
+#%%
+
+NUM_TEST_SET_BATCHES = 5
+test_data = None # Sort out later
 
 #%%
 
@@ -800,46 +624,53 @@ new_attention_pattern = initial_scores.softmax(dim=-1) # TODO sanity check that 
 
 torch.set_grad_enabled(True)
 attention_score_bias = torch.nn.Parameter(torch.zeros(model.cfg.d_vocab).double(), requires_grad=True)
-attention_score_scale = torch.nn.Parameter(torch.zeros(model.cfg.d_vocab).double(), requires_grad=True)
+attention_score_scale = torch.nn.Parameter(torch.zeros(model.cfg.d_vocab).double(), requires_grad=True) # We will add 1 to this. We do this so we can use AdamW if it seems relevant
 opt = torch.optim.Adam([attention_score_bias, attention_score_scale], lr=0.007)
 NUM_EPOCHS = 1000
 all_biases = [attention_score_bias.data.detach().clone()]
+all_scales = [attention_score_scale.data.detach().clone()]
+LENGTH = 20
 
 for epoch_idx in tqdm(range(NUM_EPOCHS)):
+    for start_idx in tqdm(range(0, DATA_TOKS.shape[0], LENGTH)): # 20 is the length we used for sweeps
+        artifact_fname = f"cspa_results_q_projection_seed_{SEED}_{start_idx}_20"
+        loading_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
+        current_data = torch.load(str(loading_path))
+        current_seq_len = current_data["scores"].shape[1]
 
-    opt.zero_grad() 
+        opt.zero_grad()
 
-    # Forward pass
-    # TODO crucial to remove "pattern" -> "scores"
-    tok_indices = einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)
-    new_attention_score = (torch.maximum(cspa_results_q_projection["scores"][:, :Q_PROJECTION_SEQ_LEN//2].double(), torch.tensor(-30.0, dtype=torch.double))*(attention_score_scale[tok_indices][:, :Q_PROJECTION_SEQ_LEN//2])+1.0) + attention_score_bias[tok_indices][:, :Q_PROJECTION_SEQ_LEN//2]
-
-    new_attention_pattern = new_attention_score.softmax(dim=-1)
-    loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN//2]) ** 2).mean()
-
-    # Backpropagate
-    loss.backward(retain_graph=True)
-
-    # Update parameters
-    opt.step()
-
-    all_biases.append(attention_score_bias.data.detach().clone())
-
-    # Evaluate on test set
-    with torch.no_grad():
-        # new_attention_score = cspa_results_q_projection["scores"][:Q_PROJECTION_BATCH_SIZE, Q_PROJECTION_SEQ_LEN//2:Q_PROJECTION_SEQ_LEN] + attention_score_bias[einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)][:, Q_PROJECTION_SEQ_LEN//2:]
-        test_tok_indices = einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)
-        new_attention_score = (torch.maximum(cspa_results_q_projection["scores"][:Q_PROJECTION_BATCH_SIZE, Q_PROJECTION_SEQ_LEN//2:Q_PROJECTION_SEQ_LEN].double(), torch.tensor(-30.0, dtype=torch.double)) * attention_score_scale[test_tok_indices][:, Q_PROJECTION_SEQ_LEN//2:] + 1.0) + attention_score_bias[test_tok_indices][:, Q_PROJECTION_SEQ_LEN//2:]
+        # Forward pass
+        tok_indices = einops.repeat(DATA_TOKS[start_idx:start_idx+LENGTH, :current_seq_len], "batch seqK -> batch seqQ seqK", seqQ = current_seq_len)
+        new_attention_score = (torch.maximum(cspa_results_q_projection["scores"][:, :current_seq_len].double(), torch.tensor(-30.0, dtype=torch.double))*(attention_score_scale[tok_indices][:, :current_seq_len])+1.0) + attention_score_bias[tok_indices][:, :current_seq_len]
 
         new_attention_pattern = new_attention_score.softmax(dim=-1)
-        test_loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][:, Q_PROJECTION_SEQ_LEN//2:]) ** 2).mean()
+        loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][:, :current_seq_len, :current_seq_len]) ** 2).mean()
 
-    # Print metrics
-    print(
-        f"Epoch {epoch_idx+1}/{NUM_EPOCHS}",
-        f"Train Loss: {loss.item():.7f}",
-        f"Test Loss: {test_loss.item():.7f}",
-    )
+        # Backpropagate
+        loss.backward(retain_graph=True)
+
+        # Update parameters
+        opt.step()
+
+        all_biases.append(attention_score_bias.data.detach().clone())
+        all_scales.append(attention_score_scale.data.detach().clone())
+
+        # # Evaluate on test set
+        # with torch.no_grad():
+        #     test_tok_indices = einops.repeat(DATA_TOKS[:Q_PROJECTION_BATCH_SIZE, :Q_PROJECTION_SEQ_LEN], "batch seqK -> batch seqQ seqK", seqQ = Q_PROJECTION_SEQ_LEN)
+        #     new_attention_score = (torch.maximum(cspa_results_q_projection["scores"][:Q_PROJECTION_BATCH_SIZE, Q_PROJECTION_SEQ_LEN//2:Q_PROJECTION_SEQ_LEN].double(), torch.tensor(-30.0, dtype=torch.double)) * attention_score_scale[test_tok_indices][:, Q_PROJECTION_SEQ_LEN//2:] + 1.0) + attention_score_bias[test_tok_indices][:, Q_PROJECTION_SEQ_LEN//2:]
+
+        #     new_attention_pattern = new_attention_score.softmax(dim=-1)
+        #     test_loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][:, Q_PROJECTION_SEQ_LEN//2:]) ** 2).mean()
+
+        # Print metrics
+        print(
+            f"Epoch {epoch_idx+1}/{NUM_EPOCHS}",
+            f"Train Loss: {loss.item():.7f}",
+            # f"Test Loss: {test_loss.item():.7f}",
+        )
+
 # %%
 
 # Then actually evaluate this attention pattern on the original task! 
