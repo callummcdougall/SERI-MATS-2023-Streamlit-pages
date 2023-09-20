@@ -620,11 +620,11 @@ test_data = None # Sort out later
 
 #%%
 
-# Let's train the biases for all the attention scores
+# Let's train the gains and biases for all the attention scores!
 
 torch.set_grad_enabled(True)
-attention_score_bias = torch.nn.Parameter(torch.zeros(model.cfg.d_vocab).double(), requires_grad=True)
-attention_score_scale = torch.nn.Parameter(torch.zeros(model.cfg.d_vocab).double(), requires_grad=True) # We will add 1 to this. We do this so we can use AdamW if it seems relevant
+attention_score_bias = torch.nn.Parameter(torch.zeros(model.cfg.d_vocab).double().cuda(), requires_grad=True)
+attention_score_scale = torch.nn.Parameter(torch.zeros(model.cfg.d_vocab).double().cuda(), requires_grad=True) # We will add 1 to this. We do this so we can use AdamW if it seems relevant.
 opt = torch.optim.Adam([attention_score_bias, attention_score_scale], lr=0.007)
 NUM_EPOCHS = 1000
 all_biases = [attention_score_bias.data.detach().clone()]
@@ -632,20 +632,37 @@ all_scales = [attention_score_scale.data.detach().clone()]
 LENGTH = 20
 
 for epoch_idx in tqdm(range(NUM_EPOCHS)):
-    for start_idx in tqdm(range(0, DATA_TOKS.shape[0], LENGTH)): # 20 is the length we used for sweeps
-        artifact_fname = f"cspa_results_q_projection_seed_{SEED}_{start_idx}_20"
+    for start_idx in tqdm(range(0, DATA_TOKS.shape[0], LENGTH)):
+        artifact_fname = f"cspa_results_q_projection_seed_{SEED}_{start_idx}_{LENGTH}"
         loading_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
         current_data = torch.load(str(loading_path))
+        current_cuda_data = {k:v.cuda() for k,v in current_data.items()}
         current_seq_len = current_data["scores"].shape[1]
 
         opt.zero_grad()
 
         # Forward pass
-        tok_indices = einops.repeat(DATA_TOKS[start_idx:start_idx+LENGTH, :current_seq_len], "batch seqK -> batch seqQ seqK", seqQ = current_seq_len)
-        new_attention_score = (torch.maximum(cspa_results_q_projection["scores"][:, :current_seq_len].double(), torch.tensor(-30.0, dtype=torch.double))*(attention_score_scale[tok_indices][:, :current_seq_len])+1.0) + attention_score_bias[tok_indices][:, :current_seq_len]
+        tok_indices = einops.repeat(DATA_TOKS[start_idx:start_idx+LENGTH, :current_seq_len], "batch seqK -> batch seqQ seqK", seqQ = current_seq_len).cuda()
+        
+        initial_attention_score = current_cuda_data["scores"][:, :current_seq_len].clone().double()
+        trained_attention_score = (torch.maximum(initial_attention_score, torch.tensor(-30.0, dtype=torch.double).cuda()) * (attention_score_scale[tok_indices][:, :current_seq_len])+1.0) + attention_score_bias[tok_indices][:, :current_seq_len]
 
-        new_attention_pattern = new_attention_score.softmax(dim=-1)
-        loss = ((new_attention_pattern - cspa_results_q_projection["normal_pattern"][:, :current_seq_len, :current_seq_len]) ** 2).mean()
+        key_term = einops.einsum(
+            current_cuda_data["scaled_resid_pre"],
+            model.W_K[10, 7],
+            "batch seqK d_model, d_model d_head -> batch seqK d_head",
+        ) + model.b_K[10, 7]
+        
+        query_bias_term = einops.einsum(
+            key_term,
+            model.b_Q[10, 7],
+            "batch seqK d_head, d_head -> batch seqK",
+        ) / np.sqrt(model.cfg.d_head)        
+
+        final_attention_score = trained_attention_score + query_bias_term.unsqueeze(1) # Unsqueeze for seqQ
+
+        new_attention_pattern = final_attention_score.softmax(dim=-1)
+        loss = ((new_attention_pattern - current_cuda_data["normal_pattern"][:, :current_seq_len, :current_seq_len]) ** 2).mean()
 
         # Backpropagate
         loss.backward(retain_graph=True)
