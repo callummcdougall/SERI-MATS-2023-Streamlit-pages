@@ -390,6 +390,7 @@ class QKProjectionConfig:
     swap_model_and_our_max_attention: bool = False # Testing whether we are wrong because we just get our top attention wrong. Let's hope so!
     swap_model_and_our_max_scores: bool = False # Same for scores
     query_bias_multiplier: float = 1.0 # Do we want to multiply query bias up???
+    key_bias_multiplier: float = 1.0 # Do we want to multiply key bias up???
     capital_adder: Optional[float] = None # Do we want to add attention scores on capital letters? (Note that timesing didn't work)
     proper_noun_adder: Optional[float] = None # Do we want to add attention scores on proper nouns? (Note that timesing didn't work)
     proper_nouns: Optional[Float[torch.Tensor, "n_vocab"]] = None # Stores the token IDs of proper nouns
@@ -617,7 +618,7 @@ def run_qk_projections(
     k = einops.einsum(k_input, model.W_K[LAYER, HEAD], f"{k_shape} d_model, d_model d_head -> {k_shape} d_head")
     # Broadcast on last dim :-) 
     q += model.b_Q[LAYER, HEAD] * config.query_bias_multiplier
-    k += model.b_K[LAYER, HEAD] * config.query_bias_multiplier
+    k += model.b_K[LAYER, HEAD] * config.key_bias_multiplier
 
     att_scores = einops.einsum(q, k, f"{q_shape} d_head, {k_shape} d_head -> batch seqQ seqK") / math.sqrt(model.cfg.d_head)
 

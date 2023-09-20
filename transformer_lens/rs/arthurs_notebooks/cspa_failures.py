@@ -22,6 +22,7 @@ t.set_grad_enabled(False)
 
 from transformer_lens.rs.callum2.cspa.cspa_functions import (
     FUNCTION_STR_TOKS,
+    concat_dicts,
     get_first_letter,
     begins_with_capital_letter,
     rescale_to_retain_bos,
@@ -181,7 +182,7 @@ if RECALC_CSPA_RESULTS:
 
     # Empirically, as long as SEQ_LEN large, small BATCH_SIZE gives quite good estimates (experiments about this deleted, too in the weeds)
     if ipython is not None:
-        Q_PROJECTION_BATCH_SIZE = 20
+        Q_PROJECTION_BATCH_SIZE = 1
     Q_PROJECTION_SEQ_LEN = 300
 
     qk_projection_config = QKProjectionConfig(
@@ -189,7 +190,7 @@ if RECALC_CSPA_RESULTS:
         actually_project=True,
         k_direction = None,
         q_input_multiplier = 2.0,
-        query_bias_multiplier = 0.0, # WARNING - so we can collect data good...
+        query_bias_multiplier = 1.0, # WARNING - so we can collect data good...
         use_same_scaling = False,
         mantain_bos_attention = False,
         model = model,
@@ -264,23 +265,43 @@ else:
 
     # Initialize wandb (optional if already initialized)
     wandb.init(project=WANDB_PROJECT_NAME)
+    tensor_datas = []
 
     for start_index in range(0, 5000, 20):
         artifact_fname = f"cspa_results_q_projection_on_cpu_again_seed_{SEED}_{start_index}_20"
+        try:
+            saving_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
 
-        # Download the artifact
-        artifact = wandb.use_artifact(f"{artifact_fname}:latest")
-        artifact.download(target_dir="artifacts")
+            if os.path.exists(saving_path):
+                tensor_datas.append(torch.load(saving_path))
+                print("Got", artifact_fname, "from local storage")
 
-        # Load the tensor back into memory
-        tensor_data = torch.load("artifacts/tensor_data.pt")
+            else:
+                # Download the artifact
+                artifact = wandb.use_artifact(f"{artifact_fname}:latest")
+                artifact.download(root=str(saving_path.parent))
+
+                # Load the tensor back into memory
+                tensor_datas.append(torch.load(str(saving_path)))
+
+        except Exception as e:
+            print("Failed to load", artifact_fname, "because", e)
 
 print(  
     "The performance recovered is...",
     get_performance_recovered(cspa_results_q_projection), # ~64
 )
 
-#%%``
+#%%
+
+all_dicts = {}
+for tensor_data in tensor_datas:
+    all_dicts = concat_dicts(all_dicts, tensor_data)
+torch.save(all_dicts, os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_seed_{SEED}_num_batches_{list(all_dicts.values())[0].shape[0]}.pt")) # Should be around 4GB I think
+
+# Now we need to train!!
+
+#%%
 
 # All of this is seed=6
 
@@ -743,9 +764,36 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
 # %%
 
 # Okay we got 90% cosine similarity on this direction. Does it help
-# (A: No, seemed basically irrelevant)
+# (A: No, seemed basically irrelevant. Could be bugged, but I'm not very excited about this direction as it seems things kinda depend on what the key token is?)
 
-# %%
+#%%
+
+# Let's recompute the attention pattern from scores + query bias. And then check that that matches what happens by default
+# Then focus on training...
+
+big_fname = os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_q_projection_on_cpu_again_seed_{SEED}_{0}_20.pt")
+big_tens = torch.load(big_fname)
+
+#%%
+
+INITIAL_BATCH_SIZE = 1 # So this is as quick as possible for recalculating
+initial_scores = big_tens["scores"][0]
+key_term = einops.einsum(
+    big_tens["scaled_resid_pre"][0],
+    model.W_K[10, 7].cpu(),
+    "seqK d_model, d_model d_head -> seqK d_head",
+) + model.b_K[10, 7].cpu()
+query_bias_term = einops.einsum(
+    key_term,
+    model.b_Q[10, 7].cpu(),
+    "seqK d_head, d_head -> seqK",
+) / np.sqrt(model.cfg.d_head)
+
+initial_scores[:, 1:] += query_bias_term.unsqueeze(0)[:, 1:] # unsqueeze not necessary strictly! 
+new_attention_pattern = initial_scores.softmax(dim=-1) # TODO sanity check that this is the same as what we get with the get_cspa_results function with bias term on!
+# Ugh this requires believing that the difference between recomputed and original is exactly the b_K we dropped?! :-(
+
+#%%
 
 # Let's train the biases for all the attention scores
 
