@@ -18,14 +18,14 @@ if ipython is None:
     parser.add_argument("--artifact-base", type=str)
 
     args = parser.parse_args()
-    start_index = args.start_index
-    length = args.length
+    START_INDEX = args.start_index
+    LENGTH = args.length
     ARTIFACT_BASE = args.artifact_base
 
 else:
     ARTIFACT_BASE = "cspa_results_q_projection_seed"
 
-ARTIFACT_TO_FORMAT = ARTIFACT_BASE +  "_{SEED}_{start_idx}_{LENGTH}"
+ARTIFACT_TO_FORMAT = ARTIFACT_BASE +  "_{seed}_{start_idx}_{length}"
 
 t.set_grad_enabled(False)
 
@@ -95,7 +95,7 @@ current_batch_size = 17 # These are smaller values we use for vizualization sinc
 current_seq_len = 61
 
 NEGATIVE_HEADS = [(10, 7), (11, 10)]
-DATA_TOKS, DATA_STR_TOKS_PARSED, indices = process_webtext(seed=SEED, batch_size=(2020 if ipython else start_index+length), seq_len=SEQ_LEN, model=model, verbose=True, return_indices=True, use_tqdm=True, prepend_bos=False)
+DATA_TOKS, DATA_STR_TOKS_PARSED, indices = process_webtext(seed=SEED, batch_size=(2020 if ipython else START_INDEX+LENGTH), seq_len=SEQ_LEN, model=model, verbose=True, return_indices=True, use_tqdm=True, prepend_bos=False)
 
 #%%
 
@@ -222,7 +222,7 @@ if RECALC_CSPA_RESULTS:
     gc.collect()
     t.cuda.empty_cache()
     print("Starting...")
-    current_data_toks = DATA_TOKS[Q_PROJECTION_BATCH_START:Q_PROJECTION_BATCH_END, :Q_PROJECTION_SEQ_LEN] if ipython is not None else DATA_TOKS[start_index:start_index+length, :Q_PROJECTION_SEQ_LEN]
+    current_data_toks = DATA_TOKS[Q_PROJECTION_BATCH_START:Q_PROJECTION_BATCH_END, :Q_PROJECTION_SEQ_LEN] if ipython is not None else DATA_TOKS[START_INDEX:START_INDEX+LENGTH, :Q_PROJECTION_SEQ_LEN]
     cspa_results_q_projection = get_cspa_results_batched(
         model = model,
         toks = current_data_toks,
@@ -244,7 +244,7 @@ if RECALC_CSPA_RESULTS:
     gc.collect()
     t.cuda.empty_cache()
     cached_cspa = {k:v.detach().cpu() for k,v in cspa_results_q_projection.items()}
-    saver_fpath = os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/{ARTIFACT_TO_FORMAT.format(seed=SEED, length=Q_PROJECTION_BATCH_END-Q_PROJECTION_BATCH_START, start_index=Q_PROJECTION_BATCH_START)}.pt")
+    saver_fpath = os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/{ARTIFACT_TO_FORMAT.format(seed=SEED, length=(Q_PROJECTION_BATCH_END-Q_PROJECTION_BATCH_START) if ipython is not None else LENGTH, start_index=(Q_PROJECTION_BATCH_START if ipython is not None else START_INDEX))}.pt")
     torch.save(cached_cspa, saver_fpath)
 
 else:
@@ -283,8 +283,8 @@ else:
     wandb.init(project=WANDB_PROJECT_NAME)
     tensor_datas = []
 
-    for start_index in range(0, 2020, 20):
-        artifact_fname = ARTIFACT_TO_FORMAT.format(seed=SEED, length=20, start_index=start_index)
+    for START_INDEX in range(0, 2020, 20):
+        artifact_fname = ARTIFACT_TO_FORMAT.format(seed=SEED, length=20, start_index=START_INDEX)
         try:
             saving_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
 

@@ -8,7 +8,7 @@ used = set()
 def run_script(threshold, gpu_id, artifact_base):
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    subprocess.run(["python", script_path, "--start-index", str(threshold), "--length", "20", "--artifact-base", artifact_base], env=env)
+    subprocess.run(["python", script_path, "--start-index", str(threshold), "--length", "1", "--artifact-base", artifact_base], env=env)
 
 if __name__ == '__main__':
 
