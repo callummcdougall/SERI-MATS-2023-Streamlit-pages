@@ -25,7 +25,7 @@ if ipython is None:
 else:
     ARTIFACT_BASE = "cspa_results_q_projection_seed"
 
-ARTIFACT_TO_FORMAT = ARTIFACT_BASE +  "_{seed}_{start_idx}_{length}"
+ARTIFACT_TO_FORMAT = ARTIFACT_BASE +  "_{seed}_{start_index}_{length}"
 
 t.set_grad_enabled(False)
 
@@ -707,7 +707,7 @@ for epoch_idx in range(NUM_EPOCHS):
     for start_idx in (range(80, 700 if TESTING else DATA_TOKS.shape[0], LENGTH)):
         opt.zero_grad()
         loss = torch.tensor(0.0).cuda()
-        artifact_fname = ARTIFACT_TO_FORMAT.format(seed=SEED, start_idx=start_idx, length=LENGTH)
+        artifact_fname = ARTIFACT_TO_FORMAT.format(seed=SEED, start_index=start_idx, length=LENGTH)
         loading_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
         current_data = torch.load(str(loading_path))
         current_cuda_data = {k:v.cuda() for k,v in current_data.items()}
