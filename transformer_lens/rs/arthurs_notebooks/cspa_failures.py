@@ -240,10 +240,11 @@ else:
 
 # In[31]:
 
-if ipython is None:
+WANDB_PROJECT_NAME = "copy-suppression"
 
+if ipython is None:
     # Initialize wandb
-    wandb.init(project="copy-suppression")
+    wandb.init(project=WANDB_PROJECT_NAME)
 
     # Log as artifact
     artifact = wandb.Artifact(
@@ -257,6 +258,22 @@ if ipython is None:
     time.sleep(10)
     # Delete that file path?
     sys.exit(0)
+
+else:
+    # Let's try to load the artifacts!
+
+    # Initialize wandb (optional if already initialized)
+    wandb.init(project=WANDB_PROJECT_NAME)
+
+    for start_index in range(0, 5000, 20):
+        artifact_fname = f"cspa_results_q_projection_on_cpu_again_seed_{SEED}_{start_index}_20"
+
+        # Download the artifact
+        artifact = wandb.use_artifact(f"{artifact_fname}:latest")
+        artifact.download(target_dir="artifacts")
+
+        # Load the tensor back into memory
+        tensor_data = torch.load("artifacts/tensor_data.pt")
 
 print(  
     "The performance recovered is...",
@@ -727,8 +744,7 @@ for epoch_idx in tqdm(range(NUM_EPOCHS)):
 
 # Okay we got 90% cosine similarity on this direction. Does it help
 # (A: No, seemed basically irrelevant)
-#
-#
+
 # %%
 
 # Let's train the biases for all the attention scores
