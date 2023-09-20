@@ -205,7 +205,7 @@ if RECALC_CSPA_RESULTS:
         use_same_scaling = False,
         mantain_bos_attention = False,
         model = model,
-        save_scores = False,
+        save_scores = True,
         swap_model_and_our_max_attention = False,
         swap_model_and_our_max_scores = False,
         capital_adder = 0.0, # 1.25, # 0.75, 0.25, 0.75, # ... so hacky and worth about a percent # 0.25 buys like one percentage point
