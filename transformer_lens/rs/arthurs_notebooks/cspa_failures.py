@@ -242,6 +242,11 @@ else:
     # This is just a presaved one of mine...
     cspa_results_q_projection = torch.load(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/cspa_results_q_projection_on_cpu_again_seed_{SEED}.pt"))
 
+print(  
+    "The performance recovered is...",
+    get_performance_recovered(cspa_results_q_projection), # ~64
+)
+
 # In[31]:
 
 WANDB_PROJECT_NAME = "copy-suppression"
@@ -289,12 +294,6 @@ else:
 
         except Exception as e:
             print("Failed to load", artifact_fname, "because", e)
-
-print(  
-    "The performance recovered is...",
-    get_performance_recovered(cspa_results_q_projection), # ~64
-)
-
 #%%
 
 all_dicts = {}
@@ -618,7 +617,7 @@ torch.testing.assert_allclose(
 #%%
 
 test_data_fnames = {
-    start_idx: os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_q_projection_seed_6_{start_idx}_20.pt") for start_idx in [0]
+    start_idx: os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_q_projection_seed_6_{start_idx}_20.pt") for start_idx in list(range(0, 60, 20))
 }
 
 #%%
@@ -666,7 +665,7 @@ for epoch_idx in range(NUM_EPOCHS):
             ), torch.tensor(-5.0, dtype=torch.double).cuda())
 
             initial_attention_score_test = current_test_cuda_data["scores"][:, :current_test_seq_len].clone().double()
-            trained_attention_score_test = (torch.maximum(initial_attention_score_test, torch.tensor(1e-5, dtype=torch.double).cuda()) * (cur_attention_score_scale_test.unsqueeze(1))) + cur_attention_score_bias_test.unsqueeze(1)
+            trained_attention_score_test = (torch.maximum(initial_attention_score_test, torch.tensor(-30.0, dtype=torch.double).cuda()) * (cur_attention_score_scale_test.unsqueeze(1))) + cur_attention_score_bias_test.unsqueeze(1)
 
             key_term_test = einops.einsum(
                 current_test_cuda_data["scaled_resid_pre"],
@@ -691,10 +690,11 @@ for epoch_idx in range(NUM_EPOCHS):
     if epoch_idx == 0:
         print("Test loss is initially", test_loss.item())
 
-    for start_idx in (range(20, 280 if TESTING else DATA_TOKS.shape[0], LENGTH)):
+    tot_loss = 0.0
+    tot_loss_adds = 0
+    for start_idx in (range(0, 620 if TESTING else DATA_TOKS.shape[0], LENGTH)):
         opt.zero_grad()
         loss = torch.tensor(0.0).cuda()
-        loss_adds = 0
         artifact_fname = f"cspa_results_q_projection_seed_{SEED}_{start_idx}_{LENGTH}"
         loading_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
         current_data = torch.load(str(loading_path))
@@ -733,12 +733,12 @@ for epoch_idx in range(NUM_EPOCHS):
         final_attention_score = trained_attention_score + query_bias_term.unsqueeze(1) # Unsqueeze for seqQ
         new_attention_pattern = final_attention_score.softmax(dim=-1)
 
-        loss_adds += 1
-        loss += ((new_attention_pattern - current_cuda_data["normal_pattern"][:, :current_seq_len, :current_seq_len]) ** 2).mean()
-
-        loss /= loss_adds
+        loss = ((new_attention_pattern - current_cuda_data["normal_pattern"][:, :current_seq_len, :current_seq_len]) ** 2).mean()
         # Backpropagate
         loss.backward()
+
+        tot_loss += loss.item()
+        tot_loss_adds += 1
 
         # Update parameters
         opt.step()
@@ -749,7 +749,7 @@ for epoch_idx in range(NUM_EPOCHS):
     # Print metrics
     print(
         f"Epoch {epoch_idx+1}/{NUM_EPOCHS}",
-        f"Train Loss: {loss.item():.7f}",
+        f"Train Loss: {tot_loss/tot_loss_adds:.7f}",
         f"Test Loss: {test_loss.item():.7f}",
     )
 
