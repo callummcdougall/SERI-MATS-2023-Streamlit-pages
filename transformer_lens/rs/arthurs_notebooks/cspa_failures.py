@@ -72,6 +72,7 @@ from transformer_lens.rs.callum2.cspa.cspa_semantic_similarity import (
 from transformer_lens.rs.callum2.utils import get_effective_embedding
 
 clear_output()
+
 # In[2]:
 
 model = HookedTransformer.from_pretrained(
@@ -629,7 +630,7 @@ torch.testing.assert_allclose(
 #%%
 
 test_data_fnames = {
-    start_idx: os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_q_projection_seed_6_{start_idx}_20.pt") for start_idx in list(range(60, -20, -20))
+    # start_idx: os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{ARTIFACT_TO_FORMAT.format(seed=SEED, start_index=start_idx, length=20)}") for start_idx in list(range(60, -20, -20))
 }
 
 #%%
@@ -704,7 +705,7 @@ for epoch_idx in range(NUM_EPOCHS):
 
     tot_loss = 0.0
     tot_loss_adds = 0
-    for start_idx in (range(80, 700 if TESTING else DATA_TOKS.shape[0], LENGTH)):
+    for start_idx in (range(0, 80 if TESTING else DATA_TOKS.shape[0], LENGTH)):
         opt.zero_grad()
         loss = torch.tensor(0.0).cuda()
         artifact_fname = ARTIFACT_TO_FORMAT.format(seed=SEED, start_index=start_idx, length=LENGTH)
