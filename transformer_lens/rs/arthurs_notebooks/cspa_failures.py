@@ -23,7 +23,7 @@ if ipython is None:
     ARTIFACT_BASE = args.artifact_base
 
 else:
-    ARTIFACT_BASE = "cspa_results_q_projection_seed"
+    ARTIFACT_BASE = "cspa_no_bosses"
 
 ARTIFACT_TO_FORMAT = ARTIFACT_BASE +  "_{SEED}_{start_idx}_{LENGTH}"
 
