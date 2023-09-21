@@ -52,6 +52,7 @@ streamlit run Home.py
 
 * Surveying the direct effects of individual attention heads: `transformer_lens/rs/arthurs_notebooks/direct_effect_survey.py`
 * (TODO: scan through the paper, ideally clean up the repo too)
+* (TODO: write a better implementation of the learnable scale and bias vectors)
 
 # Description of directories in `transformer_lens/rs/callum2`
 
