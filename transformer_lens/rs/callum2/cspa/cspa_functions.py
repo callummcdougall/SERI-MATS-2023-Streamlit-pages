@@ -925,12 +925,12 @@ def get_cspa_results(
             computation_device=computation_device,
         )
 
-        # print("Hackily loading in some recomputed att patterns")
-        # pattern_device = pattern.device
-        # pattern_dtype = pattern.dtype
-        # pattern = torch.load(
-        #     os.path.expanduser("~/new_attention_pattern_test.pt")
-        # )[global_range[0]:global_range[1]].to(pattern_device).to(pattern_dtype)
+        print("Hackily loading in some recomputed att patterns")
+        pattern_device = pattern.device
+        pattern_dtype = pattern.dtype
+        pattern = torch.load(
+            os.path.expanduser("~/att_patt_test.pt")
+        )[global_range[0]:global_range[1]].to(pattern_device).to(pattern_dtype)
 
         gc.collect()
         t.cuda.empty_cache()
@@ -1159,7 +1159,7 @@ def get_cspa_results_batched(
         CSPA_RESULTS = concat_dicts(CSPA_RESULTS, cspa_results)
 
         if do_running_updates:
-            print("Currently", get_performance_recovered(CSPA_RESULTS))
+            print("At position", i, "it's currently", get_performance_recovered(CSPA_RESULTS))
 
         if "qk" in interventions:
             TOP_K_AND_KSEM_PER_DEST_TOKEN = t.cat([TOP_K_AND_KSEM_PER_DEST_TOKEN, top_K_and_Ksem_per_dest_token], dim=0)

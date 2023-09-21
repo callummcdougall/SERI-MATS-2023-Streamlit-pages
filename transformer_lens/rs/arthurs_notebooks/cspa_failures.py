@@ -488,17 +488,19 @@ def show_model_cspa_attentions(
 
     if verbose:
         for i in range(0, len(indices), 2):
+            if "all_toks" in locals() or "all_toks" in globals():
+                print(models_words[i+1])                
+                if model.to_single_token(models_words[i+1]) not in all_toks:
+                    cnter+=1
+                else: 
+                    nocnter+=1
+
             print(
                 "The context was",
                 contexts[i],
                 end=" ",
             )
 
-            if "all_toks" in locals() or "all_toks" in globals():
-                if model.to_single_token(models_words[i+1]) not in all_toks:
-                    cnter+=1
-                else: 
-                    nocnter+=1
 
             next_things = [
                 f"and the model's{' top'} word was",
@@ -645,7 +647,7 @@ torch.set_grad_enabled(True)
 DIV = 1000
 attention_score_bias = torch.nn.Parameter((torch.randn(model.cfg.d_model).double().cuda())/DIV, requires_grad=True)
 attention_score_scale = torch.nn.Parameter((torch.randn(model.cfg.d_model).double().cuda())/DIV, requires_grad=True)
-opt = torch.optim.AdamW([attention_score_bias, attention_score_scale], lr=1e-4)
+opt = torch.optim.Adam([attention_score_bias, attention_score_scale], lr=1e-4)
 NUM_EPOCHS = 1000
 all_biases = [attention_score_bias.data.detach().clone()]
 all_scales = [attention_score_scale.data.detach().clone()]
@@ -661,6 +663,11 @@ for epoch_idx in range(NUM_EPOCHS):
         for start_idx, test_data_fname in test_data_fnames.items():
             current_test_data = torch.load(test_data_fname)
             current_test_cuda_data = {k: v.cuda() for k, v in current_test_data.items()}
+            if "scaled_resid_pre" not in torch.load(str(test_data_fname)).keys():
+                warnings.warn("Had to get this from another pt...")
+                current_test_cuda_data["scaled_resid_pre"] = torch.load(
+                    f"/root/SERI-MATS-2023-Streamlit-pages/artifacts/cspa_results_q_projection_on_cpu_again_seed_6_{start_idx}_20.pt"
+                )["scaled_resid_pre"].cuda()
             current_test_seq_len = current_test_data["scores"].shape[1]
 
             # Forward pass for test set
@@ -705,13 +712,14 @@ for epoch_idx in range(NUM_EPOCHS):
 
     tot_loss = 0.0
     tot_loss_adds = 0
-    for start_idx in (range(20, 80 if TESTING else DATA_TOKS.shape[0], LENGTH)):
+    for start_idx in (range(0, 240 if TESTING else DATA_TOKS.shape[0], LENGTH)):
         opt.zero_grad()
         loss = torch.tensor(0.0).cuda()
         artifact_fname = ARTIFACT_TO_FORMAT.format(seed=SEED, start_index=start_idx, length=LENGTH)
         loading_path = Path(os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/artifacts/{artifact_fname}.pt"))
         current_data = torch.load(str(loading_path))
         current_cuda_data = {k:v.cuda() for k,v in current_data.items()}
+        
         if "scaled_resid_pre" not in torch.load(str(loading_path)).keys():
             warnings.warn("Had to get this from another pt...")
             current_cuda_data["scaled_resid_pre"] = torch.load(
