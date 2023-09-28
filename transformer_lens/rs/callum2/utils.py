@@ -74,7 +74,7 @@ def process_webtext(
     prepend_bos: bool = True,
 ) -> Tuple[Int[Tensor, "batch seq"], List[List[str]]]:
     
-    DATA_STR_ALL = get_webtext(seed=seed)
+    DATA_STR_ALL = get_webtext(seed=seed, dataset="stas/openwebtext-10k" if "llama" not in model.cfg.model_name.lower() else "stas/c4-en-10k") # A large part of LLAMA training data is common crawl 
     DATA_STR_ALL = [parse_str(s) for s in DATA_STR_ALL]
     DATA_STR = []
 

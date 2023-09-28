@@ -222,7 +222,7 @@ if RECALC_CSPA_RESULTS:
 
     gc.collect()
     t.cuda.empty_cache()
-    print("Starting...")
+    print("Starting... with the default QK OV ablation setup")
     current_data_toks = DATA_TOKS[Q_PROJECTION_BATCH_START:Q_PROJECTION_BATCH_END, :Q_PROJECTION_SEQ_LEN] if ipython is not None else DATA_TOKS[START_INDEX:START_INDEX+LENGTH, :Q_PROJECTION_SEQ_LEN]
     cspa_results_q_projection = get_cspa_results_batched(
         model = model,

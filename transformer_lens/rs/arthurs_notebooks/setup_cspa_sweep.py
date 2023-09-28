@@ -113,12 +113,11 @@ W_U = model.W_U
 
 zerred = torch.zeros(model.cfg.n_layers, model.cfg.n_heads)
 
-for layer_idx in tqdm(range(model.cfg.n_layers-1, -1, -1)):
+# Only look at the last third of the network
+for layer_idx in tqdm(range(2*(model.cfg.n_layers//3), model.cfg.n_layers)):
     for head_idx in range(model.cfg.n_heads):
-        
         cur_W_V = W_V[layer_idx, head_idx] 
         cur_W_O = W_O[layer_idx, head_idx]
-
         effective_ov_circuit = einops.einsum(
             W_EE,
             cur_W_V,
@@ -126,20 +125,23 @@ for layer_idx in tqdm(range(model.cfg.n_layers-1, -1, -1)):
             W_U, 
             "v d, d h, h o, o v -> v",
         )
-
         zerred[layer_idx, head_idx] = effective_ov_circuit.mean()
 
 #%%
 
 px.imshow(
     zerred,
-    title="Eigenvalues of W_V @ W_O",
+    title="Average Logits on Self",
     color_continuous_scale="RdBu",
     zmin=-zerred.abs().max().item(),
     zmax=zerred.abs().max().item(),
     # Label axes
     labels=dict(x="Head", y="Layer", color="Average Logits on Self"),
 ).show()
+
+# Take the Top 5 heads via this measure (the ones with the most negative average logits on self)
+raw_heads = zerred.flatten().argsort()[:5]
+heads = [(head_idx // model.cfg.n_heads, head_idx % model.cfg.n_heads) for head_idx in raw_heads]
 
 #%%
 
@@ -210,19 +212,35 @@ if USE_SEMANTICITY:
     rprint(table)
 # In[ ]:
 
-# Finally, let's save a mean for later use...
-
-if os.path.exists(os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/ten_seven_mean.pt")):
-    print("Loading from file")
-    result_mean = {
-        (10, 7): torch.load(os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/ten_seven_mean.pt")),
-        (11, 10): torch.load(os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/eleven_ten_mean.pt")),
-    }
-
-    # torch.save(result_mean[(10, 7)], os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/ten_seven_mean.pt")) 
-    # torch.save(result_mean[(11,10)], os.path.expanduser("~/SERI-MATS-2023-Streamlit-pages/eleven_ten_mean.pt"))
-
-else:
-    result_mean = get_result_mean([(10, 7), (11, 10)], DATA_TOKS[-100:, :], model, verbose=True)
+result_mean = get_result_mean(heads, DATA_TOKS[-100:, :], model, verbose=True)
 
 #%%
+
+BATCH_SIZE = 500 # 80 for viz
+SEQ_LEN = 1000 # 61 for viz
+
+current_data_toks = DATA_TOKS[:BATCH_SIZE, :SEQ_LEN]
+
+cspa_results = get_cspa_results_batched(
+    model = model,
+    toks = current_data_toks,
+    max_batch_size = 1,
+    negative_head = (10, 7),
+    interventions = ["qk", "ov"],
+    # qk_projection_config=qk_projection_config,
+    # ov_projection_config=ov_projection_config,
+    K_unembeddings = 0.05,
+    K_semantic = 8, # Be very careful making this big... very slow...
+    semantic_dict = cspa_semantic_dict,
+    result_mean = result_mean,
+    use_cuda = True,
+    verbose = True,
+    compute_s_sstar_dict = False,
+    computation_device = "cuda",
+    do_running_updates = True,
+)
+gc.collect()
+t.cuda.empty_cache()
+cached_cspa = {k:v.detach().cpu() for k,v in cspa_results_q_projection.items()}
+saver_fpath = os.path.expanduser(f"~/SERI-MATS-2023-Streamlit-pages/{ARTIFACT_TO_FORMAT.format(seed=SEED, length=(Q_PROJECTION_BATCH_END-Q_PROJECTION_BATCH_START) if ipython is not None else LENGTH, start_index=(Q_PROJECTION_BATCH_START if ipython is not None else START_INDEX))}.pt")
+torch.save(cached_cspa, saver_fpath)
