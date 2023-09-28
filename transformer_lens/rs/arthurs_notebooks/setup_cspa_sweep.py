@@ -103,12 +103,31 @@ W_O = model.W_O
 
 #%%
 
+W_EE = get_effective_embedding(model=model)["W_E (only MLPs)"]
+
+#%%
+
+W_U = model.W_U
+
+#%%
+
 zerred = torch.zeros(model.cfg.n_layers, model.cfg.n_heads)
 
 for layer_idx in tqdm(range(model.cfg.n_layers-1, -1, -1)):
     for head_idx in range(model.cfg.n_heads):
-        matrix = FactoredMatrix(W_V[layer_idx, head_idx], W_O[layer_idx, head_idx])
-        zerred[layer_idx, head_idx] = matrix.eigenvalues.real.mean().item()
+        
+        cur_W_V = W_V[layer_idx, head_idx] 
+        cur_W_O = W_O[layer_idx, head_idx]
+
+        effective_ov_circuit = einops.einsum(
+            W_EE,
+            cur_W_V,
+            cur_W_O, 
+            W_U, 
+            "v d, d h, h o, o v -> v",
+        )
+
+        zerred[layer_idx, head_idx] = effective_ov_circuit.mean()
 
 #%%
 
@@ -119,7 +138,7 @@ px.imshow(
     zmin=-zerred.abs().max().item(),
     zmax=zerred.abs().max().item(),
     # Label axes
-    labels=dict(x="Head", y="Layer", color="Eigenvalue"),
+    labels=dict(x="Head", y="Layer", color="Average Logits on Self"),
 ).show()
 
 #%%
