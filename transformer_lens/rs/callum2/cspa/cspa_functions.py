@@ -925,12 +925,12 @@ def get_cspa_results(
             computation_device=computation_device,
         )
 
-        print("Hackily loading in some recomputed att patterns")
-        pattern_device = pattern.device
-        pattern_dtype = pattern.dtype
-        pattern = torch.load(
-            os.path.expanduser("~/att_patt_test.pt")
-        )[global_range[0]:global_range[1]].to(pattern_device).to(pattern_dtype)
+        # print("Hackily loading in some recomputed att patterns")
+        # pattern_device = pattern.device
+        # pattern_dtype = pattern.dtype
+        # pattern = torch.load(
+        #     os.path.expanduser("~/att_patt_test.pt")
+        # )[global_range[0]:global_range[1]].to(pattern_device).to(pattern_dtype)
 
         gc.collect()
         t.cuda.empty_cache()
