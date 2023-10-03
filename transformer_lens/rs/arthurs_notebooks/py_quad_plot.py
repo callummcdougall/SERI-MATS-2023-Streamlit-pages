@@ -24,7 +24,7 @@ model = HookedTransformer.from_pretrained(
     center_unembed=True,
     center_writing_weights=True,
     fold_ln=True,
-    # refactor_factored_attn_matrices=True,
+    # refactor_factored_attn_matrices=True, # TODO why on runpod does this take a million years???
 )
 
 model.set_use_attn_result(False)
@@ -177,12 +177,16 @@ if OVERWRITE_WITH_ALL_VOCAB:
 
 # In[10]:
 
-embeddings_dict = get_effective_embedding(model, use_codys_without_attention_changes=True)
+embeddings_dict = get_effective_embedding(
+    model, 
+    use_codys_without_attention_changes=True,
+    use_w_e_residual=False,
+)
 
 #%%
 
 # Do the OV circuit stuff
-embedding = embeddings_dict["W_E (including MLPs)"]
+embedding = embeddings_dict["W_E (only MLPs)"]
 
 #%%
 
