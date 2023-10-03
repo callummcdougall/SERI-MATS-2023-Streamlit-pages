@@ -183,7 +183,6 @@ class HookedTransformer(HookedRootModule):
             assert (
                 self.cfg.use_split_qkv_normalized_input
             ), f"Cannot add hook {hook_point_name} if use_split_qkv_normalized_input is False"
-<<<<<<< HEAD
         if hook_point_name.endswith("mlp_in"):
             assert (
                 self.cfg.use_hook_mlp_in
@@ -192,8 +191,6 @@ class HookedTransformer(HookedRootModule):
             assert (
                 self.cfg.use_attn_in
             ), f"Cannot add hook {hook_point_name} if use_attn_in is False"
-=======
->>>>>>> e40777d (Add `hook_q_normalized_input` etc!)
 
     @overload
     def forward(

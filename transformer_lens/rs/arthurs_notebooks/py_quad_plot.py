@@ -73,14 +73,11 @@ imshow(
     width=700,
 )
 
-
 # In[5]:
-
 
 raw_dataset = load_dataset("stas/openwebtext-10k")
 train_dataset = raw_dataset["train"]
 dataset = [train_dataset[i]["text"] for i in range(len(train_dataset))]
-
 
 # In[6]:
 
