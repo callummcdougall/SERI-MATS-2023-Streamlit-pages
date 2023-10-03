@@ -180,7 +180,6 @@ if OVERWRITE_WITH_ALL_VOCAB:
 embeddings_dict = get_effective_embedding(
     model, 
     use_codys_without_attention_changes=True,
-    use_w_e_residual=False,
 )
 
 #%%
@@ -248,9 +247,9 @@ print(failures[:100])
 #%%
  
 better_labels = {
-    'W_E (including MLPs)': 'W_EE', 
+    'W_E (only MLPs)': 'MLP_0 (W_E)',
     'W_E (no MLPs)': 'W_E',
-    'W_E (only MLPs)': 'MLP0',
+    'W_E (including MLPs)': 'W_EE', 
     'W_U': 'W_U',
 }
 for embedding_dict_key in embeddings_dict.keys():
@@ -290,8 +289,8 @@ t.cuda.empty_cache()
 # Make bar chart of distribution
 
 relevant_labels = [
-    'Q = W_U<br>K = W_EE',
-    'Q = W_EE<br>K = W_EE',
+    'Q = MLP_0 (W_E)<br>K = MLP_0 (W_E)',
+    'Q = W_U<br>K = MLP_0 (W_E)',
     # 'Q = W_E<br>K = W_E', # TODO add this too...
 ]
 
@@ -344,13 +343,13 @@ relevant_distributions = [
 
 DO_FILTERED = True
 filtered = [torch.minimum(x, torch.ones_like(x)*20) for x in relevant_distributions]
-true_names = [label.replace("_EE", "<sub>EE</sub>").replace("_U", "<sub>U</sub>") for label in relevant_labels]
+true_names = [label.replace("_E", "<sub>E</sub>").replace("_U", "<sub>U</sub>").replace("_0", "<sub>0</sub>") for label in relevant_labels]
 
 yaxis_label = "Percentage of Model Vocabulary"
 
 fig = hist(
     # filtered,
-    relevant_distributions if not DO_FILTERED else filtered,
+    relevant_distributions if not DO_FILTERED else filtered[:2],
     names = true_names,
     labels={"variable": "Query and Key Inputs:", "value": "Token rank"},
     width=600,
@@ -375,7 +374,7 @@ fig.update_layout(
 # Font size bigger
 fig.update_layout(
     font=dict(
-        size=18,
+        size=22,
     ),
 )
 
