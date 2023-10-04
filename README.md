@@ -131,14 +131,15 @@ If adding a feature, please add it to the demo notebook in the `demos` folder, a
 
 ## Citation
 
-Please cite this library as:
+Please cite us with :
 
 ```
-@misc{nandatransformerlens2022,
-    title  = {TransformerLens},
-    author = {Nanda, Neel and Bloom, Joseph},
-    url    = {https://github.com/neelnanda-io/TransformerLens},
-    year   = {2022}
+@article{copy_suppression,
+  title={Copy Suppression: Comprehensively Understanding an Attention Head},
+  author={McDougall, Callum and Conmy, Arthur and Rushing, Cody and McGrath, Thomas and Nanda, Neel},
+  journal={arXiv preprint},
+  year={2023},
 }
 ```
->>>>>>> arthur/arthur-add-attn-in
+
+(arXiv should be out soon!)
