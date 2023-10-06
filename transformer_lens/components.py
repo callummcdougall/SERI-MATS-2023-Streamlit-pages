@@ -1070,14 +1070,6 @@ class TransformerBlock(nn.Module):
         key_input = self.ln1(key_input) + (0.0 if shortformer_pos_embed is None else shortformer_pos_embed)
         value_input = self.ln1(value_input)
 
-        query_input = self.ln1(query_input) + (0.0 if shortformer_pos_embed is None else shortformer_pos_embed)
-        key_input = self.ln1(key_input) + (0.0 if shortformer_pos_embed is None else shortformer_pos_embed)
-        value_input = self.ln1(value_input)
-
-        query_input = self.ln1(query_input) + (0.0 if shortformer_pos_embed is None else shortformer_pos_embed)
-        key_input = self.ln1(key_input) + (0.0 if shortformer_pos_embed is None else shortformer_pos_embed)
-        value_input = self.ln1(value_input)
-
         attn_out = self.hook_attn_out(
             # hook the residual stream states that are used to calculate the
             # queries, keys and values, independently.

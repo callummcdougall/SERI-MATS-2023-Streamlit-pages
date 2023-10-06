@@ -3,10 +3,8 @@
 """Quad plots but I pivoted away from dot_with_query"""
 
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 import torch 
-# One device assertion
 assert torch.cuda.device_count() == 1
 
 from transformer_lens.cautils.notebook import *
@@ -41,8 +39,8 @@ LAYER_IDX, HEAD_IDX = {
     "gpt2": (10, 7),
 }[model.cfg.model_name]
 
-# LAYER_IDX, HEAD_IDX = 3, 0
-# warnings.warn("Using wrong thing")
+LAYER_IDX, HEAD_IDX = 3, 0
+warnings.warn("Using wrong thing")
 
 W_U = model.W_U
 W_Q_negative = model.W_Q[LAYER_IDX, HEAD_IDX]
@@ -340,14 +338,14 @@ print("You")
 #%%
 
 # Save as PDF
-fig.write_image("ranks_plot.pdf")
+fig.write_image("ranks_plot_with_3_0.pdf")
 
 #%%
 
-indices = [i for i, label in enumerate(labels) if "Q = W_E<" not in label] # TODO is this right?
-the_lines = [lines[i] for i in indices]
-the_labels = [labels[i] for i in indices]
-the_log_attentions_to_self = [all_log_attentions_to_self[i] for i in indices]
+indices = list(range(len(labels))) # [i for i, label in enumerate(labels) if "Q = W_E<" not in label] # TODO is this right?
+the_lines = deepcopy(lines) # [lines[i] for i in indices]
+the_labels = deepcopy(labels) # [labels[i] for i in indices]
+the_log_attentions_to_self = deepcopy(all_log_attentions_to_self)  # [all_log_attentions_to_self[i] for i in indices]
 
 #%%
 
@@ -362,9 +360,9 @@ square_labels = [[int(square_label) for square_label in row] for row in square_l
 fig = imshow(
     square_of_values.log(),
     # text_auto=True,
-    title=f"Number of tokens that are top rank", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
+    title=f"L3H0: number of top ranks tokens",
     labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Count"},
-    x = ["W<sub>E</sub>", "MLP<sub>0</sub>(W<sub>E</sub>)", "W<sub>U</sub"], # sadly these are hardcoded
+    x = ["W<sub>E</sub>", "MLP<sub>0</sub>(W<sub>E</sub>)", "W<sub>U</sub>"], # sadly these are hardcoded
     y = ["W<sub>E</sub>", "MLP<sub>0</sub>(W<sub>E</sub>)", "W<sub>U</sub>"],
     color_continuous_midpoint=None,
     range_color=(0, 10), # This manually defines the range of things
@@ -382,7 +380,7 @@ for i, row in enumerate(square_labels):
         fig.add_annotation(
             x=j, # x-coordinate of the annotation
             y=i, # y-coordinate of the annotation
-            text=str(round(label, 2)), # text label
+            text=str(round(label, 2)) + f" / {INNER_LEN}", # text label
             showarrow=False, # don't show an arrow pointing to the annotation
             # color="white" if "W_U" in the_labels[i] else "black",
             font=dict(
@@ -392,8 +390,8 @@ for i, row in enumerate(square_labels):
 
 # Make it exactly square
 fig.update_layout(
-    width=400,
-    height=400,
+    width=420,
+    height=420,
     margin=dict(
         l=0,
         r=0,
@@ -409,6 +407,6 @@ fig.show()
 
 # Save as JSON
 # fig.write_json("quad_plot.json")
-# fig.write_image("quad_plot2.pdf")
+fig.write_image("l3h0.pdf")
 
 # %%
