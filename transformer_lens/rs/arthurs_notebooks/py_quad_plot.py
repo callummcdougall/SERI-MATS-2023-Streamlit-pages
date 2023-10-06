@@ -79,65 +79,7 @@ raw_dataset = load_dataset("stas/openwebtext-10k")
 train_dataset = raw_dataset["train"]
 dataset = [train_dataset[i]["text"] for i in range(len(train_dataset))]
 
-# In[6]:
-
-# def fwd_pass_lock_attn
-
-
-# for i, s in enumerate(dataset):
-#     loss_hooked = fwd_pass_lock_attn0_to_self(model, s)
-#     print(f"Loss with attn locked to self: {loss_hooked:.2f}")
-#     loss_hooked_0 = fwd_pass_lock_attn0_to_self(model, s, ablate=True)
-#     print(f"Loss with attn locked to zero: {loss_hooked_0:.2f}")
-#     loss_orig = model(s, return_type="loss")
-#     print(f"Loss with attn free: {loss_orig:.2f}\n")
-
-#     # gc.collect()
-
-#     if i == 5:
-#         break
-
-
-# In[7]:
-
-
-if "gpt" in model.cfg.model_name: # sigh, tied embeddings
-    # sanity check this is the same 
-
-    def remove_pos_embed(z, hook):
-        return 0.0 * z
-
-    # setup a forward pass that 
-    model.reset_hooks()
-    model.add_hook(
-        name="hook_pos_embed",
-        hook=remove_pos_embed,
-        level=1, # ???
-    ) 
-    model.add_hook(
-        name=utils.get_act_name("pattern", 0),
-        hook=lock_attn,
-    )
-    logits, cache = model.run_with_cache(
-        torch.arange(1000).to(device).unsqueeze(0),
-        names_filter=lambda name: name=="blocks.1.hook_resid_pre",
-        return_type="logits",
-    )
-
-
-    W_EE_test = cache["blocks.1.hook_resid_pre"].squeeze(0)
-    W_EE_prefix = W_EE_test[:1000]
-
-    assert torch.allclose(
-        W_EE_prefix,
-        W_EE_test,
-        atol=1e-4,
-        rtol=1e-4,
-    )
-
-
 # In[8]:
-
 
 NAME_MOVERS = {
     "gpt2": [(9, 9), (10, 0), (9, 6)],
@@ -148,7 +90,6 @@ NEGATIVE_NAME_MOVERS = {
     "gpt2": [(LAYER_IDX, HEAD_IDX), (11,10)],
     "SoLU_10L1280W_C4_Code": [(LAYER_IDX, HEAD_IDX), (9, 15)], # second one on this one IOI prompt only... 
 }[model.cfg.model_name]
-
 
 #%%
 
@@ -181,6 +122,7 @@ embeddings_dict = get_effective_embedding(
     model, 
     use_codys_without_attention_changes=True,
 )
+del embeddings_dict["W_E (including MLPs)"] # We're deprecating this now
 
 #%%
 
@@ -233,23 +175,13 @@ failures = model.to_str_tokens(
 
 #%%
 
-# np.random.shuffle(failures)
-
-#%%
-
 print(failures[:100])
-
-# In[12]:
-
-# TODO should really make this outer_len and inner_len, but I forgot
-# assert all([len(b)==len(bags_of_words[0]) for b in bags_of_words])
 
 #%%
  
 better_labels = {
-    'W_E (only MLPs)': 'MLP_0 (W_E)',
+    'W_E (only MLPs)': 'MLP_0(W_E)',
     'W_E (no MLPs)': 'W_E',
-    'W_E (including MLPs)': 'W_EE', 
     'W_U': 'W_U',
 }
 for embedding_dict_key in embeddings_dict.keys():
@@ -267,8 +199,8 @@ labels = []
 data = []
 lines = []
 
-USE_QUERY_BIAS = False
-USE_KEY_BIAS = False
+USE_QUERY_BIAS = True
+USE_KEY_BIAS = True
 DO_TWO_DIMENSIONS = False # this means doing things like 2D Attention Matrices
 
 all_log_attentions_to_self = []
@@ -288,12 +220,6 @@ t.cuda.empty_cache()
 
 # Make bar chart of distribution
 
-relevant_labels = [
-    'Q = MLP_0 (W_E)<br>K = MLP_0 (W_E)',
-    'Q = W_U<br>K = MLP_0 (W_E)',
-    # 'Q = W_E<br>K = W_E', # TODO add this too...
-]
-
 for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict.keys(), embeddings_dict.keys()))):
 
     print(f"{q_side_matrix=} {k_side_matrix=}")
@@ -304,10 +230,6 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict.
         log_attentions_to_self = torch.zeros((len(bags_of_words), len(bags_of_words[0])))
     except:
         log_attentions_to_self = torch.zeros(len(bags_of_words))
-
-    if labels[-1] not in relevant_labels:
-        labels = labels[:-1]
-        continue
 
     results = []
 
@@ -336,21 +258,21 @@ for q_side_matrix, k_side_matrix in tqdm(list(itertools.product(embeddings_dict.
 # In[21]:
 
 relevant_distributions = [
-    log_attentions_to_self_element[1].cpu() for log_attentions_to_self_element in enumerate(all_log_attentions_to_self) if labels[log_attentions_to_self_element[0]] in relevant_labels
+    log_attentions_to_self_element[1].cpu() for log_attentions_to_self_element in enumerate(all_log_attentions_to_self) if labels[log_attentions_to_self_element[0]] in labels
 ]
 
 #%%
 
 DO_FILTERED = True
 filtered = [torch.minimum(x, torch.ones_like(x)*20) for x in relevant_distributions]
-true_names = [label.replace("_E", "<sub>E</sub>").replace("_U", "<sub>U</sub>").replace("_0", "<sub>0</sub>") for label in relevant_labels]
+true_names = [label.replace("_E", "<sub>E</sub>").replace("_U", "<sub>U</sub>").replace("_0", "<sub>0</sub>") for label in labels]
 
 yaxis_label = "Percentage of Model Vocabulary"
 
 fig = hist(
     # filtered,
-    relevant_distributions if not DO_FILTERED else filtered[:2],
-    names = true_names,
+    [filtered[4], filtered[-2]],
+    names = [true_names[4], true_names[-2]],
     labels={"variable": "Query and Key Inputs:", "value": "Token rank"},
     width=600,
     height=600,
@@ -425,8 +347,7 @@ fig.write_image("ranks_plot.pdf")
 
 #%%
 
-indices = [i for i, label in enumerate(labels) if "Q = W_E<" not in label]
-
+indices = [i for i, label in enumerate(labels) if "Q = W_E<" not in label] # TODO is this right?
 the_lines = [lines[i] for i in indices]
 the_labels = [labels[i] for i in indices]
 the_log_attentions_to_self = [all_log_attentions_to_self[i] for i in indices]
@@ -446,8 +367,8 @@ fig = imshow(
     # text_auto=True,
     title=f"Number of tokens that are top rank", #  with {USE_QUERY_BIAS=} {USE_KEY_BIAS=}",
     labels={"x": "Keyside lookup table", "y": "Queryside lookup table", "color": "Count"},
-    x = ["W<sub>E</sub>", "W<sub>EE</sub>", "MLP<sub>0</sub>"], # sadly these are hardcoded
-    y = ["W<sub>E</sub>", "W<sub>EE</sub>", "W<sub>U</sub>"],
+    x = ["W<sub>E</sub>", "MLP<sub>0</sub>(W<sub>E</sub>)", "W<sub>U</sub"], # sadly these are hardcoded
+    y = ["W<sub>E</sub>", "MLP<sub>0</sub>(W<sub>E</sub>)", "W<sub>U</sub>"],
     color_continuous_midpoint=None,
     range_color=(0, 10), # This manually defines the range of things
     coloraxis=dict(
