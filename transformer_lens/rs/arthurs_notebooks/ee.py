@@ -23,7 +23,7 @@ toks, targets = get_filtered_webtext(model, NUM_DOCS)
 
 # %%
 
-batch_size = 1
+batch_size = 100
 assert len(toks) % batch_size == 0
 running_loss_average = 0.0
 running_ee_average = 0.0
@@ -40,7 +40,6 @@ for batch_idx in tqdm(range(NUM_DOCS//batch_size)):
     neglogprobs = -logits.log_softmax(dim=-1)
     losses = neglogprobs.cpu()[torch.arange(neglogprobs.shape[0]).unsqueeze(1), torch.arange(neglogprobs.shape[1]).unsqueeze(0), targets[start_idx:end_idx].cpu()]
     running_loss_average = running_loss_average * ( batch_idx / (batch_idx+1) ) + losses.mean().item() / (batch_idx+1)
-    print(running_loss_average)
 
     del logits
     del neglogprobs
@@ -48,6 +47,24 @@ for batch_idx in tqdm(range(NUM_DOCS//batch_size)):
     gc.collect()
     torch.cuda.empty_cache()
 
-    continue
-    # TODO make other zero ablate thing
+    model.reset_hooks()
+    embeds = model.W_E[cur_toks]
+    logits = model.run_with_hooks(
+        cur_toks,
+        fwd_hooks = [("blocks.0.hook_resid_post", lambda resid_post, hook: resid_post - embeds)],
+    )
+    # Get losses
+    neglogprobs = -logits.log_softmax(dim=-1)
+    losses = neglogprobs[torch.arange(neglogprobs.shape[1]).unsqueeze(0), torch.arange(neglogprobs.shape[0]).unsqueeze(1), targets[start_idx:end_idx]]
+    running_ee_average = running_ee_average * ( batch_idx / (batch_idx+1) ) + losses.mean().item() / (batch_idx+1)
+
+    print(running_loss_average, running_ee_average)
+
+    del embeds
+    del logits
+    del neglogprobs
+    del losses
+    gc.collect()
+    torch.cuda.empty_cache()
+
 # %%
