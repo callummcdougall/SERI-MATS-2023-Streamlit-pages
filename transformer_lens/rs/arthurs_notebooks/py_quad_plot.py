@@ -35,19 +35,18 @@ clear_output()
 
 # In[3]:
 
-# LAYER_IDX, HEAD_IDX = 9, 6
-# warnings.warn("Using wrong thing")
 
 LAYER_IDX, HEAD_IDX = {
     "SoLU_10L1280W_C4_Code": (9, 18), # (9, 18) is somewhat cheaty
     "gpt2": (10, 7),
 }[model.cfg.model_name]
 
+# LAYER_IDX, HEAD_IDX = 3, 0
+# warnings.warn("Using wrong thing")
 
 W_U = model.W_U
 W_Q_negative = model.W_Q[LAYER_IDX, HEAD_IDX]
 W_K_negative = model.W_K[LAYER_IDX, HEAD_IDX]
-
 W_E = model.W_E
 
 # ! question - what's the approximation of GPT2-small's embedding?
@@ -55,9 +54,7 @@ W_E = model.W_E
 # lock attn to average
 # don't include attention
 
-
 # In[4]:
-
 
 full_QK_circuit = FactoredMatrix(W_U.T @ W_Q_negative, W_K_negative.T @ W_E.T)
 
@@ -199,8 +196,8 @@ labels = []
 data = []
 lines = []
 
-USE_QUERY_BIAS = True
-USE_KEY_BIAS = True
+USE_QUERY_BIAS = False
+USE_KEY_BIAS = False
 DO_TWO_DIMENSIONS = False # this means doing things like 2D Attention Matrices
 
 all_log_attentions_to_self = []
@@ -315,7 +312,7 @@ fig.add_annotation(
 )
 
 fig.update_layout(
-    title_text="Distribution of token ranks in QK circuit",
+    title_text="Token ranks in QK circuit (inc. bias)",
     # text="Distribution of token ranks in QK circuit",
 )
 
