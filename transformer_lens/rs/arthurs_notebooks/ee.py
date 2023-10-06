@@ -55,7 +55,7 @@ for batch_idx in tqdm(range(NUM_DOCS//batch_size)):
     )
     # Get losses
     neglogprobs = -logits.log_softmax(dim=-1)
-    losses = neglogprobs[torch.arange(neglogprobs.shape[1]).unsqueeze(0), torch.arange(neglogprobs.shape[0]).unsqueeze(1), targets[start_idx:end_idx]]
+    losses = neglogprobs[torch.arange(neglogprobs.shape[0]).unsqueeze(1), torch.arange(neglogprobs.shape[1]).unsqueeze(0), targets[start_idx:end_idx]]
     running_ee_average = running_ee_average * ( batch_idx / (batch_idx+1) ) + losses.mean().item() / (batch_idx+1)
 
     print(running_loss_average, running_ee_average)
