@@ -1,4 +1,4 @@
-<h1>To view our Streamlit, visit https://self-repair.streamlit.app/ </h1>
+<h1>To view our Streamlit, visit https://copy-suppression.streamlit.app/ </h1>
 
 (If you're interested in our research, please reach out! Our emails are `{cal.s.mcdougall, arthurconmy, thisiscodyr}@gmail.com`)
 
