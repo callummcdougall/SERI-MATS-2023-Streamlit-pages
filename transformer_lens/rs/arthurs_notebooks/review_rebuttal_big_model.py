@@ -3,31 +3,38 @@
 import os
 os.environ["TRANSFORMERS_CACHE"] = "/workspace/cache/"
 import transformers
-from transformer_lens.cautils.notebook import *
-from transformer_lens.rs.arthurs_notebooks.arthurs_utils import *
-import transformers
-import datasets
+
+# from transformer_lens.cautils.notebook import *
+# from transformer_lens.rs.arthurs_notebooks.arthurs_utils import *
+# import datasets
+
 import gc
 
-#%% # Note 3 minute delay
-
-model_name = "mistralai/Mistral-7B-v0.1"
-
-#%%
-
-model = transformer_lens.HookedTransformer.from_pretrained_no_processing(model_name)
+# #%% # Note 3 minute delay
+# model_name = "mistralai/Mistral-7B-v0.1"
 
 #%%
 
-if False:
-    model = transformers.AutoModelForCausalLM.from_pretrained(model_name) # Hopefully works
-    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+hf_model = transformers.AutoModelForCausalLM.from_pretrained("huggyllama/llama-7b") # model_name) 
+# works in 2m44s
 
 #%%
 
-print(model) # What do the modules look like? We'll try to fold the LN bias.
+hf_tokenizer = transformers.AutoTokenizer.from_pretrained("huggyllama/llama-7b") # model_name) # Hopefully works
+from transformer_lens import HookedTransformer
+import torch
 
-#%% # Takes 90 secs
+#%%
+
+model = HookedTransformer.from_pretrained_no_processing("llama-7b", hf_model=hf_model, device="cpu", fold_ln=False, center_writing_weights=False, center_unembed=False, tokenizer=hf_tokenizer)
+# from_pretrained version 4 minutes
+
+#%%
+
+print(model)
+# What do the modules look like? We'll try to fold the LN bias
+
+#%% # Takes 90 secs. And in TL >150 seconds
 
 model = model.to(torch.bfloat16) # Load into lower precision...
 gc.collect()
@@ -41,9 +48,10 @@ torch.cuda.empty_cache()
 
 # %%
 
-# Sanity check that we can run forward passes 
+if False:
+    # Sanity check that we can run forward passes 
+    tokenizer = model.tokenizer if TL else transformers.AutoTokenizer.from_pretrained("mistralai/Mistral-7B-v0.1")
 
-tokenizer = transformers.AutoTokenizer.from_pretrained("mistralai/Mistral-7B-v0.1")
 my_sentence = """Successorship behavior: the successor head pushes for the successor of a token in the context. We
 say this behavior occurs when one of the top-5-attended tokens is in the successorship dataset, and
 the correct next token is the successor of t.
@@ -57,12 +65,20 @@ of the top-5-attended tokens.
 Greater-than behavior: the successor head pushes for a token greater than a previous token in the
 context. We say this behavior occurs when we do not observe successorship behavior, but when the
 correct next token is still part of an ordinal sequence and has greater order than some top-5-attended
-token (e.g. if the successor head attends to the token ‘first’ and the model predicts the token ‘third’.)"""
-my_tokens = tokenizer.encode(my_sentence, return_tensors="pt").cuda() # First loss is really high but whatever, it's really low on average
+token (e.g. if the successor head attends to the token ‘first’ and the model predicts the token
+‘third’.)"""
+
+if False:
+    my_tokens = tokenizer.encode(my_sentence, return_tensors="pt").cuda() # First loss is really high but whatever, it's really low on average
+else:
+    my_tokens = model.to_tokens(my_sentence).cuda()
 
 #%%
 
-my_logits = model(my_tokens).logits
+if False:
+    my_logits = model(my_tokens).logits
+else:
+    my_logits = model(my_tokens)
 my_logprobs = my_logits.log_softmax(dim=-1)
 my_neglogprobs = -my_logprobs
 my_loss = my_neglogprobs[0, torch.arange(my_neglogprobs.shape[1]-1), my_tokens[0][1:]]
@@ -76,6 +92,7 @@ hf_dataset_name = "suolyer/pile_pile-cc"
 
 #%%
 
+import datasets
 hf_iter_dataset = iter(datasets.load_dataset(hf_dataset_name, streaming=True))
 
 #%%
