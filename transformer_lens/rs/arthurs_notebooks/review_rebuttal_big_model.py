@@ -12,8 +12,16 @@ import gc
 #%% # Note 3 minute delay
 
 model_name = "mistralai/Mistral-7B-v0.1"
-model = transformers.AutoModelForCausalLM.from_pretrained(model_name) # Hopefully works
-tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+
+#%%
+
+model = transformer_lens.HookedTransformer.from_pretrained_no_processing(model_name)
+
+#%%
+
+if False:
+    model = transformers.AutoModelForCausalLM.from_pretrained(model_name) # Hopefully works
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
 
 #%%
 
