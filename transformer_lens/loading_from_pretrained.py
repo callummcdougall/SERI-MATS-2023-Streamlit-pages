@@ -1,4 +1,7 @@
-# %%
+"""Loading Pretrained Models Utilities.
+
+This module contains functions for loading pretrained models from the Hugging Face Hub.
+"""
 import dataclasses
 import logging
 import re
@@ -12,7 +15,6 @@ from transformers import AutoConfig, AutoModelForCausalLM, BertForPreTraining
 import transformer_lens.utils as utils
 from transformer_lens.HookedTransformerConfig import HookedTransformerConfig
 
-# %% The model names used to access the models on the HuggingFace Hub.
 OFFICIAL_MODEL_NAMES = [
     "gpt2",
     "gpt2-medium",
@@ -134,7 +136,10 @@ OFFICIAL_MODEL_NAMES = [
     "stabilityai/stablelm-base-alpha-7b",
     "stabilityai/stablelm-tuned-alpha-3b",
     "stabilityai/stablelm-tuned-alpha-7b",
+    "mistralai/Mistral-7B-v0.1",
+    "mistralai/Mistral-7B-Instruct-v0.1",
 ]
+"""Official model names for models on HuggingFace."""
 
 # Model Aliases:
 MODEL_ALIASES = {
@@ -491,7 +496,10 @@ MODEL_ALIASES = {
         "stablelm-tuned-alpha-7b",
         "stablelm-tuned-7b",
     ],
+    "mistralai/Mistral-7B-v0.1": ["mistral-7b"],
+    "mistralai/Mistral-7B-Instruct-v0.1": ["mistral-7b-instruct"],
 }
+"""Model aliases for models on HuggingFace."""
 
 # Sets a default model alias, by convention the first one in the model alias table, else the official name if it has no aliases
 DEFAULT_MODEL_ALIASES = [
@@ -538,11 +546,13 @@ def convert_hf_model_config(model_name: str, **kwargs):
     # In case the user passed in an alias
     official_model_name = get_official_model_name(model_name)
     # Load HuggingFace model config
-    if "llama" not in official_model_name.lower():
+    if "llama" in official_model_name.lower():
+        architecture = "LlamaForCausalLM"
+    elif "mistral" in official_model_name.lower():
+        architecture = "MistralForCausalLM"
+    else:
         hf_config = AutoConfig.from_pretrained(official_model_name, **kwargs)
         architecture = hf_config.architectures[0]
-    else:
-        architecture = "LlamaForCausalLM"
     if official_model_name.startswith(
         ("llama-7b", "Llama-2-7b")
     ):  # same architecture for LLaMA and Llama-2
@@ -717,6 +727,26 @@ def convert_hf_model_config(model_name: str, **kwargs):
             "act_fn": "gelu",
             "attention_dir": "bidirectional",
         }
+    elif architecture == "MistralForCausalLM":
+        cfg_dict = {
+            "d_model": 4096,
+            "d_head": 4096 // 32,
+            "n_heads": 32,
+            "d_mlp": 14336,
+            "n_layers": 32,
+            "n_ctx": 32768,
+            "d_vocab": 32000,
+            "act_fn": "silu",
+            "normalization_type": "RMS",
+            "positional_embedding_type": "rotary",
+            "window_size": 4096,
+            "attn_types": ["local"] * 32,
+            "eps": 1e-05,
+            "n_key_value_heads": 8,
+            "gated_mlp": True,
+            "use_local_attn": True,
+            "rotary_dim": 4096 // 32,
+        }
     else:
         raise NotImplementedError(f"{architecture} is not currently supported.")
     # All of these models use LayerNorm
@@ -775,6 +805,7 @@ def get_pretrained_model_config(
     device: Optional[str] = None,
     n_devices: int = 1,
     default_prepend_bos: bool = True,
+    dtype: torch.dtype = torch.float32,
     **kwargs,
 ):
     """Returns the pretrained model config as an HookedTransformerConfig object.
@@ -806,6 +837,7 @@ def get_pretrained_model_config(
             so this empirically seems to give better results. To change the default behavior to False, pass in
             default_prepend_bos=False. Note that you can also locally override the default behavior by passing
             in prepend_bos=True/False when you call a method that processes the input string.
+        dtype (torch.dtype, optional): The dtype to load the TransformerLens model in.
         kwargs: Other optional arguments passed to HuggingFace's from_pretrained.
             Also given to other HuggingFace functions when compatible.
 
@@ -838,10 +870,7 @@ def get_pretrained_model_config(
     if device is not None:
         cfg_dict["device"] = device
 
-    if kwargs.get("torch_dtype", None) is not None:
-        cfg_dict["dtype"] = kwargs["torch_dtype"]
-    elif "dtype" in cfg_dict:
-        kwargs["torch_dtype"] = cfg_dict["dtype"]
+    cfg_dict["dtype"] = dtype
 
     if fold_ln:
         if cfg_dict["normalization_type"] in ["LN", "LNPre"]:
@@ -943,6 +972,7 @@ def get_pretrained_state_dict(
     official_model_name: str,
     cfg: HookedTransformerConfig,
     hf_model=None,
+    dtype: torch.dtype = torch.float32,
     **kwargs,
 ) -> Dict[str, torch.Tensor]:
     """
@@ -952,9 +982,13 @@ def get_pretrained_state_dict(
 
     hf_model: Optionally, a HuggingFace model object. If provided, we will use
         these weights rather than reloading the model.
+    dtype: The dtype to load the HuggingFace model in.
     kwargs: Other optional arguments passed to HuggingFace's from_pretrained.
         Also given to other HuggingFace functions when compatible.
     """
+    if "torch_dtype" in kwargs:
+        dtype = kwargs["torch_dtype"]
+        del kwargs["torch_dtype"]
     official_model_name = get_official_model_name(official_model_name)
     if (
         official_model_name.startswith("NeelNanda")
@@ -975,9 +1009,9 @@ def get_pretrained_state_dict(
         state_dict = utils.download_file_from_hf(
             official_model_name, file_name, **kwargs
         )
-        dtype = kwargs.get("torch_dtype", None)
-        if dtype is not None:
-            state_dict = {k: v.to(dtype) for k, v in state_dict.items()}
+
+        # Convert to dtype
+        state_dict = {k: v.to(dtype) for k, v in state_dict.items()}
 
         if cfg.original_architecture == "neel-solu-old":
             state_dict = convert_neel_solu_old_weights(state_dict, cfg)
@@ -990,12 +1024,14 @@ def get_pretrained_state_dict(
                 hf_model = AutoModelForCausalLM.from_pretrained(
                     official_model_name,
                     revision=f"checkpoint-{cfg.checkpoint_value}",
+                    torch_dtype=dtype,
                     **kwargs,
                 )
             elif official_model_name.startswith("EleutherAI/pythia"):
                 hf_model = AutoModelForCausalLM.from_pretrained(
                     official_model_name,
                     revision=f"step{cfg.checkpoint_value}",
+                    torch_dtype=dtype,
                     **kwargs,
                 )
             else:
@@ -1007,11 +1043,11 @@ def get_pretrained_state_dict(
                 raise NotImplementedError("Must pass in hf_model for LLaMA models")
             elif "bert" in official_model_name:
                 hf_model = BertForPreTraining.from_pretrained(
-                    official_model_name, **kwargs
+                    official_model_name, torch_dtype=dtype, **kwargs
                 )
             else:
                 hf_model = AutoModelForCausalLM.from_pretrained(
-                    official_model_name, **kwargs
+                    official_model_name, torch_dtype=dtype, **kwargs
                 )
 
             # Load model weights, and fold in layer norm weights
@@ -1033,6 +1069,8 @@ def get_pretrained_state_dict(
             state_dict = convert_llama_weights(hf_model, cfg)
         elif cfg.original_architecture == "BertForMaskedLM":
             state_dict = convert_bert_weights(hf_model, cfg)
+        elif cfg.original_architecture == "MistralForCausalLM":
+            state_dict = convert_mistral_weights(hf_model, cfg)
         else:
             raise ValueError(
                 f"Loading weights from the architecture is not currently supported: {cfg.original_architecture}, generated from model name {cfg.model_name}. Feel free to open an issue on GitHub to request this feature."
@@ -1357,6 +1395,66 @@ def convert_llama_weights(llama, cfg: HookedTransformerConfig):
     state_dict["ln_final.w"] = llama.model.norm.weight
 
     state_dict["unembed.W_U"] = llama.lm_head.weight.T
+    state_dict["unembed.b_U"] = torch.zeros(cfg.d_vocab, dtype=cfg.dtype)
+
+    return state_dict
+
+
+def convert_mistral_weights(mistral, cfg: HookedTransformerConfig):
+    state_dict = {}
+
+    state_dict["embed.W_E"] = mistral.model.embed_tokens.weight
+
+    # Mistral has no biases anywhere
+    for l in range(cfg.n_layers):
+        state_dict[f"blocks.{l}.ln1.w"] = mistral.model.layers[l].input_layernorm.weight
+
+        W_Q = mistral.model.layers[l].self_attn.q_proj.weight
+        W_K = mistral.model.layers[l].self_attn.k_proj.weight
+        W_V = mistral.model.layers[l].self_attn.v_proj.weight
+        W_Q = einops.rearrange(W_Q, "(n h) m->n m h", n=cfg.n_heads)
+        W_K = einops.rearrange(W_K, "(n h) m->n m h", n=cfg.n_key_value_heads)
+        W_V = einops.rearrange(W_V, "(n h) m->n m h", n=cfg.n_key_value_heads)
+        state_dict[f"blocks.{l}.attn.W_Q"] = W_Q
+        state_dict[f"blocks.{l}.attn._W_K"] = W_K
+        state_dict[f"blocks.{l}.attn._W_V"] = W_V
+
+        state_dict[f"blocks.{l}.attn.b_Q"] = torch.zeros(
+            cfg.n_heads, cfg.d_head, dtype=cfg.dtype
+        )
+        state_dict[f"blocks.{l}.attn._b_K"] = torch.zeros(
+            cfg.n_key_value_heads, cfg.d_head, dtype=cfg.dtype
+        )
+        state_dict[f"blocks.{l}.attn._b_V"] = torch.zeros(
+            cfg.n_key_value_heads, cfg.d_head, dtype=cfg.dtype
+        )
+
+        W_O = mistral.model.layers[l].self_attn.o_proj.weight
+        W_O = einops.rearrange(W_O, "m (n h)->n h m", n=cfg.n_heads)
+        state_dict[f"blocks.{l}.attn.W_O"] = W_O
+
+        state_dict[f"blocks.{l}.attn.b_O"] = torch.zeros(cfg.d_model, dtype=cfg.dtype)
+
+        state_dict[f"blocks.{l}.ln2.w"] = mistral.model.layers[
+            l
+        ].post_attention_layernorm.weight
+
+        state_dict[f"blocks.{l}.mlp.W_in"] = mistral.model.layers[
+            l
+        ].mlp.up_proj.weight.T
+        state_dict[f"blocks.{l}.mlp.W_gate"] = mistral.model.layers[
+            l
+        ].mlp.gate_proj.weight.T
+        state_dict[f"blocks.{l}.mlp.b_in"] = torch.zeros(cfg.d_mlp, dtype=cfg.dtype)
+
+        state_dict[f"blocks.{l}.mlp.W_out"] = mistral.model.layers[
+            l
+        ].mlp.down_proj.weight.T
+        state_dict[f"blocks.{l}.mlp.b_out"] = torch.zeros(cfg.d_model, dtype=cfg.dtype)
+
+    state_dict["ln_final.w"] = mistral.model.norm.weight
+
+    state_dict["unembed.W_U"] = mistral.lm_head.weight.T
     state_dict["unembed.b_U"] = torch.zeros(cfg.d_vocab, dtype=cfg.dtype)
 
     return state_dict
