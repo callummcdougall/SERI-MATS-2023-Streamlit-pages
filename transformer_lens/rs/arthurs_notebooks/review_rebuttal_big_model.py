@@ -21,7 +21,7 @@ import gc
 
 #%%
 
-model_name = "gpt2" # "huggyllama/llama-7b"
+model_name = "huggyllama/llama-7b"
 torch.set_grad_enabled(False)
 
 #%%
@@ -150,21 +150,22 @@ for layer, head in list(itertools.product([model.cfg.n_layers-1, model.cfg.n_lay
             # f"blocks.{layer}.attn.hook_rot_q",
             # f"blocks.{layer}.attn.hook_rot_k",
             f"blocks.{layer}.attn.hook_pattern",          # Reconstruct head output from these
-            f"blocks.{layer}.attn.hook_v",       # Logit lens god I hope works
+            f"blocks.{layer}.attn.hook_z",       # Logit lens god I hope works
         ],
         stop_at_layer = layer + 1,
     )
 
     # Implement just "suppression" here, no filtering.
 
-    z_for_head = cache[f"blocks.{layer}.attn.hook_v"][:, :, head]
+    z_for_head = cache[f"blocks.{layer}.attn.hook_z"][:, :, head]
     assert len(z_for_head.shape)==3 # batch, seq_len, dhead
     pattern = cache[f"blocks.{layer}.attn.hook_pattern"][:, head]
+    result = cache[f"blocks.{layer}.attn.hook_result"][:, :, head]
     import einops
     ov_per_position = einops.einsum(
         z_for_head,
         model.W_O[layer, head],
-        "batch seq_len dhead, d_head d_model -> batch seq_len d_model",
+        "batch seq_len dhead, dhead d_model -> batch seq_len d_model",
     )
 
     # Delete the dumb shit (currently unused)
@@ -201,9 +202,9 @@ for layer, head in list(itertools.product([model.cfg.n_layers-1, model.cfg.n_lay
 
     positions = (pattern>0.5) & (torch.arange(pattern.shape[-1])[None, None] > 0).to(pattern.device)
 
-    for b, q, k in positions.nonzero():
+    for b, q, k in positions.nonzero(): # Still bugged
         cur_projection = projection_sizes[b, q, k]
-        norm = norms[b, k]
+        norm = norms[b, q]
         print(cur_projection / norm)
 
     gc.collect()
