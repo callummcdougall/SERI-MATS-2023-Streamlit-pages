@@ -1,3 +1,8 @@
+"""Hooked Transformer Config.
+
+Module with a dataclass for storing the configuration of a
+:class:`transformer_lens.HookedTransformer` model.
+"""
 from __future__ import annotations
 
 import logging
@@ -141,6 +146,11 @@ class HookedTransformerConfig:
             default_prepend_bos=False. Note that you can also locally override the default behavior by passing
             in prepend_bos=True/False when you call a method that processes the input string.
         dtype (torch.dtype, *optional*): The model's dtype. Defaults to torch.float32.
+        tokenizer_prepends_bos (bool, *optional*): This flag is set by set_tokenizer. It is set to True only
+            when the tokenizer automatically prepends the BOS token if initialized with add_bos_token=True.
+            We need this information to dynamically control bos prepending.
+        n_key_value_heads (int, *optional*): The number of groups of heads that use the same key and value matrix.
+            Only for models that use Grouped Query Attention.
     """
 
     n_layers: int
@@ -188,7 +198,8 @@ class HookedTransformerConfig:
     gated_mlp: bool = False
     default_prepend_bos: bool = True
     dtype: torch.dtype = torch.float32
-    add_special_tokens: Optional[bool] = None  # will be set by set_tokenizer
+    tokenizer_prepends_bos: Optional[bool] = None
+    n_key_value_heads: Optional[int] = None
 
     def __post_init__(self):
         if self.n_heads == -1:

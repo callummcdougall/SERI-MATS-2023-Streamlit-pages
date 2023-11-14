@@ -817,7 +817,6 @@ def get_cspa_results(
     W_U = model.W_U
     FUNCTION_TOKS = model.to_tokens(FUNCTION_STR_TOKS, prepend_bos=False).squeeze()
 
-
     if K_semantic > 1:
         # Flatten all tokens, and convert them into str toks
         str_toks_flat = model.to_str_tokens(toks.flatten(), prepend_bos=False)
