@@ -7,6 +7,7 @@ WARNING: This should use TRANSFORMERLENS 1.9.0 not this repo...
 import os
 os.environ["TRANSFORMERS_CACHE"] = "/workspace/cache/"
 import transformers
+from einshape.src.pytorch.pytorch_ops import einshape
 import torch
 
 # from transformer_lens.cautils.notebook import *
@@ -37,7 +38,7 @@ if "llama" in model_name.lower() or "mistral" in model_name.lower():
     model = HookedTransformer.from_pretrained_no_processing("llama-7b", hf_model=hf_model, device="cpu", fold_ln=False, center_writing_weights=False, center_unembed=False, tokenizer=hf_tokenizer)
 
 else:
-    model = HookedTransformer.from_pretrained_no_processing(model_name, device="cpu", fold_ln=False, center_writing_weights=False, center_unembed=False)
+    model = HookedTransformer.from_pretrained_no_processing(model_name, fold_ln=False, center_writing_weights=False, center_unembed=False).cuda()
 
 #%%
 
@@ -166,21 +167,16 @@ for layer, head in list(itertools.product([model.cfg.n_layers-1, model.cfg.n_lay
         "batch seq_len dhead, d_head d_model -> batch seq_len d_model",
     )
 
-
-    # Delete the dumb shit 
-
+    # Delete the dumb shit (currently unused)
     dumb_shit = einops.einsum(
         ov_per_position,
-        pattern.to(ov_per_position.dtype), # DOwncastr 
+        pattern.to(ov_per_position.dtype), # Downcast
         "batch key_index d_model, batch query_index key_index -> batch query_index d_model",
     )
-
-
     # clever_shit = project(
     #     ov_per_position, # Shape batch key_index d_model
     #     model.W_U.T[short_tokens], # batch key_index d_model
     # )
-
     # Well that sucks
 
     unnormed_directions = model.W_U.T[tokens]
@@ -188,9 +184,15 @@ for layer, head in list(itertools.product([model.cfg.n_layers-1, model.cfg.n_lay
     projection_sizes = einops.einsum(
         ov_per_position,    
         normed_directions,
-        "batch key_index d_model, batch key_index d_model -> batch key_index d_model"
+        "batch query_index d_model, batch key_index d_model -> batch query_index key_index"
     )
-    projection = projection_sizes * normed_directions
+    # projection_sizes = einshape( # Ugh no einsum
+    #     "bkd,bkd->bk1",
+    #     ov_per_position,    
+    #     normed_directions,
+    # )
+
+    # projection = projection_sizes * normed_directions
     norms = ov_per_position.norm(dim=-1)
 
     # Okay just replace at end of model???
@@ -198,7 +200,6 @@ for layer, head in list(itertools.product([model.cfg.n_layers-1, model.cfg.n_lay
     # Do like: where attention is >0.5 and not BOS, check how big the projections are
 
     positions = (pattern>0.5) & (torch.arange(pattern.shape[-1])[None, None] > 0).to(pattern.device)
-
 
     for b, q, k in positions.nonzero():
         cur_projection = projection_sizes[b, q, k]

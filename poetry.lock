@@ -1346,13 +1346,13 @@ files = [
 
 [[package]]
 name = "ipykernel"
-version = "6.25.0"
+version = "6.26.0"
 description = "IPython Kernel for Jupyter"
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "ipykernel-6.25.0-py3-none-any.whl", hash = "sha256:f0042e867ac3f6bca1679e6a88cbd6a58ed93a44f9d0866aecde6efe8de76659"},
-    {file = "ipykernel-6.25.0.tar.gz", hash = "sha256:e342ce84712861be4b248c4a73472be4702c1b0dd77448bfd6bcfb3af9d5ddf9"},
+    {file = "ipykernel-6.26.0-py3-none-any.whl", hash = "sha256:3ba3dc97424b87b31bb46586b5167b3161b32d7820b9201a9e698c71e271602c"},
+    {file = "ipykernel-6.26.0.tar.gz", hash = "sha256:553856658eb8430bbe9653ea041a41bff63e9606fc4628873fc92a6cf3abd404"},
 ]
 
 [package.dependencies]
@@ -5523,4 +5523,4 @@ docs = ["furo", "myst-parser", "sphinx", "sphinx-autobuild", "sphinxcontrib-napo
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.9,<4.0,!=3.9.7"
-content-hash = "ff498aa5731e8bbfc1949f65283d70fc9ca0e23f0b9bf5c7e18e4a7e595fa9ef"
+content-hash = "cb6b616e8fbd38b70e01c903b96f32ccd479d66800c3435635ce1f8c889c86e6"
