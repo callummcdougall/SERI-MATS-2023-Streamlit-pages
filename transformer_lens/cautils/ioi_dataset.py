@@ -411,22 +411,22 @@ def gen_flipped_prompts(prompts: List[dict], templates_by_prompt: List[str], fli
 
 def get_name_idxs(prompts, tokenizer, idx_types=["IO", "S1", "S2"], prepend_bos=False):
     name_idx_dict = dict((idx_type, []) for idx_type in idx_types)
-    tokenizer_is_weird_llama_variant = "llama" in str(tokenizer.name_or_path).lower() or "mistral" in str(tokenizer.name_or_path).lower()
-    tokenizer_prepeding_space = "▁" if tokenizer_is_weird_llama_variant else " " # ugh llama does such a weird thing...
     for prompt in prompts:
         text_split = prompt["text"].split(" ")
-        toks = tokenizer.tokenize(tokenizer_prepeding_space.join(text_split[:-1]))
+        toks = tokenizer.encode(" ".join(text_split[:-1]))
         # Get the first instance of IO token
+        # 
+        # We use t.tensor(...).item() as as assertion that the tokenizer hasn't got multiple tokens per name (like LLAMA sometimes does)
         name_idx_dict["IO"].append(
-            toks.index(tokenizer.tokenize((tokenizer_prepeding_space if not tokenizer_is_weird_llama_variant else "") + prompt["IO"])[0])
+            toks.index(t.tensor(tokenizer.encode(" " + prompt["IO"])).item())
         )
         # Get the first instance of S token
         name_idx_dict["S1"].append(
-            toks.index(tokenizer.tokenize((tokenizer_prepeding_space if not tokenizer_is_weird_llama_variant else "") + prompt["S"])[0])
+            toks.index(t.tensor(tokenizer.encode(" " + prompt["S"])).item())
         )
         # Get the last instance of S token
         name_idx_dict["S2"].append(
-            len(toks) - toks[::-1].index(tokenizer.tokenize((tokenizer_prepeding_space if not tokenizer_is_weird_llama_variant else "") + prompt["S"])[0]) - 1
+            len(toks) - toks[::-1].index(t.tensor(tokenizer.encode(" " + prompt["S"])).item()) - 1
         )
 
     return [
