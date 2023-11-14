@@ -243,6 +243,16 @@ OBJECTS = [
     "snack",
 ]
 
+def filter_names(names, tokenizer):
+    filtered_names = []
+    for name in names:
+        name_tokens = tokenizer.encode(name, add_special_tokens=False)
+        if not all([isinstance(tok, int) for tok in name_tokens]):
+            raise ValueError("This is not in the correct form")
+        if len(name_tokens) == 1:
+            filtered_names.append(name)
+    return filtered_names
+
 def gen_prompt_uniform(
     templates, names, nouns_dict, N, symmetric, prefixes=None, abc=False
 ):
@@ -401,20 +411,22 @@ def gen_flipped_prompts(prompts: List[dict], templates_by_prompt: List[str], fli
 
 def get_name_idxs(prompts, tokenizer, idx_types=["IO", "S1", "S2"], prepend_bos=False):
     name_idx_dict = dict((idx_type, []) for idx_type in idx_types)
+    tokenizer_is_weird_llama_variant = "llama" in str(tokenizer.name_or_path).lower() or "mistral" in str(tokenizer.name_or_path).lower()
+    tokenizer_prepeding_space = "▁" if tokenizer_is_weird_llama_variant else " " # ugh llama does such a weird thing...
     for prompt in prompts:
         text_split = prompt["text"].split(" ")
-        toks = tokenizer.tokenize(" ".join(text_split[:-1]))
+        toks = tokenizer.tokenize(tokenizer_prepeding_space.join(text_split[:-1]))
         # Get the first instance of IO token
         name_idx_dict["IO"].append(
-            toks.index(tokenizer.tokenize(" " + prompt["IO"])[0])
+            toks.index(tokenizer.tokenize((tokenizer_prepeding_space if not tokenizer_is_weird_llama_variant else "") + prompt["IO"])[0])
         )
         # Get the first instance of S token
         name_idx_dict["S1"].append(
-            toks.index(tokenizer.tokenize(" " + prompt["S"])[0])
+            toks.index(tokenizer.tokenize((tokenizer_prepeding_space if not tokenizer_is_weird_llama_variant else "") + prompt["S"])[0])
         )
         # Get the last instance of S token
         name_idx_dict["S2"].append(
-            len(toks) - toks[::-1].index(tokenizer.tokenize(" " + prompt["S"])[0]) - 1
+            len(toks) - toks[::-1].index(tokenizer.tokenize((tokenizer_prepeding_space if not tokenizer_is_weird_llama_variant else "") + prompt["S"])[0]) - 1
         )
 
     return [
@@ -535,7 +547,8 @@ class IOIDataset:
         manual_word_idx=None,
         has_been_flipped:bool=False,
         seed=0,
-        device="cuda"
+        device="cuda",
+        filter_names=False,
     ):
         self.seed = seed
         set_global_seed(seed)
@@ -591,7 +604,7 @@ class IOIDataset:
         if prompts is None:
             self.ioi_prompts = gen_prompt_uniform(  # list of dict of the form {"text": "Alice and Bob bla bla. Bob gave bla to Alice", "IO": "Alice", "S": "Bob"}
                 self.templates,
-                NAMES,
+                NAMES if not filter_names else filter_names(NAMES, tokenizer),
                 nouns_dict={"[PLACE]": PLACES, "[OBJECT]": OBJECTS},
                 N=N,
                 symmetric=symmetric,

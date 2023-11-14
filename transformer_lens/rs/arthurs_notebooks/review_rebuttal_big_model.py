@@ -1,13 +1,10 @@
 #%%
 
-"""
-WARNING: This should use TRANSFORMERLENS 1.9.0 not this repo...
-"""
-
 import os
 os.environ["TRANSFORMERS_CACHE"] = "/workspace/cache/"
 import transformers
-from einshape.src.pytorch.pytorch_ops import einshape
+# from einshape.src.pytorch.pytorch_ops import einshape
+from transformer_lens.cautils.notebook import *
 import torch
 
 # from transformer_lens.cautils.notebook import *
@@ -133,13 +130,15 @@ def get_filtered_dataset(model, batch_size=30, seed: int = 1729, device="cuda", 
     mytargets = torch.LongTensor(targets).to(device)
     return mybatch, mytargets
 
-tokens, targets = get_filtered_dataset(model, batch_size=2, max_seq_len=1024)
+tokens, targets = get_filtered_dataset(model, batch_size=20, max_seq_len=1024)
 
 # %%
 
 import itertools
-for layer, head in list(itertools.product([model.cfg.n_layers-1, model.cfg.n_layers-2], list(range(model.cfg.n_heads)))):
+
+for layer, head in [(11,10)]:  # list(itertools.product([model.cfg.n_layers-1, model.cfg.n_layers-2], list(range(model.cfg.n_heads)))):
     print("HEAD!!!", layer, head)
+    list_of_neg_cosine_sims = []
 
     import warnings
     warnings.warn("Not short tokens")
@@ -160,7 +159,6 @@ for layer, head in list(itertools.product([model.cfg.n_layers-1, model.cfg.n_lay
     z_for_head = cache[f"blocks.{layer}.attn.hook_z"][:, :, head]
     assert len(z_for_head.shape)==3 # batch, seq_len, dhead
     pattern = cache[f"blocks.{layer}.attn.hook_pattern"][:, head]
-    result = cache[f"blocks.{layer}.attn.hook_result"][:, :, head]
     import einops
     ov_per_position = einops.einsum(
         z_for_head,
@@ -206,8 +204,27 @@ for layer, head in list(itertools.product([model.cfg.n_layers-1, model.cfg.n_lay
         cur_projection = projection_sizes[b, q, k]
         norm = norms[b, q]
         print(cur_projection / norm)
+        list_of_neg_cosine_sims.append(-(cur_projection / norm).item())
 
     gc.collect()
     torch.cuda.empty_cache() # Is this actually big???
 
 # %%
+
+hist(
+    [list_of_neg_cosine_sims],
+    # Use percentage
+    histnorm='probability',
+    return_fig=True,
+).update_layout(
+    title=f"Histogram of Cosine Similarities between Head Output and Negative W_U on max attention token;\nModel: {model.cfg.model_name}; Head: {head}; Layer: {layer}",
+    xaxis_title="Cosine Similarity",
+    yaxis_title="Density",
+    width=1200,
+    height=600,
+    # Label for bars
+    # barmode="overlay",
+    # bargap=0.1,
+    # bargroupgap=0.1,
+    showlegend=False,
+).show()
