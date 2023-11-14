@@ -1,6 +1,7 @@
 from typing import Union, List, Optional, Tuple, Callable
 import warnings
 import torch as t
+import torch
 import numpy as np
 from transformers import AutoTokenizer
 import random
@@ -22,6 +23,17 @@ def set_global_seed(seed: int):
 
 set_global_seed(0)
 # TODO - for some reason global seeds still don't work in notebook, ABC dataset is different each time? need to fix this
+
+def llama_to_tokens(string, tokenizer, prepend_bos=True):
+    """Thanks Neel: https://github.com/neelnanda-io/LLaMA-Fact/blob/main/scratch.py#L61"""
+
+    string = "|"+string
+    # The first two elements are always [BOS (1), " |" (891)]
+    tokens = tokenizer.encode(string)
+    if prepend_bos:
+        return torch.tensor(tokens[:1] + tokens[2:]).cuda()
+    else:
+        return torch.tensor(tokens[2:]).cuda()
 
 NAMES = [
     "Aaron",
@@ -243,15 +255,17 @@ OBJECTS = [
     "snack",
 ]
 
-def filter_names(names, tokenizer):
-    filtered_names = []
+def get_one_token_names(names, tokenizer):
+    one_token_names = []
     for name in names:
         name_tokens = tokenizer.encode(name, add_special_tokens=False)
         if not all([isinstance(tok, int) for tok in name_tokens]):
             raise ValueError("This is not in the correct form")
         if len(name_tokens) == 1:
-            filtered_names.append(name)
-    return filtered_names
+            one_token_names.append(name)
+    if len(one_token_names) == 0:
+        warnings.warn("WARNING: there are no one token names -- are you sure your tokenizer works???")
+    return one_token_names
 
 def gen_prompt_uniform(
     templates, names, nouns_dict, N, symmetric, prefixes=None, abc=False
@@ -409,25 +423,28 @@ def gen_flipped_prompts(prompts: List[dict], templates_by_prompt: List[str], fli
 
 
 
-def get_name_idxs(prompts, tokenizer, idx_types=["IO", "S1", "S2"], prepend_bos=False):
-    name_idx_dict = dict((idx_type, []) for idx_type in idx_types)
-    for prompt in prompts:
-        text_split = prompt["text"].split(" ")
-        toks = tokenizer.encode(" ".join(text_split[:-1]))
-        # Get the first instance of IO token
-        # 
-        # We use t.tensor(...).item() as as assertion that the tokenizer hasn't got multiple tokens per name (like LLAMA sometimes does)
-        name_idx_dict["IO"].append(
-            toks.index(t.tensor(tokenizer.encode(" " + prompt["IO"])).item())
-        )
-        # Get the first instance of S token
-        name_idx_dict["S1"].append(
-            toks.index(t.tensor(tokenizer.encode(" " + prompt["S"])).item())
-        )
-        # Get the last instance of S token
-        name_idx_dict["S2"].append(
-            len(toks) - toks[::-1].index(t.tensor(tokenizer.encode(" " + prompt["S"])).item()) - 1
-        )
+def get_name_idxs(prompts, tokenizer, idx_types=["IO", "S1", "S2"], prepend_bos=False, is_llama_tokenizer=False):
+    try:
+        name_idx_dict = dict((idx_type, []) for idx_type in idx_types)
+        for prompt in prompts:
+            text_split = prompt["text"].split(" ")
+            toks = tokenizer.encode(" ".join(text_split[:-1]), add_special_tokens=False)
+            # Get the first instance of IO token
+            # 
+            # We use t.tensor(...).item() as as assertion that the tokenizer hasn't got multiple tokens per name (like LLAMA sometimes does)
+            name_idx_dict["IO"].append(
+                toks.index(t.tensor(tokenizer.encode(" " + prompt["IO"], add_special_tokens=False) if not is_llama_tokenizer else llama_to_tokens(" " + prompt["IO"], tokenizer, prepend_bos=False)).item())
+            )
+            # Get the first instance of S token
+            name_idx_dict["S1"].append(
+                toks.index((t.tensor(tokenizer.encode(" " + prompt["S"], add_special_tokens=False)) if not is_llama_tokenizer else llama_to_tokens(" " + prompt["S"], tokenizer, prepend_bos=False)).item())
+            )
+            # Get the last instance of S token
+            name_idx_dict["S2"].append(
+                len(toks) - toks[::-1].index((t.tensor(tokenizer.encode(" " + prompt["S"], add_special_tokens=False)) if not is_llama_tokenizer else llama_to_tokens(" " + prompt["S"], tokenizer, prepend_bos=False)).item()) - 1
+            )
+    except Exception as e:
+        raise e
 
     return [
         int(prepend_bos) + t.tensor(name_idx_dict[idx_type])
@@ -464,7 +481,7 @@ def get_word_idxs(prompts, word_list, tokenizer):
     return t.tensor(idxs)
 
 
-def get_end_idxs(toks, tokenizer, name_tok_len=1, prepend_bos=False):
+def get_end_idxs(toks, tokenizer, name_tok_len=1, prepend_bos=False, is_llama_tokenizer=False):
     relevant_idx = int(prepend_bos and (tokenizer.eos_token_id == tokenizer.pad_token_id))
     # if the sentence begins with an end token
     # AND the model pads at the end with the same end token,
@@ -472,15 +489,18 @@ def get_end_idxs(toks, tokenizer, name_tok_len=1, prepend_bos=False):
 
     pad_token_id = tokenizer.pad_token_id
 
-    end_idxs_raw = []
-    for i in range(toks.shape[0]):
-        if pad_token_id not in toks[i][1:]:
-            end_idxs_raw.append(toks.shape[1])
-            continue
-        nonzers = (toks[i] == pad_token_id).nonzero()[relevant_idx][0].item()
-        end_idxs_raw.append(nonzers)
-    end_idxs = t.tensor(end_idxs_raw)
-    end_idxs = end_idxs - 1 - name_tok_len
+    try:
+        end_idxs_raw = []
+        for i in range(toks.shape[0]):
+            if pad_token_id not in toks[i][1:]:
+                end_idxs_raw.append(toks.shape[1])
+                continue
+            nonzers = (toks[i] == pad_token_id).nonzero()[relevant_idx][0].item()
+            end_idxs_raw.append(nonzers)
+        end_idxs = t.tensor(end_idxs_raw)
+        end_idxs = end_idxs - 1 - name_tok_len
+    except:
+        pass
 
     for i in range(toks.shape[0]):
         assert toks[i][end_idxs[i] + 1] != 0 and (
@@ -498,12 +518,13 @@ def get_end_idxs(toks, tokenizer, name_tok_len=1, prepend_bos=False):
 
 
 
-def get_idx_dict(ioi_prompts, tokenizer, prepend_bos=False, toks=None):
-    (IO_idxs, S1_idxs, S2_idxs,) = get_name_idxs(
+def get_idx_dict(ioi_prompts, tokenizer, prepend_bos=False, toks=None, is_llama_tokenizer=False):
+    (IO_idxs, S1_idxs, S2_idxs) = get_name_idxs(
         ioi_prompts,
         tokenizer,
         idx_types=["IO", "S1", "S2"],
         prepend_bos=prepend_bos,
+        is_llama_tokenizer=is_llama_tokenizer,
     )
 
     end_idxs = get_end_idxs(
@@ -511,6 +532,7 @@ def get_idx_dict(ioi_prompts, tokenizer, prepend_bos=False, toks=None):
         tokenizer,
         name_tok_len=1,
         prepend_bos=prepend_bos,
+        is_llama_tokenizer=is_llama_tokenizer,
     )
 
     punct_idxs = get_word_idxs(ioi_prompts, [",", "."], tokenizer)
@@ -548,8 +570,14 @@ class IOIDataset:
         has_been_flipped:bool=False,
         seed=0,
         device="cuda",
-        filter_names=False,
+        # is_llama_tokenizer_tokenizer=True,
     ):
+        self.is_llama_tokenizer = (
+            "llama" in str(tokenizer.name_or_path)
+            or
+            "mistral" in str(tokenizer.name_or_path)
+        )
+
         self.seed = seed
         set_global_seed(seed)
         if not (
@@ -604,7 +632,7 @@ class IOIDataset:
         if prompts is None:
             self.ioi_prompts = gen_prompt_uniform(  # list of dict of the form {"text": "Alice and Bob bla bla. Bob gave bla to Alice", "IO": "Alice", "S": "Bob"}
                 self.templates,
-                NAMES if not filter_names else filter_names(NAMES, tokenizer),
+                NAMES if not self.is_llama_tokenizer else get_one_token_names(NAMES, tokenizer),
                 nouns_dict={"[PLACE]": PLACES, "[OBJECT]": OBJECTS},
                 N=N,
                 symmetric=symmetric,
@@ -641,13 +669,18 @@ class IOIDataset:
             (self.tokenizer.bos_token if prepend_bos else "") + prompt["text"]
             for prompt in self.ioi_prompts
         ]
-        self.toks = t.Tensor(self.tokenizer(texts, padding=True).input_ids).long()
+        toks_list = [self.tokenizer.encode(text, padding=True, add_special_tokens=False) for text in texts]
+        max_len = max([len(toks) for toks in toks_list])
+        for i in range(len(toks_list)):
+            toks_list[i] = toks_list[i] + [self.tokenizer.pad_token_id] * (max_len - len(toks_list[i]))
+        self.toks = t.Tensor(toks_list).long()
 
         self.word_idx = get_idx_dict(
             self.ioi_prompts,
             self.tokenizer,
             prepend_bos=prepend_bos,
             toks=self.toks,
+            is_llama_tokenizer = self.is_llama_tokenizer,
         )
         self.prepend_bos = prepend_bos
         if manual_word_idx is not None:
@@ -681,7 +714,7 @@ class IOIDataset:
         seed = self.seed + sum(map(ord, list("".join(flip))))
         
         # Get flipped prompts
-        flipped_prompts = gen_flipped_prompts(self.ioi_prompts, self.templates_by_prompt, flip, NAMES, seed)
+        flipped_prompts = gen_flipped_prompts(self.ioi_prompts, self.templates_by_prompt, flip, NAMES if not self.is_llama_tokenizer else get_one_token_names(NAMES, self.tokenizer), seed)
 
         flipped_ioi_dataset = IOIDataset(
             prompt_type=self.prompt_type,
