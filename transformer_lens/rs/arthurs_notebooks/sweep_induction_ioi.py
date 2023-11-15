@@ -176,7 +176,7 @@ def plot_all_results(
     model_classes = []
 
     for model_name in MODEL_NAMES:
-        if ("opt" not in model_name.lower()) and ("gelu" not in model_name.lower()):
+        # if ("opt" not in model_name.lower()) and ("gelu" not in model_name.lower()):
             model_scores = SCORES_DICT[model_name]
             for layer in range(model_scores.size(1)):
                 for head in range(model_scores.size(2)):
@@ -276,8 +276,8 @@ with open(MEDIA_PATH / "ai_vs_cs.json", 'w') as f:
 # fig.write_image(media_path / "ai_vs_cs.pdf")
     
 if ipython is None:
-    # Log this image to wandb
-    wandb.log({"ai_vs_cs_owt": wandb.Image(fig)})
+    # Log this plotly image to wandb
+    wandb.log({"ai_vs_cs_owt": fig})
 
 else:
     fig.show()
@@ -296,7 +296,7 @@ fig.write_image(media_path / "ai_vs_cs.pdf")
 
 if ipython is None:
     # Log this image to wandb
-    wandb.log({"ai_vs_cs_ioi": wandb.Image(fig)})
+    wandb.log({"ai_vs_cs_ioi": fig, "ai_vs_cs_ioi_json": fig.to_json()})
 
 else:
     fig.show()
@@ -445,7 +445,7 @@ def get_anti_induction_scores(model: HookedTransformer, N: int, seq_len: int = 3
 
 # In[12]:
 
-BATCH_SIZE = 1000 # 91 for scatter, 51 for viz
+BATCH_SIZE = 200 # 91 for scatter, 51 for viz
 SEQ_LEN = 1000 # 100 for scatter, 61 for viz (no more, cause attn)
 
 def process_webtext_1(
@@ -600,12 +600,13 @@ else:
 neg_results = all_results * (all_results < 0)
 neg_results_01 = neg_results / einops.reduce(-neg_results, "stack layer head -> stack 1 1", "max")
 
-imshow(
-    neg_results_01,
-    title = "Scores",
-    facet_col = 0,
-    facet_labels = ["Copy-suppression scores<br>(IOI)", "Anti-induction scores<br>(rand)", "Copy-suppression scores<br>(in-vivo)"][:2],
-)
+if ipython is not None:
+    imshow(
+        neg_results_01,
+        title = "Scores",
+        facet_col = 0,
+        facet_labels = ["Copy-suppression scores<br>(IOI)", "Anti-induction scores<br>(rand)", "Copy-suppression scores<br>(in-vivo)"][:2],
+    )
 
 # In[22]:
 
@@ -706,4 +707,4 @@ aggregate_saved_scores(overwrite=True, delete=True, show=True)
 
 #%%
 
-
+wandb.finish()
