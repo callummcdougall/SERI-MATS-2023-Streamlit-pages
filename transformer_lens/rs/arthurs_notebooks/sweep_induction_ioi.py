@@ -8,6 +8,7 @@ import argparse
 import transformers
 from transformer_lens import HookedTransformer # Some TODOs; script this so we can sweep all the darn models. Also, check that code isn't bugged; ensure things work normally for GPT-2 Small
 import torch
+import wandb
 from transformer_lens.rs.callum2.utils import (
     create_title_and_subtitles,
     parse_str,
@@ -132,6 +133,31 @@ def get_model_class(model_name):
 
 # In[4]:
 
+if ipython is None:
+    # Parse all arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, default="pythia-410m")
+    args = parser.parse_args()
+    model_name = args.model
+    wandb_notes = ""
+
+    try:
+        with open(__file__, "r") as f:
+            wandb_notes += f.read()
+    except Exception as e:
+        print("Couldn't read file", __file__, "due to", str(e), "so not adding notes")
+    run_name = model_name
+    wandb.init(
+        project="copy_suppression_induction_ioi",
+        job_type="train",
+        name=run_name,
+        mode="online",
+        notes=wandb_notes,
+    )   
+
+else:
+    model_name = "pythia-410m"
+
 def plot_all_results(
     pospos=False,
     showtext=False,
@@ -248,7 +274,14 @@ import json
 with open(MEDIA_PATH / "ai_vs_cs.json", 'w') as f:
     f.write(json.dumps(fig, cls=PlotlyJSONEncoder))
 # fig.write_image(media_path / "ai_vs_cs.pdf")
-fig.show()
+    
+if ipython is None:
+    # Log this image to wandb
+    wandb.log({"ai_vs_cs_owt": wandb.Image(fig)})
+
+else:
+    fig.show()
+
 
 # In[6]:
 
@@ -259,21 +292,18 @@ fig = plot_all_results(
     categories="all",
 )
 
-fig.show()
 fig.write_image(media_path / "ai_vs_cs.pdf")
+
+if ipython is None:
+    # Log this image to wandb
+    wandb.log({"ai_vs_cs_ioi": wandb.Image(fig)})
+
+else:
+    fig.show()
 
 # # Setup figures
 
 # In[7]:
-
-if ipython is None:
-    # Parse all arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, default="pythia-410m")
-    args = parser.parse_args()
-    model_name = args.model_name
-else:
-    model_name = "pythia-410m"
 
 device = "cuda:0"
 if False:
@@ -451,14 +481,13 @@ def process_webtext_2(
 DATA_STR = process_webtext_1()
 # DATA_TOKS = process_webtext_2(gpt2, DATA_STR)
 # BATCH_SIZE, SEQ_LEN = DATA_TOKS.shape
-
 minibatchsize = 5
 assert BATCH_SIZE % minibatchsize == 0, f"Batch size {BATCH_SIZE} must be divisible by minibatch size {minibatchsize}"
 
 # In[13]:
 
-if True:
-# def get_in_vivo_copy_suppression_scores_2(model: HookedTransformer, DATA_STR: Int[Tensor, "batch seq"]):
+# if True:
+def get_in_vivo_copy_suppression_scores_2(model: HookedTransformer, DATA_STR: Int[Tensor, "batch seq"]):
     '''
     Same as the other one, except rather than picking the top source token, it picks the top token over all 50k words, and sets the result to zero
     if that top token isn't in context. This is a lot more strict, and hopefully a lot more sparse.
@@ -540,8 +569,8 @@ if True:
             results[layer] += einops.reduce(result_dest_projections, "batch_seqQ head -> head", "mean") * (toks.numel() / len(batch_indices))
 
     returning = results / (BATCH_SIZE // minibatchsize)
-    print(returning)
-    # return returning
+    # print(returning)
+    return returning
 
 # In[16]:
 
@@ -585,13 +614,20 @@ RESULTS_DIR = Path("/home/ubuntu/TransformerLens/transformer_lens/rs/callum2/st_
 with open(RESULTS_DIR / f"scores_{model.cfg.model_name}.pkl", "wb") as f:
     pickle.dump(all_results, f)
 
+# Save that file to wandb as an artifact
+if ipython is None:
+    artifact = wandb.Artifact(
+        name=f"anti_induction_scores_{model.cfg.model_name}",
+        type="anti_induction_scores",
+        description="Scores for anti-induction",
+    )
+    artifact.add_file(RESULTS_DIR / f"scores_{model.cfg.model_name}.pkl")
+    wandb.log_artifact(artifact)
+
 # In[18]:
 
-
 def save_model_scores(model_name: str, N: int, plot: bool = False):
-
     t.cuda.empty_cache()
-
     model = HookedTransformer.from_pretrained(
         model_name,
         center_unembed=True,
@@ -665,4 +701,9 @@ def aggregate_saved_scores(
 
     pickle.dump(results_dict, open(RESULTS_DIR / "scores_dict.pkl", "wb"))
 # In[23]:
+
 aggregate_saved_scores(overwrite=True, delete=True, show=True)
+
+#%%
+
+
