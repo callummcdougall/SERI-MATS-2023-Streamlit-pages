@@ -61,7 +61,6 @@ clear_output()
 
 # In[2]:
 
-
 media_path = Path("/home/ubuntu/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/st_page/media/anti_induction") if os.path.exists("/home/ubuntu") else Path("/workspace/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/st_page/media/anti_induction")
 SCORES_DICT = pickle.load(open(media_path / "scores_dict.pkl", "rb"))
 SCORES_DICT = {k: v for k, v in SCORES_DICT.items() if "opt" not in k}
@@ -145,10 +144,10 @@ param_sizes = {
     "attn-only-2l-demo": "2.1M",
     "solu-1l-wiki": "3.1M",
     "solu-4l-wiki": "13M",
-    "llama-7b-hf": "7B",
     # "mistralai/Mistral-7B-v0.1": "7B",
-    "Llama-2-13b-hf": "13B",
     "Llama-2-7b-hf": "7B",
+    "Llama-2-13b-hf": "13B",
+    "llama-7b-hf": "7B",
 }
 
 def get_size(model_name):
@@ -244,7 +243,7 @@ def plot_all_results(
         # text="head_and_model_names" if showtext else None,
         title="Anti-Induction Scores (repeated random tokens) vs Copy-Suppression Scores (IOI)",
         labels={
-            x: "Copy-Suppression Score",
+            x: "Copy-Suppression Score (IOI)" if x == "results_cs_ioi" else "Copy-Suppression Score (OWT)",
             "results_ai_rand": "Anti-Induction Score",
             "model_class": "Model Class",
         },
@@ -305,7 +304,6 @@ fig.show()
 
 # In[6]:
 
-
 fig = plot_all_results(
     pospos=False,
     showtext=False,
@@ -317,7 +315,6 @@ fig.show()
 fig.write_image(media_path / "ai_vs_cs.pdf")
 
 # # Setup figures
-
 
 # In[7]:
 
@@ -336,10 +333,10 @@ if False:
 else:
     # model_name = "huggyllama/llama-7b"
     # model_name = "mistralai/Mistral-7B-v0.1"
-    model_name = "meta-llama/Llama-2-7b-hf"
+    # model_name = "meta-llama/Llama-2-7b-hf"
     # model_name = "meta-llama/Llama-2-13b-hf"
     # model_name = "distillgpt2"
-
+    model_name = "pythia-410m"
     # model_name = "gpt2-small"
     import transformers
     from transformer_lens import HookedTransformer # Some TODOs; script this so we can sweep all the darn models. Also, check that code isn't bugged; ensure things work normally for GPT-2 Small
@@ -347,6 +344,12 @@ else:
     # from_pretrained version 4 minutes
     long_path = "/workspace/cache/models--mistralai--Mistral-7B-v0.1/snapshots/5e9c98b96d071dce59368012254c55b0ec6f8658/"
     if "llama" in model_name.lower() or "mistral" in model_name.lower():
+
+        if "model" in locals():
+            del model
+            gc.collect()
+            torch.cuda.empty_cache()
+
         hf_model = transformers.AutoModelForCausalLM.from_pretrained(long_path) if "mistral" in model_name.lower() and os.path.exists(long_path) else transformers.AutoModelForCausalLM.from_pretrained(model_name)
         gc.collect()
         torch.cuda.empty_cache()
@@ -462,8 +465,8 @@ def get_anti_induction_scores(model: HookedTransformer, N: int, seq_len: int = 3
 
 # In[12]:
 
-BATCH_SIZE = 40 # 91 for scatter, 51 for viz
-SEQ_LEN = 50 # 100 for scatter, 61 for viz (no more, cause attn)
+BATCH_SIZE = 1000 # 91 for scatter, 51 for viz
+SEQ_LEN = 1000 # 100 for scatter, 61 for viz (no more, cause attn)
 
 def process_webtext_1(
     seed: int = 6,
@@ -499,83 +502,96 @@ DATA_STR = process_webtext_1()
 # DATA_TOKS = process_webtext_2(gpt2, DATA_STR)
 # BATCH_SIZE, SEQ_LEN = DATA_TOKS.shape
 
+minibatchsize = 5
+assert BATCH_SIZE % minibatchsize == 0, f"Batch size {BATCH_SIZE} must be divisible by minibatch size {minibatchsize}"
 
 # In[13]:
 
-def get_in_vivo_copy_suppression_scores_2(model: HookedTransformer, DATA_STR: Int[Tensor, "batch seq"]):
+if True:
+# def get_in_vivo_copy_suppression_scores_2(model: HookedTransformer, DATA_STR: Int[Tensor, "batch seq"]):
     '''
     Same as the other one, except rather than picking the top source token, it picks the top token over all 50k words, and sets the result to zero
     if that top token isn't in context. This is a lot more strict, and hopefully a lot more sparse.
     '''
-    toks = process_webtext_2(model, DATA_STR, SEQ_LEN)
-    batch_size, seq_len = toks.shape
 
-    logits, cache = model.run_with_cache(
-        toks,
-        names_filter = lambda name: any(name.endswith(x) for x in ["pattern", "v", "resid_pre", "scale"])
-    )
-
-    # Sanity check loss is low
-    logprobs = t.nn.functional.log_softmax(logits, dim=-1)
-    loss = -logprobs[torch.arange(batch_size)[:, None], torch.arange(seq_len-1)[None, :], toks[:, 1:]].mean()
-    print("FYI, loss", round(loss.item(), 3))
-
-    potential_function_toks = model.to_tokens(FUNCTION_STR_TOKS, prepend_bos=False).squeeze().to(device)
-    FUNCTION_TOKS = t.concat([t.tensor([model.tokenizer.bos_token_id]).to(device)] + ([] if len(potential_function_toks.shape)>1 else potential_function_toks) + ([torch.tensor([1]).to(device)] if "llama" in model.cfg.model_name.lower() or "mistral" in model.cfg.model_name.lower() else []))
     results = t.zeros((model.cfg.n_layers, model.cfg.n_heads), device=device, dtype=t.float)
 
-    for layer in range(model.cfg.n_layers):
-        # Get everything we need from the cache
-        resid_post_scaled: Float[Tensor, "batch seqQ d_model"] = cache["resid_pre", layer] / cache["scale"]
-        v: Float[Tensor, "batch seqK head d_head"] = cache["v", layer]
-        pattern: Float[Tensor, "batch head seqQ seqK"] = cache["pattern", layer]
+    for minibatch_strs in tqdm([
+        DATA_STR[i:i+minibatchsize] for i in range(0, BATCH_SIZE, minibatchsize)
+    ]):
+        toks = process_webtext_2(model, minibatch_strs, SEQ_LEN)
+        _, seq_len = toks.shape
 
-        # Get logit lens for all tokens, at each dest token
-        # Get the (batch, seqQ) indices of everywhere that the top token isn't a function word & is in context
-        logit_lens: Float[Tensor, "batch seqQ d_vocab"] = resid_post_scaled.to(model.cfg.dtype) @ model.W_U
-        top_predicted_token: Int[Tensor, "batch seqQ"] = logit_lens.argmax(-1)
-        top_predicted_token_is_non_fn_word: Bool[Tensor, "batch seqQ"] = (top_predicted_token[:, :, None] != FUNCTION_TOKS[None, :]).all(dim=-1)
-        top_predicted_token_rep = einops.repeat(top_predicted_token, "batch seqQ -> batch seqQ seqK", seqK=seq_len)
-        toks_rep = einops.repeat(toks, "batch seqK -> batch seqQ seqK", seqQ=seq_len)
-        toks_rep = t.where(t.tril(t.ones((seq_len, seq_len))).bool().to(toks_rep.device), toks_rep, -1)
-        top_predicted_token_is_in_context: Bool[Tensor, "batch seqQ"] = (top_predicted_token_rep == toks_rep).any(dim=-1)
-        batch_seqQ_indices = t.nonzero(top_predicted_token_is_non_fn_word & top_predicted_token_is_in_context)
-
-        # If there are no destination tokens in the entire batch where the logit lens for this layer is a non-fn word in context, then skip
-        if batch_seqQ_indices.numel() == 0:
-            continue
-
-        # Now I have all the (batch_idx, dest_idx) s.t. I actually want to take the result from that token
-        batch_indices, seqQ_indices = batch_seqQ_indices.unbind(dim=-1)
-        seqK_indices = (top_predicted_token[:, :, None] == toks[:, None, :]).int().argmax(dim=-1)[batch_indices, seqQ_indices]
-        top_predicted_tokens = top_predicted_token[batch_indices, seqQ_indices]
-
-        # if layer == 10:
-        #     for b, sK, sQ in zip(batch_indices, seqK_indices, seqQ_indices):
-        #         # if "Berk" in model.to_single_str_token(toks[b, sQ].item()) + model.to_single_str_token(toks[b, sK].item()):
-        #         print(f"[{b:02}] Dest = {model.to_single_str_token(toks[b, sQ].item())!r}, Src = {model.to_single_str_token(toks[b, sK].item())!r}")
-
-        # Get the actual things we're moving
-        v_src: Float[Tensor, "batch_seqQ head d_head"] = v[batch_indices, seqK_indices]
-        pattern_src_dest: Float[Tensor, "batch_seqQ head"] = pattern[batch_indices, :, seqQ_indices, seqK_indices]
-
-        # Do the projections & attention scaling
-        result_src: Float[Tensor, "batch_seqQ head d_model"] = einops.einsum(
-            v_src, model.W_O[layer],
-            "batch_seqQ head d_head, head d_head d_model -> batch_seqQ head d_model"
+        logits, cache = model.run_with_cache(
+            toks,
+            names_filter = lambda name: any(name.endswith(x) for x in ["pattern", "v", "resid_pre", "scale"])
         )
-        result_src_projections: Float[Tensor, "batch_seqQ head"] = einops.einsum(
-            result_src, model.W_U.T[top_predicted_tokens],
-            "batch_seqQ head d_model, batch_seqQ d_model -> batch_seqQ head"
-        )
-        scale = cache["scale"][batch_indices, seqQ_indices]
-        result_dest_projections: Float[Tensor, "batch_seqQ head"] = (result_src_projections * pattern_src_dest) / scale
 
-        # if layer == 10: print(batch_seqQ_indices)
-        # Scaling by the number of nonzero elements (because I expect)
-        results[layer] = einops.reduce(result_dest_projections, "batch_seqQ head -> head", "mean") * (toks.numel() / len(batch_indices))
+        # Sanity check loss is low
+        logprobs = t.nn.functional.log_softmax(logits, dim=-1)
+        loss = -logprobs[torch.arange(minibatchsize)[:, None], torch.arange(seq_len-1)[None, :], toks[:, 1:]].mean()
+        print("FYI, loss", round(loss.item(), 3))
 
-    return results
+        potential_function_toks = model.to_tokens(FUNCTION_STR_TOKS, prepend_bos=False).squeeze().to(device)
+        FUNCTION_TOKS = t.concat([t.tensor([model.tokenizer.bos_token_id]).to(device)] + ([] if len(potential_function_toks.shape)>1 else [potential_function_toks]) + ([torch.tensor([1]).to(device)] if "llama" in model.cfg.model_name.lower() or "mistral" in model.cfg.model_name.lower() else []))
+
+        for layer in range(model.cfg.n_layers):
+            # Get everything we need from the cache
+            resid_post_scaled: Float[Tensor, "batch seqQ d_model"] = cache["resid_pre", layer] / cache["scale"]
+            v: Float[Tensor, "batch seqK head d_head"] = cache["v", layer]
+            pattern: Float[Tensor, "batch head seqQ seqK"] = cache["pattern", layer]
+
+            # Get logit lens for all tokens, at each dest token
+            # Get the (batch, seqQ) indices of everywhere that the top token isn't a function word & is in context
+            logit_lens: Float[Tensor, "batch seqQ d_vocab"] = resid_post_scaled.to(model.cfg.dtype) @ model.W_U
+            top_predicted_token: Int[Tensor, "batch seqQ"] = logit_lens.argmax(-1)
+            top_predicted_token_is_non_fn_word: Bool[Tensor, "batch seqQ"] = (top_predicted_token[:, :, None] != FUNCTION_TOKS[None, :]).all(dim=-1)
+            top_predicted_token_rep = einops.repeat(top_predicted_token, "batch seqQ -> batch seqQ seqK", seqK=seq_len)
+            toks_rep = einops.repeat(toks, "batch seqK -> batch seqQ seqK", seqQ=seq_len)
+            toks_rep = t.where(t.tril(t.ones((seq_len, seq_len))).bool().to(toks_rep.device), toks_rep, -1)
+            top_predicted_token_is_in_context: Bool[Tensor, "batch seqQ"] = (top_predicted_token_rep == toks_rep).any(dim=-1)
+            batch_seqQ_indices = t.nonzero(top_predicted_token_is_non_fn_word & top_predicted_token_is_in_context)
+
+            # If there are no destination tokens in the entire batch where the logit lens for this layer is a non-fn word in context, then skip
+            if batch_seqQ_indices.numel() == 0:
+                continue
+
+            # Now I have all the (batch_idx, dest_idx) s.t. I actually want to take the result from that token
+            batch_indices, seqQ_indices = batch_seqQ_indices.unbind(dim=-1)
+            seqK_indices = (top_predicted_token[:, :, None] == toks[:, None, :]).int().argmax(dim=-1)[batch_indices, seqQ_indices]
+            top_predicted_tokens = top_predicted_token[batch_indices, seqQ_indices]
+
+            if seqK_indices.min().item()==0:
+                warnings.warn("Uhok we found zeros this isnt good")
+
+            # if layer == 10:
+            #     for b, sK, sQ in zip(batch_indices, seqK_indices, seqQ_indices):
+            #         # if "Berk" in model.to_single_str_token(toks[b, sQ].item()) + model.to_single_str_token(toks[b, sK].item()):
+            #         print(f"[{b:02}] Dest = {model.to_single_str_token(toks[b, sQ].item())!r}, Src = {model.to_single_str_token(toks[b, sK].item())!r}")
+
+            # Get the actual things we're moving
+            v_src: Float[Tensor, "batch_seqQ head d_head"] = v[batch_indices, seqK_indices]
+            pattern_src_dest: Float[Tensor, "batch_seqQ head"] = pattern[batch_indices, :, seqQ_indices, seqK_indices]
+
+            # Do the projections & attention scaling
+            result_src: Float[Tensor, "batch_seqQ head d_model"] = einops.einsum(
+                v_src, model.W_O[layer],
+                "batch_seqQ head d_head, head d_head d_model -> batch_seqQ head d_model"
+            )
+            result_src_projections: Float[Tensor, "batch_seqQ head"] = einops.einsum(
+                result_src, model.W_U.T[top_predicted_tokens],
+                "batch_seqQ head d_model, batch_seqQ d_model -> batch_seqQ head"
+            )
+            scale = cache["scale"][batch_indices, seqQ_indices]
+            result_dest_projections: Float[Tensor, "batch_seqQ head"] = (result_src_projections * pattern_src_dest) / scale
+
+            # if layer == 10: print(batch_seqQ_indices)
+            # Scaling by the number of nonzero elements (because I expect)
+            results[layer] += einops.reduce(result_dest_projections, "batch_seqQ head -> head", "mean") * (toks.numel() / len(batch_indices))
+
+    returning = results / (BATCH_SIZE // minibatchsize)
+    print(returning)
+    # return returning
 
 # In[16]:
 
