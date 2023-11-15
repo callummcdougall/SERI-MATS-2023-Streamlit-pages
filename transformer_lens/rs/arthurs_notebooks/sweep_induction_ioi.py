@@ -1,45 +1,13 @@
-#%%
-#!/usr/bin/env python
-# coding: utf-8
-
-# # Generate AI vs CS plots
-# 
-# Open question - how much of anti-induction is actually just copy-suppression?
-# 
-# We're answering this question by doing a large scatter plot of two metrics.
-# 
-# On the x-axis is **copy-suppression scores on the IOI distribution**. This is calculated as follows:
-# 
-# * For the given attention head, take the result vector being moved from the IO token to the end token.
-# * Measure its direct logit attribution in the direction of the IO token.
-# 
-# This should be very positive for copy heads, and very negative for our negative heads.
-# 
-# On the y-axis is **anti-induction scores on the IOI distribution**. This is calculated as follows:
-# 
-# * Input a random repeating sequence (i.e. the model's BOS token, followed by 2 copies of the same random sequence concatenated together).
-# * Measure the model's direct logit attribution on the correct token.
-# 
-# This should be positive for induction heads, and negative for anti-induction heads.
-# 
-# ## How could this be improved?
-# 
-# The anti-induction metric is pretty clear and obvious. I'm not quite as happy with the IOI metric, because this is just one of the many cases where negative behaviour is displayed. However, it seems like a pretty crisp example.
-# 
-# Other possible ideas:
-# 
-# * Run the model on OWT (but this might take a long time!).
-# * Take classic sentences, like the "breaking the pattern" example about picking up "the third and final box".
-#     * However, an issue with this is that this is kinda anti-induction.
-# * Measure directly from the weights - some combination of "average log self-attention rank" and "average log self-suppression rank" for non-function words.
-
 # In[1]:
 
 import os
 os.environ["TRANSFORMERS_CACHE"] = "/workspace/cache/"
 from transformer_lens.cautils.notebook import *
 t.set_grad_enabled(False)
-
+import argparse
+import transformers
+from transformer_lens import HookedTransformer # Some TODOs; script this so we can sweep all the darn models. Also, check that code isn't bugged; ensure things work normally for GPT-2 Small
+import torch
 from transformer_lens.rs.callum2.utils import (
     create_title_and_subtitles,
     parse_str,
@@ -49,18 +17,14 @@ from transformer_lens.rs.callum2.utils import (
     ST_HTML_PATH,
     project,
 )
-
 from transformer_lens import FactoredMatrix
 from transformer_lens.rs.callum2.generate_st_html.model_results import (
     FUNCTION_STR_TOKS,
 )
-
 clear_output()
-
 # # Paper figures
 
 # In[2]:
-
 
 media_path = Path("/home/ubuntu/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/st_page/media/anti_induction") if os.path.exists("/home/ubuntu") else Path("/workspace/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/st_page/media/anti_induction")
 SCORES_DICT = pickle.load(open(media_path / "scores_dict.pkl", "rb"))
@@ -81,15 +45,12 @@ param_sizes = {
     "opt-2.7b": "2.5B",
     "opt-6.7b": "6.4B",
     "opt-13b": "13B",
-    "opt-30b": "30B",
-    "opt-66b": "65B",
     "gpt-neo-125m": "85M",
     "gpt-neo-1.3b": "1.2B",
     "gpt-neo-2.7b": "2.5B",
     "gpt-neo-1.3B": "1.2B",
     "gpt-neo-2.7B": "2.5B",
     "gpt-j-6B": "5.6B",
-    "gpt-neox-20b": "20B",
     "stanford-gpt2-small-a": "85M",
     "stanford-gpt2-small-b": "85M",
     "stanford-gpt2-small-c": "85M",
@@ -145,10 +106,11 @@ param_sizes = {
     "attn-only-2l-demo": "2.1M",
     "solu-1l-wiki": "3.1M",
     "solu-4l-wiki": "13M",
-    "llama-7b-hf": "7B",
-    # "mistralai/Mistral-7B-v0.1": "7B",
-    "Llama-2-13b-hf": "13B",
+    # "mistralai/Mistral-7B-v0.1": "7B", # Broken, sad
     "Llama-2-7b-hf": "7B",
+    "Llama-2-13b-hf": "13B",
+    "llama-7b-hf": "7B",
+    "llama-13b-hf": "13B",
 }
 
 def get_size(model_name):
@@ -241,10 +203,9 @@ def plot_all_results(
             x: False,
             "results_ai_rand": False,
         },
-        # text="head_and_model_names" if showtext else None,
-        title="Anti-Induction Scores (repeated random tokens) vs Copy-Suppression Scores (IOI)",
+        title="Anti-Induction Scores (repeated random tokens) vs Copy-Suppression Scores " + ("(IOI)" if x == "results_cs_ioi" else "(OWT)"),
         labels={
-            x: "Copy-Suppression Score",
+            x: "Copy-Suppression Score (IOI)" if x == "results_cs_ioi" else "Copy-Suppression Score (OWT)",
             "results_ai_rand": "Anti-Induction Score",
             "model_class": "Model Class",
         },
@@ -253,7 +214,6 @@ def plot_all_results(
         color_continuous_scale=px.colors.sequential.Rainbow if fraction else None,
         template="simple_white",
     )
-    # fig.update_layout(legend_title_font_size=18)
     fig.update_xaxes(showgrid=True)
     fig.update_yaxes(showgrid=True)
     fig.update_traces(textposition='top center')
@@ -270,18 +230,7 @@ def plot_all_results(
         showarrow=True,
         font_size=14,
     )
-
-    # # Now we add legend groups
-    # for trace in fig.data:
-    #     for group_substr in ["GPT", "OPT", "Pythia", "SoLU", "GELU", "Other"]:
-    #         if group_substr.lower() in trace.name.lower():
-    #             break
-    #     trace.legendgroup = group_substr
-    #     trace.legendgrouptitle = {'text': f"<br><span style='font-size:16px'>{'='*8} {group_substr} {'='*8}</span>"}
-
-    # fig.update_layout(paper_bgcolor='rgba(255,244,214,0.5)', plot_bgcolor='rgba(255,244,214,0.5)')
     return fig
-
 
 # In[5]:
 
@@ -293,18 +242,15 @@ fig = plot_all_results(
     x = "results_cs_norm",
 )
 fig.update_layout(height=550, width=800)
-
 MEDIA_PATH = Path(r"/home/ubuntu/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/st_page/media") if os.path.exists("/home/ubuntu") else Path(r"/workspace/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/st_page/media")
 from plotly.utils import PlotlyJSONEncoder
 import json
 with open(MEDIA_PATH / "ai_vs_cs.json", 'w') as f:
     f.write(json.dumps(fig, cls=PlotlyJSONEncoder))
 # fig.write_image(media_path / "ai_vs_cs.pdf")
-
 fig.show()
 
 # In[6]:
-
 
 fig = plot_all_results(
     pospos=False,
@@ -318,11 +264,18 @@ fig.write_image(media_path / "ai_vs_cs.pdf")
 
 # # Setup figures
 
-
 # In[7]:
 
-device = "cuda:0"
+if ipython is None:
+    # Parse all arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_name", type=str, default="pythia-410m")
+    args = parser.parse_args()
+    model_name = args.model_name
+else:
+    model_name = "pythia-410m"
 
+device = "cuda:0"
 if False:
     model = HookedTransformer.from_pretrained(
         "gpt2-small",
@@ -332,21 +285,22 @@ if False:
         device=device,
         # refactor_factored_attn_matrices=True,
     )
-
 else:
     # model_name = "huggyllama/llama-7b"
     # model_name = "mistralai/Mistral-7B-v0.1"
-    model_name = "meta-llama/Llama-2-7b-hf"
+    # model_name = "meta-llama/Llama-2-7b-hf"
     # model_name = "meta-llama/Llama-2-13b-hf"
     # model_name = "distillgpt2"
-
+    # model_name = "pythia-410m"
     # model_name = "gpt2-small"
-    import transformers
-    from transformer_lens import HookedTransformer # Some TODOs; script this so we can sweep all the darn models. Also, check that code isn't bugged; ensure things work normally for GPT-2 Small
-    import torch
     # from_pretrained version 4 minutes
+
     long_path = "/workspace/cache/models--mistralai--Mistral-7B-v0.1/snapshots/5e9c98b96d071dce59368012254c55b0ec6f8658/"
     if "llama" in model_name.lower() or "mistral" in model_name.lower():
+        if "model" in locals():
+            del model
+            gc.collect()
+            torch.cuda.empty_cache()
         hf_model = transformers.AutoModelForCausalLM.from_pretrained(long_path) if "mistral" in model_name.lower() and os.path.exists(long_path) else transformers.AutoModelForCausalLM.from_pretrained(model_name)
         gc.collect()
         torch.cuda.empty_cache()
@@ -375,7 +329,6 @@ else:
 
 model.set_use_attn_result(False)
 clear_output()
-
 
 # In[9]:
 
@@ -462,8 +415,8 @@ def get_anti_induction_scores(model: HookedTransformer, N: int, seq_len: int = 3
 
 # In[12]:
 
-BATCH_SIZE = 40 # 91 for scatter, 51 for viz
-SEQ_LEN = 50 # 100 for scatter, 61 for viz (no more, cause attn)
+BATCH_SIZE = 1000 # 91 for scatter, 51 for viz
+SEQ_LEN = 1000 # 100 for scatter, 61 for viz (no more, cause attn)
 
 def process_webtext_1(
     seed: int = 6,
@@ -499,83 +452,96 @@ DATA_STR = process_webtext_1()
 # DATA_TOKS = process_webtext_2(gpt2, DATA_STR)
 # BATCH_SIZE, SEQ_LEN = DATA_TOKS.shape
 
+minibatchsize = 5
+assert BATCH_SIZE % minibatchsize == 0, f"Batch size {BATCH_SIZE} must be divisible by minibatch size {minibatchsize}"
 
 # In[13]:
 
-def get_in_vivo_copy_suppression_scores_2(model: HookedTransformer, DATA_STR: Int[Tensor, "batch seq"]):
+if True:
+# def get_in_vivo_copy_suppression_scores_2(model: HookedTransformer, DATA_STR: Int[Tensor, "batch seq"]):
     '''
     Same as the other one, except rather than picking the top source token, it picks the top token over all 50k words, and sets the result to zero
     if that top token isn't in context. This is a lot more strict, and hopefully a lot more sparse.
     '''
-    toks = process_webtext_2(model, DATA_STR, SEQ_LEN)
-    batch_size, seq_len = toks.shape
 
-    logits, cache = model.run_with_cache(
-        toks,
-        names_filter = lambda name: any(name.endswith(x) for x in ["pattern", "v", "resid_pre", "scale"])
-    )
-
-    # Sanity check loss is low
-    logprobs = t.nn.functional.log_softmax(logits, dim=-1)
-    loss = -logprobs[torch.arange(batch_size)[:, None], torch.arange(seq_len-1)[None, :], toks[:, 1:]].mean()
-    print("FYI, loss", round(loss.item(), 3))
-
-    potential_function_toks = model.to_tokens(FUNCTION_STR_TOKS, prepend_bos=False).squeeze().to(device)
-    FUNCTION_TOKS = t.concat([t.tensor([model.tokenizer.bos_token_id]).to(device)] + ([] if len(potential_function_toks.shape)>1 else potential_function_toks) + ([torch.tensor([1]).to(device)] if "llama" in model.cfg.model_name.lower() or "mistral" in model.cfg.model_name.lower() else []))
     results = t.zeros((model.cfg.n_layers, model.cfg.n_heads), device=device, dtype=t.float)
 
-    for layer in range(model.cfg.n_layers):
-        # Get everything we need from the cache
-        resid_post_scaled: Float[Tensor, "batch seqQ d_model"] = cache["resid_pre", layer] / cache["scale"]
-        v: Float[Tensor, "batch seqK head d_head"] = cache["v", layer]
-        pattern: Float[Tensor, "batch head seqQ seqK"] = cache["pattern", layer]
+    for minibatch_strs in tqdm([
+        DATA_STR[i:i+minibatchsize] for i in range(0, BATCH_SIZE, minibatchsize)
+    ]):
+        toks = process_webtext_2(model, minibatch_strs, SEQ_LEN)
+        _, seq_len = toks.shape
 
-        # Get logit lens for all tokens, at each dest token
-        # Get the (batch, seqQ) indices of everywhere that the top token isn't a function word & is in context
-        logit_lens: Float[Tensor, "batch seqQ d_vocab"] = resid_post_scaled.to(model.cfg.dtype) @ model.W_U
-        top_predicted_token: Int[Tensor, "batch seqQ"] = logit_lens.argmax(-1)
-        top_predicted_token_is_non_fn_word: Bool[Tensor, "batch seqQ"] = (top_predicted_token[:, :, None] != FUNCTION_TOKS[None, :]).all(dim=-1)
-        top_predicted_token_rep = einops.repeat(top_predicted_token, "batch seqQ -> batch seqQ seqK", seqK=seq_len)
-        toks_rep = einops.repeat(toks, "batch seqK -> batch seqQ seqK", seqQ=seq_len)
-        toks_rep = t.where(t.tril(t.ones((seq_len, seq_len))).bool().to(toks_rep.device), toks_rep, -1)
-        top_predicted_token_is_in_context: Bool[Tensor, "batch seqQ"] = (top_predicted_token_rep == toks_rep).any(dim=-1)
-        batch_seqQ_indices = t.nonzero(top_predicted_token_is_non_fn_word & top_predicted_token_is_in_context)
-
-        # If there are no destination tokens in the entire batch where the logit lens for this layer is a non-fn word in context, then skip
-        if batch_seqQ_indices.numel() == 0:
-            continue
-
-        # Now I have all the (batch_idx, dest_idx) s.t. I actually want to take the result from that token
-        batch_indices, seqQ_indices = batch_seqQ_indices.unbind(dim=-1)
-        seqK_indices = (top_predicted_token[:, :, None] == toks[:, None, :]).int().argmax(dim=-1)[batch_indices, seqQ_indices]
-        top_predicted_tokens = top_predicted_token[batch_indices, seqQ_indices]
-
-        # if layer == 10:
-        #     for b, sK, sQ in zip(batch_indices, seqK_indices, seqQ_indices):
-        #         # if "Berk" in model.to_single_str_token(toks[b, sQ].item()) + model.to_single_str_token(toks[b, sK].item()):
-        #         print(f"[{b:02}] Dest = {model.to_single_str_token(toks[b, sQ].item())!r}, Src = {model.to_single_str_token(toks[b, sK].item())!r}")
-
-        # Get the actual things we're moving
-        v_src: Float[Tensor, "batch_seqQ head d_head"] = v[batch_indices, seqK_indices]
-        pattern_src_dest: Float[Tensor, "batch_seqQ head"] = pattern[batch_indices, :, seqQ_indices, seqK_indices]
-
-        # Do the projections & attention scaling
-        result_src: Float[Tensor, "batch_seqQ head d_model"] = einops.einsum(
-            v_src, model.W_O[layer],
-            "batch_seqQ head d_head, head d_head d_model -> batch_seqQ head d_model"
+        logits, cache = model.run_with_cache(
+            toks,
+            names_filter = lambda name: any(name.endswith(x) for x in ["pattern", "v", "resid_pre", "scale"])
         )
-        result_src_projections: Float[Tensor, "batch_seqQ head"] = einops.einsum(
-            result_src, model.W_U.T[top_predicted_tokens],
-            "batch_seqQ head d_model, batch_seqQ d_model -> batch_seqQ head"
-        )
-        scale = cache["scale"][batch_indices, seqQ_indices]
-        result_dest_projections: Float[Tensor, "batch_seqQ head"] = (result_src_projections * pattern_src_dest) / scale
 
-        # if layer == 10: print(batch_seqQ_indices)
-        # Scaling by the number of nonzero elements (because I expect)
-        results[layer] = einops.reduce(result_dest_projections, "batch_seqQ head -> head", "mean") * (toks.numel() / len(batch_indices))
+        # Sanity check loss is low
+        logprobs = t.nn.functional.log_softmax(logits, dim=-1)
+        loss = -logprobs[torch.arange(minibatchsize)[:, None], torch.arange(seq_len-1)[None, :], toks[:, 1:]].mean()
+        print("FYI, loss", round(loss.item(), 3))
 
-    return results
+        potential_function_toks = model.to_tokens(FUNCTION_STR_TOKS, prepend_bos=False).squeeze().to(device)
+        FUNCTION_TOKS = t.concat([t.tensor([model.tokenizer.bos_token_id]).to(device)] + ([] if len(potential_function_toks.shape)>1 else [potential_function_toks]) + ([torch.tensor([1]).to(device)] if "llama" in model.cfg.model_name.lower() or "mistral" in model.cfg.model_name.lower() else []))
+
+        for layer in range(model.cfg.n_layers):
+            # Get everything we need from the cache
+            resid_post_scaled: Float[Tensor, "batch seqQ d_model"] = cache["resid_pre", layer] / cache["scale"]
+            v: Float[Tensor, "batch seqK head d_head"] = cache["v", layer]
+            pattern: Float[Tensor, "batch head seqQ seqK"] = cache["pattern", layer]
+
+            # Get logit lens for all tokens, at each dest token
+            # Get the (batch, seqQ) indices of everywhere that the top token isn't a function word & is in context
+            logit_lens: Float[Tensor, "batch seqQ d_vocab"] = resid_post_scaled.to(model.cfg.dtype) @ model.W_U
+            top_predicted_token: Int[Tensor, "batch seqQ"] = logit_lens.argmax(-1)
+            top_predicted_token_is_non_fn_word: Bool[Tensor, "batch seqQ"] = (top_predicted_token[:, :, None] != FUNCTION_TOKS[None, :]).all(dim=-1)
+            top_predicted_token_rep = einops.repeat(top_predicted_token, "batch seqQ -> batch seqQ seqK", seqK=seq_len)
+            toks_rep = einops.repeat(toks, "batch seqK -> batch seqQ seqK", seqQ=seq_len)
+            toks_rep = t.where(t.tril(t.ones((seq_len, seq_len))).bool().to(toks_rep.device), toks_rep, -1)
+            top_predicted_token_is_in_context: Bool[Tensor, "batch seqQ"] = (top_predicted_token_rep == toks_rep).any(dim=-1)
+            batch_seqQ_indices = t.nonzero(top_predicted_token_is_non_fn_word & top_predicted_token_is_in_context)
+
+            # If there are no destination tokens in the entire batch where the logit lens for this layer is a non-fn word in context, then skip
+            if batch_seqQ_indices.numel() == 0:
+                continue
+
+            # Now I have all the (batch_idx, dest_idx) s.t. I actually want to take the result from that token
+            batch_indices, seqQ_indices = batch_seqQ_indices.unbind(dim=-1)
+            seqK_indices = (top_predicted_token[:, :, None] == toks[:, None, :]).int().argmax(dim=-1)[batch_indices, seqQ_indices]
+            top_predicted_tokens = top_predicted_token[batch_indices, seqQ_indices]
+
+            if seqK_indices.min().item()==0:
+                warnings.warn("Uhok we found zeros this isnt good")
+
+            # if layer == 10:
+            #     for b, sK, sQ in zip(batch_indices, seqK_indices, seqQ_indices):
+            #         # if "Berk" in model.to_single_str_token(toks[b, sQ].item()) + model.to_single_str_token(toks[b, sK].item()):
+            #         print(f"[{b:02}] Dest = {model.to_single_str_token(toks[b, sQ].item())!r}, Src = {model.to_single_str_token(toks[b, sK].item())!r}")
+
+            # Get the actual things we're moving
+            v_src: Float[Tensor, "batch_seqQ head d_head"] = v[batch_indices, seqK_indices]
+            pattern_src_dest: Float[Tensor, "batch_seqQ head"] = pattern[batch_indices, :, seqQ_indices, seqK_indices]
+
+            # Do the projections & attention scaling
+            result_src: Float[Tensor, "batch_seqQ head d_model"] = einops.einsum(
+                v_src, model.W_O[layer],
+                "batch_seqQ head d_head, head d_head d_model -> batch_seqQ head d_model"
+            )
+            result_src_projections: Float[Tensor, "batch_seqQ head"] = einops.einsum(
+                result_src, model.W_U.T[top_predicted_tokens],
+                "batch_seqQ head d_model, batch_seqQ d_model -> batch_seqQ head"
+            )
+            scale = cache["scale"][batch_indices, seqQ_indices]
+            result_dest_projections: Float[Tensor, "batch_seqQ head"] = (result_src_projections * pattern_src_dest) / scale
+
+            # if layer == 10: print(batch_seqQ_indices)
+            # Scaling by the number of nonzero elements (because I expect)
+            results[layer] += einops.reduce(result_dest_projections, "batch_seqQ head -> head", "mean") * (toks.numel() / len(batch_indices))
+
+    returning = results / (BATCH_SIZE // minibatchsize)
+    print(returning)
+    # return returning
 
 # In[16]:
 
@@ -698,173 +664,5 @@ def aggregate_saved_scores(
         for k in sorted(results_dict_new.keys()): print("  " + k)
 
     pickle.dump(results_dict, open(RESULTS_DIR / "scores_dict.pkl", "wb"))
-
-
 # In[23]:
-
 aggregate_saved_scores(overwrite=True, delete=True, show=True)
-
-# In[20]:
-
-
-SMALL_MODEL_NAMES = [
-    # "distillgpt2",
-    "gpt2-small",
-    # *[f"stanford-gpt2-small-{i}" for i in "abcde"],
-    # *[f"pythia-{n}m" for n in [70, 160]],
-    # *[f"pythia-{n}m-deduped" for n in [70, 160]],
-    # *[f"solu-{n}l" for n in [4, 6, 8, 10]],
-    # *[f"solu-{n}l-pile" for n in [4, 6, 8, 10]],
-    # "gelu-4l",
-    # "gpt-neo-125m",
-    # "opt-125m",
-]
-MEDIUM_MODEL_NAMES = [
-    "gpt-neo-125m",
-    "gpt2-medium",
-    *[f"stanford-gpt2-medium-{i}" for i in "abcde"],
-    *[f"pythia-{n}m" for n in [410]],
-    *[f"pythia-{n}m-deduped" for n in [410]],
-    "solu-12l",
-    "gpt2-large",
-]
-BIG_MODEL_NAMES = [
-    *[f"pythia-{n}b" for n in [1.4, 2.8]],
-    *[f"pythia-{n}b-deduped" for n in [1.4, 2.8]],
-    "gpt2-xl",
-    "gpt-neo-2.7B",
-    "opt-1.3b",
-    "opt-2.7b",
-]
-GIANT_MODEL_NAMES = [
-    # *[f"pythia-{n}b" for n in [6.9]],
-    # *[f"pythia-{n}b-deduped" for n in [6.9]],
-    # "gpt-j-6B",
-    # "opt-6.7b",
-    "llama-2-7b-hf",
-    "mistralai/Mistral-7B-v0.1",
-]
-BROBDINGNAGIAN_MODEL_NAMES = [
-    "Llama-2-13b-hf",
-    # *[f"pythia-{n}b" for n in [12]],
-    # *[f"pythia-{n}b-deduped" for n in [12]],
-    # "gpt-neox-20b",
-    # "opt-13b",
-]
-
-# In[33]:
-
-# 1.3 mins (not inc. initial loading, metrics = CS/ioi + AI/rand + CS/norm)
-for model_name in SMALL_MODEL_NAMES:
-    t0 = time.time()
-    save_model_scores(model_name, N=100, plot=True)
-    print(f"Finished {model_name} in {time.time() - t0:.2f}s\n")
-
-# In[ ]:
-
-# 7.5 minutes (including initial model loading, metrics = CS/ioi + AI/rand)
-# 5.9-3.9 minutes (not inc.  initial model loading, metrics = CS/ioi + AI/rand + CS/norm)
-for model_name in MEDIUM_MODEL_NAMES:
-    t0 = time.time()
-    save_model_scores(model_name, N=100, plot=True)
-    print(f"Finished {model_name} in {time.time() - t0:.2f}s\n")
-
-# In[ ]:
-
-
-# 10.9 minutes (including initial model loading, metrics = CS/ioi + AI/rand)
-# 11.9-9.5 minutes (not including initial model loading, metrics = CS/ioi + AI/rand + CS/norm)
-for model_name in BIG_MODEL_NAMES:
-    t0 = time.time()
-    save_model_scores(model_name, N=100, plot=False)
-    print(f"Finished {model_name} in {time.time() - t0:.2f}s\n")
-
-
-# In[116]:
-
-
-# 20.6 minutes (including initial model loading)
-for model_name in GIANT_MODEL_NAMES:
-    t0 = time.time()
-    save_model_scores(model_name, N=100, plot=False)
-    print(f"Finished {model_name} in {time.time() - t0:.2f}s\n")
-
-
-# In[114]:
-
-
-for model_name in BROBDINGNAGIAN_MODEL_NAMES:
-    t0 = time.time()
-    save_model_scores(model_name, N=100, plot=False)
-    print(f"Finished {model_name} in {time.time() - t0:.2f}s\n")
-
-
-# In[ ]:
-
-
-# new = "/home/ubuntu/Transformerlens/transformer_lens/rs/callum/anti_induction_vs_copy_suppression/model_results"
-# old = "/home/ubuntu/Transformerlens/transformer_lens/rs/callum/streamlit/anti_induction_vs_copy_suppression/model_results"
-
-# new = list(map(lambda x: x.name, Path(new).iterdir()))
-# old = list(map(lambda x: x.name, Path(old).iterdir()))
-
-# set(new) - set(old)
-# set(old) - set(new)
-
-
-# In[ ]:
-
-
-import pandas as pd
-
-def plot_all_results():
-    results_copy_suppression_ioi = []
-    results_anti_induction = []
-    model_names = []
-    head_names = []
-
-    RESULTS_DIR = Path("/home/ubuntu/Transformerlens/transformer_lens/rs/callum/anti_induction_vs_copy_suppression/model_results")
-
-    for file in RESULTS_DIR.iterdir():
-        with open(file, "rb") as f:
-            model_scores: Tensor = pickle.load(f)
-
-            for layer in range(model_scores.size(1)):
-                for head in range(model_scores.size(2)):
-                    results_copy_suppression_ioi.append(model_scores[0, layer, head].item())
-                    results_anti_induction.append(model_scores[1, layer, head].item())
-                    model_names.append(file.stem.replace("scores_", ""))
-                    head_names.append(f"{layer}.{head}")
-
-    df = pd.DataFrame({
-        "results_copy_suppression_ioi": results_copy_suppression_ioi,
-        "results_anti_induction": results_anti_induction,
-        "model_names": model_names,
-        "head_names": head_names
-    })
-
-    fig = px.scatter(
-        df,
-        x="results_copy_suppression_ioi", y="results_anti_induction", color='model_names', hover_data=["model_names", "head_names"],
-        width=1200,
-        height=800,
-        title="Anti-Induction Scores (repeated random tokens) vs Copy Suppression Scores (IOI)",
-        labels={"results_copy_suppression_ioi": "Copy Suppression", "results_anti_induction": "Anti-Induction"}
-    )
-    fig.show()
-
-
-plot_all_results()
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
