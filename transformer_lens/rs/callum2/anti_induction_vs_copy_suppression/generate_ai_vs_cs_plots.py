@@ -69,7 +69,6 @@ MODEL_NAMES = sorted(SCORES_DICT.keys())
 
 # In[3]:
 
-
 param_sizes = {
     "gpt2": "85M",
     "gpt2-medium": "302M",
@@ -170,7 +169,6 @@ def get_model_class(model_name):
         return "Other"
 
 # In[4]:
-
 
 def plot_all_results(
     pospos=False,
@@ -305,7 +303,6 @@ with open(MEDIA_PATH / "ai_vs_cs.json", 'w') as f:
 
 fig.show()
 
-
 # In[6]:
 
 
@@ -339,8 +336,8 @@ if False:
 else:
     # model_name = "huggyllama/llama-7b"
     # model_name = "mistralai/Mistral-7B-v0.1"
-    # model_name = "meta-llama/Llama-2-7b-hf"
-    model_name = "meta-llama/Llama-2-13b-hf"
+    model_name = "meta-llama/Llama-2-7b-hf"
+    # model_name = "meta-llama/Llama-2-13b-hf"
     # model_name = "distillgpt2"
 
     # model_name = "gpt2-small"
@@ -506,7 +503,6 @@ DATA_STR = process_webtext_1()
 # In[13]:
 
 def get_in_vivo_copy_suppression_scores_2(model: HookedTransformer, DATA_STR: Int[Tensor, "batch seq"]):
-# if True:
     '''
     Same as the other one, except rather than picking the top source token, it picks the top token over all 50k words, and sets the result to zero
     if that top token isn't in context. This is a lot more strict, and hopefully a lot more sparse.
@@ -514,17 +510,21 @@ def get_in_vivo_copy_suppression_scores_2(model: HookedTransformer, DATA_STR: In
     toks = process_webtext_2(model, DATA_STR, SEQ_LEN)
     batch_size, seq_len = toks.shape
 
-    _, cache = model.run_with_cache(
+    logits, cache = model.run_with_cache(
         toks,
-        return_type = None,
         names_filter = lambda name: any(name.endswith(x) for x in ["pattern", "v", "resid_pre", "scale"])
     )
 
+    # Sanity check loss is low
+    logprobs = t.nn.functional.log_softmax(logits, dim=-1)
+    loss = -logprobs[torch.arange(batch_size)[:, None], torch.arange(seq_len-1)[None, :], toks[:, 1:]].mean()
+    print("FYI, loss", round(loss.item(), 3))
+
     potential_function_toks = model.to_tokens(FUNCTION_STR_TOKS, prepend_bos=False).squeeze().to(device)
-    FUNCTION_TOKS = t.concat([t.tensor([model.tokenizer.bos_token_id]).to(device)] + ([] if len(potential_function_toks.shape)>1 else []))
+    FUNCTION_TOKS = t.concat([t.tensor([model.tokenizer.bos_token_id]).to(device)] + ([] if len(potential_function_toks.shape)>1 else potential_function_toks) + ([torch.tensor([1]).to(device)] if "llama" in model.cfg.model_name.lower() or "mistral" in model.cfg.model_name.lower() else []))
     results = t.zeros((model.cfg.n_layers, model.cfg.n_heads), device=device, dtype=t.float)
 
-    for layer in [3]: # range(model.cfg.n_layers):
+    for layer in range(model.cfg.n_layers):
         # Get everything we need from the cache
         resid_post_scaled: Float[Tensor, "batch seqQ d_model"] = cache["resid_pre", layer] / cache["scale"]
         v: Float[Tensor, "batch seqK head d_head"] = cache["v", layer]
