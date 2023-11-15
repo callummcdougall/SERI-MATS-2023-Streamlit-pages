@@ -29,7 +29,7 @@ clear_output()
 
 media_path = Path("/home/ubuntu/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/st_page/media/anti_induction") if os.path.exists("/home/ubuntu") else Path("/workspace/SERI-MATS-2023-Streamlit-pages/transformer_lens/rs/callum2/st_page/media/anti_induction")
 SCORES_DICT = pickle.load(open(media_path / "scores_dict.pkl", "rb"))
-SCORES_DICT = {k: v for k, v in SCORES_DICT.items() if "opt" not in k}
+SCORES_DICT = {k: v for k, v in SCORES_DICT.items()}
 MODEL_NAMES = sorted(SCORES_DICT.keys())
 
 # In[3]:
@@ -133,6 +133,7 @@ def get_model_class(model_name):
 
 # In[4]:
 
+
 if ipython is None:
     # Parse all arguments
     parser = argparse.ArgumentParser()
@@ -180,17 +181,28 @@ def plot_all_results(
             model_scores = SCORES_DICT[model_name]
             for layer in range(model_scores.size(1)):
                 for head in range(model_scores.size(2)):
-                    results_copy_suppression_ioi.append(-model_scores[0, layer, head].item())
-                    results_anti_induction.append(-model_scores[1, layer, head].item())
-                    if model_scores.shape[0] == 3:
-                        results_copy_suppression_norm.append(-model_scores[2, layer, head].item())
-                    else:
-                        results_copy_suppression_norm.append(np.nan)
-                    model_names.append(model_name)
-                    head_names.append(f"{layer}.{head}")
-                    fraction_list.append((layer + 1) / model_scores.size(1))
-                    num_params.append(get_size(model_name))
-                    model_classes.append(get_model_class(model_name))
+                    try:
+                        results_copy_suppression_ioi.append(-model_scores[0, layer, head].item())
+                        results_anti_induction.append(-model_scores[1, layer, head].item())
+                        if model_scores.shape[0] == 3:
+                            results_copy_suppression_norm.append(-model_scores[2, layer, head].item())
+                        else:
+                            results_copy_suppression_norm.append(np.nan)
+                        model_names.append(model_name)
+                        head_names.append(f"{layer}.{head}")
+                        fraction_list.append((layer + 1) / model_scores.size(1))
+                        num_params.append(get_size(model_name))
+                        model_classes.append(get_model_class(model_name))
+                    except Exception as e:
+                        # trim to model_classes length
+                        results_copy_suppression_ioi = results_copy_suppression_ioi[:len(model_classes)]
+                        results_anti_induction = results_anti_induction[:len(model_classes)]
+                        results_copy_suppression_norm = results_copy_suppression_norm[:len(model_classes)]
+                        model_names = model_names[:len(model_classes)]
+                        head_names = head_names[:len(model_classes)]
+                        fraction_list = fraction_list[:len(model_classes)]
+                        num_params = num_params[:len(model_classes)]
+                        
 
     df = pd.DataFrame({
         "results_cs_ioi": results_copy_suppression_ioi,

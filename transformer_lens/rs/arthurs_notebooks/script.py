@@ -1,16 +1,4 @@
 param_sizes = {
-    "gpt2": "85M", # Extremely sus numbers lol
-    "gpt2-medium": "302M",
-    "gpt2-large": "708M",
-    "gpt2-xl": "1.5B",
-    "distilgpt2": "42M",
-    "distillgpt2": "42M",
-    "opt-125m": "85M",
-    "opt-1.3b": "1.2B",
-    "opt-2.7b": "2.5B",
-    "opt-6.7b": "6.4B",
-    "opt-13b": "13B",
-    "gpt-neo-125m": "85M",
     "gpt-neo-1.3b": "1.2B",
     "gpt-neo-2.7b": "2.5B",
     "gpt-neo-1.3B": "1.2B",
