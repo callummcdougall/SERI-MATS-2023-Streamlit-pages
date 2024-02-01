@@ -22,6 +22,7 @@ setup(
         "accelerate",
         "typing-extensions",
         "plotly",
+        "pytest",
     ],
     extras_require={"dev": ["pytest", "mypy", "pytest-cov"]},
 )
